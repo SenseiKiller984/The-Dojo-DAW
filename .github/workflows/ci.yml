@@ -1,13 +1,15 @@
 name: CI
 
+# Pushes to main, plus every pull request (which covers feature-branch pushes once a PR is open,
+# without running the same commit twice). Other branches can be run on demand.
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

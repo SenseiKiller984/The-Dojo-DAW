@@ -45,17 +45,17 @@ target_link_libraries(dojo_juce
 target_compile_definitions(dojo_juce
     PUBLIC
         JUCE_STANDALONE_APPLICATION=1
-        JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_DISABLE_JUCE_VERSION_PRINTING=1
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
-        # Audio back-ends (each flag is ignored on the other platform).
-        JUCE_ASIO=$<BOOL:${DOJO_ENABLE_ASIO}>
-        JUCE_WASAPI=1
-        JUCE_DIRECTSOUND=1
-        JUCE_ALSA=1
-        JUCE_JACK=$<BOOL:${DOJO_ENABLE_JACK}>
+        # Audio back-ends, each enabled only on its own platform. (JUCE can also build JACK on
+        # Windows, which would need the JACK SDK headers there; The Dojo uses ASIO/WASAPI instead.)
+        JUCE_ASIO=$<AND:$<BOOL:${DOJO_ENABLE_ASIO}>,$<PLATFORM_ID:Windows>>
+        JUCE_WASAPI=$<PLATFORM_ID:Windows>
+        JUCE_DIRECTSOUND=$<PLATFORM_ID:Windows>
+        JUCE_ALSA=$<PLATFORM_ID:Linux>
+        JUCE_JACK=$<AND:$<BOOL:${DOJO_ENABLE_JACK}>,$<PLATFORM_ID:Linux>>
         # Plug-in hosting is switched on in the plug-in hosting phase (VST3 + CLAP on both OSes).
         # LV2/LADSPA/AU are deliberately never enabled: they are not available on BOTH Windows and
         # Linux, and The Dojo guarantees feature parity across the two.
