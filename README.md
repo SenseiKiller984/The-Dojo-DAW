@@ -4,6 +4,10 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 > **Status: Phase 1 (foundation).** The app opens a dark-mode main window, drives a real audio device, and runs a lock-free UI ↔ audio protocol. The arranger and mixer show a *layout preview*. Editing, recording, plug-ins and the rest arrive in later phases (see the [roadmap](#roadmap)).
 
+![The Dojo main window, Phase 1: transport playing at 48 kHz through JACK with the test tone on the live master strip](docs/images/phase1-main-window.png)
+
+*Live in Phase 1: transport and position display, playhead (click the ruler to locate), test tone, master fader and meter, DSP load, device status. The tracks, clips and channel strips are a static layout preview.*
+
 ## Tech stack
 
 | | |
