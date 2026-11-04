@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (GCC, Release)
+            os: ubuntu-24.04
+            preset: ci-linux-gcc
+            config: Release
+          - name: Linux (Clang, RelWithDebInfo)
+            os: ubuntu-24.04
+            preset: ci-linux-clang
+            config: RelWithDebInfo
+          - name: Windows (MSVC, RelWithDebInfo)
+            os: windows-latest
+            preset: ci-windows-msvc
+            config: RelWithDebInfo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo ./scripts/setup-linux.sh
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Unit tests
+        run: ctest --preset ${{ matrix.preset }}
+
+      # Launches the real app, renders frames, verifies the engine, exits with a status code.
+      # Runners have no sound card, so this also proves the app degrades gracefully without audio.
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" "build/${{ matrix.preset }}/src/app/TheDojo_artefacts/${{ matrix.config }}/TheDojo" --smoke-test=5
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $app = "build/${{ matrix.preset }}/src/app/TheDojo_artefacts/${{ matrix.config }}/TheDojo.exe"
+          $p = Start-Process -FilePath $app -ArgumentList '--smoke-test=5' -Wait -PassThru
+          Get-Content "$env:APPDATA/TheDojo/TheDojo.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "Smoke test failed with exit code $($p.ExitCode)" }
