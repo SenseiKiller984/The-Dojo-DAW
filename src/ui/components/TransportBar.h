@@ -2,56 +2,73 @@
 
 #include "core/Types.h"
 #include "engine/EngineController.h"
+#include "session/Session.h"
 #include "ui/components/IconButton.h"
+#include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
+
+#include <functional>
+#include <memory>
 
 namespace dojo::ui
 {
 
 /**
-    Top bar: brand, transport controls, position display (bars|beats|ticks + clock), tempo and
-    time signature, the diagnostic test-tone switch and the DSP load meter.
+    Top bar: brand, transport, position (bars|beats|ticks and clock), tempo, meter, grid snapping,
+    the test tone, audio settings and the DSP load meter.
 
-    Live in Phase 1: play/pause, stop (press twice to return to start), return-to-start, the
-    position display, test tone and DSP load. Record and loop are present but disabled until their
-    phases land.
+    The tempo box is editable: drag up/down (Shift for fine steps) or double-click to type a value.
+    Record and loop are shown disabled until their phases land.
 */
-class TransportBar final : public juce::Component
+class TransportBar final : public juce::Component, private EditorState::Listener
 {
 public:
-    explicit TransportBar(engine::EngineController& controller);
+    TransportBar(engine::EngineController& controller, session::Session& session, EditorState& editor);
     ~TransportBar() override;
 
     /** Called once per UI frame with fresh engine telemetry. Repaints only what changed. */
     void update(const engine::TelemetrySnapshot& telemetry, double sampleRate);
 
+    /** Opens the audio device settings (provided by MainComponent). */
+    std::function<void()> onAudioSettingsRequested;
+
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
+    class TempoField;
+
+    void editorStateChanged() override;
     void paintBrand(juce::Graphics& g) const;
     void paintPositionDisplay(juce::Graphics& g) const;
-    void paintTempoAndSignature(juce::Graphics& g) const;
+    void paintSignature(juce::Graphics& g) const;
     void paintLoadMeter(juce::Graphics& g) const;
 
     engine::EngineController& controller_;
+    session::Session& session_;
+    EditorState& editor_;
 
     IconButton returnButton_;
     IconButton playButton_;
     IconButton stopButton_;
     IconButton recordButton_;
     IconButton loopButton_;
+    std::unique_ptr<TempoField> tempoField_;
+    juce::TextButton snapButton_;
+    juce::ComboBox gridBox_;
     juce::TextButton testToneButton_;
+    juce::TextButton audioSettingsButton_;
 
     juce::Rectangle<int> brandArea_;
     juce::Rectangle<int> positionArea_;
-    juce::Rectangle<int> tempoArea_;
     juce::Rectangle<int> signatureArea_;
     juce::Rectangle<int> loadArea_;
+    bool compactBrand_ = false;
 
     SampleCount playheadSamples_ = -1;
     double sampleRate_ = 0.0;
+    double tempoShown_ = 0.0;
     bool playing_ = false;
     float dspLoad_ = 0.0f;
 };

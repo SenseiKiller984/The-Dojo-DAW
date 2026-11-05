@@ -12,6 +12,8 @@ add_executable(dojo_tests
     AudioEngineTests.cpp
     EngineCommandTests.cpp
     MusicalTimeTests.cpp
+    RenderGraphTests.cpp
+    SessionTests.cpp
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp)
 
@@ -23,7 +25,7 @@ endif()
 target_compile_definitions(dojo_tests PRIVATE
     DOJO_EXPECT_ALLOCATION_TRAP=$<BOOL:${DOJO_ALLOCATION_TRAP_COMPATIBLE}>)
 
-target_link_libraries(dojo_tests PRIVATE dojo::engine Catch2::Catch2WithMain)
+target_link_libraries(dojo_tests PRIVATE dojo::session Catch2::Catch2WithMain)
 set_target_properties(dojo_tests PROPERTIES FOLDER "Tests")
 
 catch_discover_tests(dojo_tests DISCOVERY_MODE PRE_TEST)

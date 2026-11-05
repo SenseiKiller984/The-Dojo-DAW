@@ -8,13 +8,14 @@ namespace dojo::engine
 {
 namespace
 {
-constexpr int kOutboxRetryIntervalMs = 20;
+constexpr int kHousekeepingIntervalMs = 33;
 } // namespace
 
 EngineController::EngineController(AudioEngine& engine, AudioDeviceHost& deviceHost)
     : engine_(engine)
     , deviceHost_(deviceHost)
 {
+    startTimer(kHousekeepingIntervalMs);
 }
 
 EngineController::~EngineController()
@@ -77,6 +78,11 @@ const TelemetrySnapshot& EngineController::pollTelemetry() noexcept
     return lastTelemetry_;
 }
 
+StereoPeak EngineController::collectTrackPeak(int slot) noexcept
+{
+    return engine_.collectTrackPeak(slot);
+}
+
 double EngineController::getSampleRateOr(double fallback) const noexcept
 {
     const double rate = engine_.getSampleRate();
@@ -98,23 +104,50 @@ void EngineController::send(const EngineCommand& command)
         outbox_.back() = command;
     else
         outbox_.push_back(command);
-
-    if (!isTimerRunning())
-        startTimer(kOutboxRetryIntervalMs);
 }
 
 void EngineController::flushOutbox()
 {
     while (!outbox_.empty() && engine_.post(outbox_.front()))
         outbox_.pop_front();
+}
 
-    if (outbox_.empty())
-        stopTimer();
+void EngineController::publishGraph(std::unique_ptr<RenderGraph> graph)
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+
+    if (graph == nullptr)
+        return;
+
+    graph->serial = nextGraphSerial_++;
+    pendingGraph_ = std::move(graph); // any older, never-posted graph is destroyed here
+    pumpGraphs();
+}
+
+void EngineController::pumpGraphs()
+{
+    if (pendingGraph_ == nullptr)
+        return;
+
+    // Keep at most one graph in the queue: wait until the audio thread has picked up the last one.
+    if (inFlightGraphSerial_ != 0 && engine_.getAppliedGraphSerial() < inFlightGraphSerial_)
+        return;
+
+    command::SwapGraph swap;
+    swap.graph = pendingGraph_.get();
+
+    if (engine_.post(swap))
+    {
+        inFlightGraphSerial_ = pendingGraph_->serial;
+        (void)pendingGraph_.release(); // ownership now travels with the command
+    }
 }
 
 void EngineController::timerCallback()
 {
+    engine_.releaseRetiredGraphs();
     flushOutbox();
+    pumpGraphs();
 }
 
 } // namespace dojo::engine

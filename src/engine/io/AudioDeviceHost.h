@@ -20,8 +20,9 @@ class AudioEngine;
       Windows : ASIO, WASAPI (shared + exclusive), DirectSound
       Linux   : ALSA (incl. the PulseAudio/PipeWire ALSA PCM plug-ins), JACK (incl. PipeWire-JACK)
 
-    Phase 1 opens the system's default output device. Device/driver selection, input routing,
-    sample-rate/buffer configuration, persistence and MIDI hot-plug arrive in Phase 2.
+    Driver/device/sample-rate/buffer selection is done with JUCE's AudioDeviceSelectorComponent on
+    this host's AudioDeviceManager (Options > Audio Settings) and persisted by the application.
+    Input routing and MIDI hot-plug arrive with recording.
 
     All functions are message-thread only.
 */
@@ -47,10 +48,16 @@ public:
     AudioDeviceHost(const AudioDeviceHost&) = delete;
     AudioDeviceHost& operator=(const AudioDeviceHost&) = delete;
 
-    /** Opens the default stereo output. If `preferredDeviceType` names a compiled-in back-end
-        ("JACK", "ASIO", ...), it is tried first. Returns an empty string on success, otherwise a
+    /** Opens a stereo output: the device described by `savedState` (from createStateXml(), e.g.
+        restored from the user's settings) if given, otherwise the system default. If
+        `preferredDeviceType` names a compiled-in back-end ("JACK", "ASIO", ...), that back-end's
+        default device is used instead. Returns an empty string on success, otherwise a
         human-readable error. Failure is non-fatal: the application keeps running without audio. */
-    juce::String openDefaultDevice(const juce::String& preferredDeviceType = {});
+    juce::String openDevice(const juce::XmlElement* savedState = nullptr,
+                            const juce::String& preferredDeviceType = {});
+
+    /** The current device configuration, for persisting across launches (null if none was chosen). */
+    [[nodiscard]] std::unique_ptr<juce::XmlElement> createStateXml() const;
 
     /** Stops the audio callback and closes the device. */
     void closeDevice();

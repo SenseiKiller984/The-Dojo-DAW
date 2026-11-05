@@ -1,7 +1,9 @@
 #pragma once
 
 #include "core/Types.h"
+#include "engine/RenderGraph.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 
@@ -36,6 +38,11 @@ struct EngineTelemetry
     std::atomic<std::uint64_t> processedBlocks{0};
     std::atomic<std::uint64_t> clippedSamples{0}; ///< Master samples that exceeded 0 dBFS.
 
+    std::atomic<std::uint64_t> appliedGraphSerial{0}; ///< Serial of the RenderGraph now in use.
+
+    /** Post-fader track peaks, [slot * 2 + channel], max since last read. */
+    std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks) * 2> trackPeaks{};
+
     static_assert(std::atomic<float>::is_always_lock_free);
     static_assert(std::atomic<SampleCount>::is_always_lock_free);
     static_assert(std::atomic<bool>::is_always_lock_free);
@@ -53,6 +60,13 @@ struct TelemetrySnapshot
     bool playing = false;
     std::uint64_t processedBlocks = 0;
     std::uint64_t clippedSamples = 0;
+};
+
+/** Linear left/right peaks of one track since the previous read. */
+struct StereoPeak
+{
+    float left = 0.0f;
+    float right = 0.0f;
 };
 
 } // namespace dojo::engine

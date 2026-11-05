@@ -64,7 +64,8 @@ AudioDeviceHost::~AudioDeviceHost()
     closeDevice();
 }
 
-juce::String AudioDeviceHost::openDefaultDevice(const juce::String& preferredDeviceType)
+juce::String AudioDeviceHost::openDevice(const juce::XmlElement* savedState,
+                                         const juce::String& preferredDeviceType)
 {
     constexpr int kNumInputChannels = 0; // inputs (recording/monitoring) are wired up in Phase 2
     constexpr int kNumOutputChannels = 2;
@@ -74,6 +75,9 @@ juce::String AudioDeviceHost::openDefaultDevice(const juce::String& preferredDev
     // manager a complete setup. If the back-end is missing or has no devices we fall back to the
     // platform default rather than failing.
     std::unique_ptr<juce::XmlElement> requestedSetup;
+
+    if (preferredDeviceType.isEmpty() && savedState != nullptr)
+        requestedSetup = std::make_unique<juce::XmlElement>(*savedState); // the user's last choice
 
     if (preferredDeviceType.isNotEmpty())
     {
@@ -98,6 +102,7 @@ juce::String AudioDeviceHost::openDefaultDevice(const juce::String& preferredDev
                                      "' is unavailable or has no output devices; using the default.");
     }
 
+    // selectDefaultDeviceOnFailure: a saved device that has since been unplugged falls back to the default.
     lastError_ = deviceManager_.initialise(kNumInputChannels, kNumOutputChannels, requestedSetup.get(), true);
 
     if (lastError_.isEmpty() && deviceManager_.getCurrentAudioDevice() == nullptr)
@@ -108,6 +113,11 @@ juce::String AudioDeviceHost::openDefaultDevice(const juce::String& preferredDev
     deviceManager_.addAudioCallback(callback_.get());
 
     return lastError_;
+}
+
+std::unique_ptr<juce::XmlElement> AudioDeviceHost::createStateXml() const
+{
+    return deviceManager_.createStateXml();
 }
 
 void AudioDeviceHost::closeDevice()

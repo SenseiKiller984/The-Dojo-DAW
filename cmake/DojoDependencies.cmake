@@ -73,6 +73,13 @@ set_target_properties(dojo_juce PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     FOLDER "ThirdParty")
 
+# JUCE and the third-party codecs it bundles (Opus, FLAC, Ogg Vorbis, HarfBuzz, ...) are not our code:
+# new compiler releases regularly add diagnostics that fire inside them (e.g. GCC 14's
+# -Wstringop-overflow false positives in Opus' SILK decoder). Those warnings are not actionable here,
+# so the vendored sources are compiled quietly, like system headers. Dojo's own targets keep the
+# strict warning set (see dojo_apply_project_warnings).
 if(MSVC)
-    target_compile_options(dojo_juce PRIVATE /bigobj /MP)
+    target_compile_options(dojo_juce PRIVATE /bigobj /MP /W0)
+else()
+    target_compile_options(dojo_juce PRIVATE -w)
 endif()

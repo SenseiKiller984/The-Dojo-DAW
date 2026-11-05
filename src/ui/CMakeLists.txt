@@ -1,8 +1,13 @@
 add_library(dojo_ui STATIC
+    Commands.h
+    EditActions.cpp
+    EditActions.h
+    EditorState.cpp
+    EditorState.h
     MainComponent.cpp
     MainComponent.h
-    PlaceholderSession.cpp
-    PlaceholderSession.h
+    MainMenuModel.cpp
+    MainMenuModel.h
     components/ArrangerView.cpp
     components/ArrangerView.h
     components/BrowserPanel.cpp
@@ -23,7 +28,7 @@ add_library(dojo_ui STATIC
 add_library(dojo::ui ALIAS dojo_ui)
 
 target_link_libraries(dojo_ui
-    PUBLIC  dojo::engine
+    PUBLIC  dojo::session
     PRIVATE dojo::resources)
 dojo_apply_project_warnings(dojo_ui)
 set_target_properties(dojo_ui PROPERTIES FOLDER "Dojo")

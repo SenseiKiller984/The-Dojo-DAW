@@ -21,6 +21,7 @@ public:
         bool realtimeTrapInstalled = false;
         std::uint64_t clippedSamples = 0;
         std::size_t parkedCommands = 0;
+        int pendingImports = 0;
     };
 
     StatusBar();

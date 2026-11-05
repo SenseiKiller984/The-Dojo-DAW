@@ -8,6 +8,7 @@
 #include <juce_events/juce_events.h>
 
 #include <deque>
+#include <memory>
 
 namespace dojo::engine
 {
@@ -19,6 +20,9 @@ class AudioEngine;
 
     UI components never touch AudioEngine directly: they call intent-level methods here, which are
     translated into EngineCommands and pushed through the lock-free command queue.
+
+    Housekeeping runs on a 30 Hz message-thread timer: retired render graphs are destroyed, parked
+    commands retried and the newest pending graph posted.
 
     Back-pressure: the command queue is bounded (it must be, to be allocation free). If it is ever
     full — realistically only while no audio device is running, so nothing drains it — commands are
@@ -60,15 +64,28 @@ public:
 
     [[nodiscard]] AudioDeviceHost::Status getDeviceStatus() const { return deviceHost_.getStatus(); }
 
+    /** The device host, for the audio settings UI. */
+    [[nodiscard]] AudioDeviceHost& getDeviceHost() noexcept { return deviceHost_; }
+
     /** The engine's sample rate, or `fallback` while no device is running. */
     [[nodiscard]] double getSampleRateOr(double fallback) const noexcept;
 
     /** Commands waiting in the outbox because the queue was full (diagnostics). */
     [[nodiscard]] std::size_t getParkedCommandCount() const noexcept { return outbox_.size(); }
 
+    /** Post-fader peaks of the track rendered in `slot` since the last call. Once per UI frame. */
+    [[nodiscard]] StereoPeak collectTrackPeak(int slot) noexcept;
+
+    // --- Render graph ------------------------------------------------------------------------------
+    /** Hands a freshly built graph to the audio thread. At most one graph is ever in flight: while
+        the engine has not yet picked up the previous one, a newer graph simply replaces the pending
+        one (which is destroyed here, on the message thread). */
+    void publishGraph(std::unique_ptr<RenderGraph> graph);
+
 private:
     void send(const EngineCommand& command);
     void flushOutbox();
+    void pumpGraphs();
     void timerCallback() override;
 
     AudioEngine& engine_;
@@ -76,6 +93,10 @@ private:
     std::deque<EngineCommand> outbox_;
     TelemetrySnapshot lastTelemetry_;
     bool testToneEnabled_ = false;
+
+    std::unique_ptr<RenderGraph> pendingGraph_;
+    std::uint64_t nextGraphSerial_ = 1;
+    std::uint64_t inFlightGraphSerial_ = 0; ///< posted but not yet applied (0 = none)
 };
 
 } // namespace dojo::engine

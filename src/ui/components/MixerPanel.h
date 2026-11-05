@@ -1,21 +1,64 @@
 #pragma once
 
 #include "engine/EngineController.h"
+#include "session/Project.h"
 #include "ui/components/LevelMeter.h"
+#include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
+
+#include <memory>
+#include <vector>
 
 namespace dojo::ui
 {
 
 /**
-    The live master channel strip: fader (-inf .. +6 dB, smoothed in the engine), stereo peak meter
-    with scale, and numeric readouts. Fully wired to the engine in Phase 1.
+    One track's channel strip: name, pan, mute/solo/phase, fader and meter. Every control edits the
+    session (undoably) and follows external changes such as undo or the arranger's M/S buttons.
 */
-class MasterStrip final : public juce::Component
+class ChannelStrip final : public juce::Component,
+                           private juce::ValueTree::Listener,
+                           private EditorState::Listener
 {
 public:
-    explicit MasterStrip(engine::EngineController& controller);
+    ChannelStrip(session::Session& session, EditorState& editor, juce::ValueTree track);
+    ~ChannelStrip() override;
+
+    [[nodiscard]] const juce::ValueTree& getTrack() const noexcept { return track_; }
+    void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+    void mouseDown(const juce::MouseEvent& e) override;
+
+private:
+    void syncFromModel();
+    void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier&) override;
+    void editorStateChanged() override { repaint(); }
+
+    session::Session& session_;
+    EditorState& editor_;
+    juce::ValueTree track_;
+
+    juce::Slider pan_;
+    juce::TextButton mute_;
+    juce::TextButton solo_;
+    juce::TextButton phase_;
+    juce::Slider fader_;
+    LevelMeter meter_;
+    juce::Rectangle<int> nameArea_;
+    juce::Rectangle<int> readoutArea_;
+    bool panDragging_ = false;
+    bool faderDragging_ = false;
+};
+
+/** The master strip: fader (session master volume, undoable), meter with scale, gain/peak readouts. */
+class MasterStrip final : public juce::Component, private juce::ValueTree::Listener
+{
+public:
+    explicit MasterStrip(session::Session& session);
+    ~MasterStrip() override;
 
     void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
 
@@ -23,36 +66,48 @@ public:
     void resized() override;
 
 private:
-    void updateGainReadout();
+    void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property) override;
+    void valueTreeRedirected(juce::ValueTree&) override;
 
-    engine::EngineController& controller_;
+    session::Session& session_;
     juce::Slider fader_;
     LevelMeter meter_;
     juce::Rectangle<int> scaleArea_;
     juce::Rectangle<int> readoutArea_;
     float heldPeakDb_ = LevelMeter::kMinDb;
     double peakHoldAge_ = 0.0;
+    bool dragging_ = false;
 };
 
-/**
-    Bottom mixer panel. Placeholder channel strips (layout preview of the Phase 2/3 mixer: colour cap,
-    name, pan, mute/solo/phase, fader and meter) plus the live master strip.
-*/
-class MixerPanel final : public juce::Component
+/** Bottom mixer panel: a scrollable row of channel strips and the master strip. */
+class MixerPanel final : public juce::Component, private juce::ValueTree::Listener
 {
 public:
-    explicit MixerPanel(engine::EngineController& controller);
+    MixerPanel(session::Project& project, engine::EngineController& controller, EditorState& editor);
+    ~MixerPanel() override;
 
-    void pushMasterLevels(float peakLeft, float peakRight, double elapsedSeconds);
+    /** Pulls every track's post-fader peaks from the engine and feeds the meters. Once per UI frame. */
+    void updateMeters(const engine::TelemetrySnapshot& telemetry, double elapsedSeconds);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
-    void paintPlaceholderStrip(juce::Graphics& g, juce::Rectangle<int> area, std::size_t trackIndex) const;
+    void rebuildStrips();
+    void layoutStrips();
+    void valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree&) override;
+    void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree&, int) override;
+    void valueTreeChildOrderChanged(juce::ValueTree& parent, int, int) override;
+    void valueTreeRedirected(juce::ValueTree&) override { rebuildStrips(); }
 
+    session::Project& project_;
+    engine::EngineController& controller_;
+    EditorState& editor_;
+
+    juce::Viewport viewport_;
+    juce::Component stripHolder_;
+    std::vector<std::unique_ptr<ChannelStrip>> strips_;
     MasterStrip master_;
-    juce::Rectangle<int> stripsArea_;
 };
 
 } // namespace dojo::ui

@@ -4,6 +4,8 @@
 
 #include <DojoBinaryData.h>
 
+#include <cmath>
+
 namespace dojo::ui
 {
 namespace
@@ -115,6 +117,37 @@ DojoLookAndFeel::DojoLookAndFeel()
     setColour(juce::TooltipWindow::textColourId, colour::textPrimary);
     setColour(juce::TooltipWindow::outlineColourId, colour::outlineStrong);
     setColour(juce::ScrollBar::thumbColourId, colour::outlineStrong);
+
+    setColour(juce::ComboBox::backgroundColourId, colour::control);
+    setColour(juce::ComboBox::outlineColourId, colour::outlineStrong);
+    setColour(juce::ComboBox::textColourId, colour::textPrimary);
+    setColour(juce::ComboBox::arrowColourId, colour::textSecondary);
+    setColour(juce::ComboBox::focusedOutlineColourId, colour::accent);
+
+    setColour(juce::TextEditor::backgroundColourId, colour::meterBackground);
+    setColour(juce::TextEditor::textColourId, colour::textPrimary);
+    setColour(juce::TextEditor::highlightColourId, colour::accent.withAlpha(0.45f));
+    setColour(juce::TextEditor::highlightedTextColourId, colour::textPrimary);
+    setColour(juce::TextEditor::outlineColourId, colour::outlineStrong);
+    setColour(juce::TextEditor::focusedOutlineColourId, colour::accent);
+    setColour(juce::CaretComponent::caretColourId, colour::accent);
+
+    setColour(juce::ListBox::backgroundColourId, colour::meterBackground);
+    setColour(juce::ListBox::outlineColourId, colour::outline);
+    setColour(juce::ToggleButton::textColourId, colour::textPrimary);
+    setColour(juce::ToggleButton::tickColourId, colour::accent);
+    setColour(juce::ToggleButton::tickDisabledColourId, colour::textMuted);
+
+    setColour(juce::AlertWindow::backgroundColourId, colour::panelRaised);
+    setColour(juce::AlertWindow::textColourId, colour::textPrimary);
+    setColour(juce::AlertWindow::outlineColourId, colour::outlineStrong);
+
+    setColour(juce::PopupMenu::textColourId, colour::textPrimary);
+    setColour(juce::PopupMenu::headerTextColourId, colour::textMuted);
+    setColour(juce::PopupMenu::highlightedTextColourId, colour::textPrimary);
+
+    setColour(juce::Slider::rotarySliderFillColourId, colour::accent);
+    setColour(juce::Slider::rotarySliderOutlineColourId, colour::meterBackground);
 }
 
 DojoLookAndFeel::~DojoLookAndFeel() = default;
@@ -221,6 +254,67 @@ void DojoLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int widt
 
     g.setColour(slider.isEnabled() ? theme::colour::accent : theme::colour::textMuted);
     g.fillRect(cap.withSizeKeepingCentre(capWidth - 8.0f, 2.0f));
+}
+
+void DojoLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+                                       float sliderPosProportional, float rotaryStartAngle,
+                                       float rotaryEndAngle, juce::Slider& slider)
+{
+    const auto bounds = juce::Rectangle<int>(x, y, width, height).toFloat().reduced(2.0f);
+    const float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    const auto centre = bounds.getCentre();
+    const float trackRadius = radius - 2.0f;
+    const float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
+
+    const auto range = slider.getRange();
+    const bool bipolar = juce::approximatelyEqual(range.getStart(), -range.getEnd());
+    const float zeroAngle = bipolar ? (rotaryStartAngle + rotaryEndAngle) * 0.5f : rotaryStartAngle;
+
+    juce::Path track;
+    track.addCentredArc(centre.x, centre.y, trackRadius, trackRadius, 0.0f, rotaryStartAngle, rotaryEndAngle,
+                        true);
+    g.setColour(theme::colour::meterBackground);
+    g.strokePath(track,
+                 juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    if (std::abs(angle - zeroAngle) > 0.01f)
+    {
+        juce::Path value;
+        value.addCentredArc(centre.x, centre.y, trackRadius, trackRadius, 0.0f, juce::jmin(zeroAngle, angle),
+                            juce::jmax(zeroAngle, angle), true);
+        g.setColour(slider.isEnabled() ? theme::colour::accent : theme::colour::textMuted);
+        g.strokePath(value,
+                     juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    const float capRadius = trackRadius - 4.0f;
+    g.setColour(theme::colour::control);
+    g.fillEllipse(juce::Rectangle<float>(capRadius * 2.0f, capRadius * 2.0f).withCentre(centre));
+    g.setColour(theme::colour::outlineStrong);
+    g.drawEllipse(juce::Rectangle<float>(capRadius * 2.0f, capRadius * 2.0f).withCentre(centre), 1.0f);
+
+    const juce::Point<float> tip(centre.x + std::sin(angle) * (capRadius - 2.0f),
+                                 centre.y - std::cos(angle) * (capRadius - 2.0f));
+    g.setColour(theme::colour::textPrimary);
+    g.drawLine({centre, tip}, 2.0f);
+}
+
+juce::Font DojoLookAndFeel::getComboBoxFont(juce::ComboBox&)
+{
+    return theme::sans(13.0f);
+}
+
+juce::Font DojoLookAndFeel::getMenuBarFont(juce::MenuBarComponent&, int, const juce::String&)
+{
+    return theme::sans(13.5f);
+}
+
+void DojoLookAndFeel::drawMenuBarBackground(juce::Graphics& g, int width, int height, bool,
+                                            juce::MenuBarComponent&)
+{
+    g.fillAll(theme::colour::panel);
+    g.setColour(theme::colour::outline);
+    g.fillRect(0, height - 1, width, 1);
 }
 
 //==================================================================================================

@@ -1,15 +1,19 @@
 #pragma once
 
 #include "engine/EngineController.h"
+#include "session/Project.h"
 #include "ui/components/ArrangerView.h"
 #include "ui/components/BrowserPanel.h"
 #include "ui/components/MixerPanel.h"
 #include "ui/components/StatusBar.h"
 #include "ui/components/TransportBar.h"
+#include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 
 namespace dojo::ui
 {
@@ -28,34 +32,79 @@ namespace dojo::ui
         | StatusBar                                                   |
         +-------------------------------------------------------------+
 
+    Also the application's command target: every menu item and keyboard shortcut is an
+    ApplicationCommand performed here, and document actions (new / open / save / import / quit with
+    an unsaved-changes prompt) live here.
+
     UI refresh is driven by a juce::VBlankAttachment: once per display refresh the component polls
     the engine's lock-free telemetry and pushes it into the children. The audio thread never calls
     into the UI — the UI pulls.
 */
-class MainComponent final : public juce::Component
+class MainComponent final : public juce::Component,
+                            public juce::ApplicationCommandTarget,
+                            public juce::DragAndDropContainer,
+                            private juce::ChangeListener
 {
 public:
-    explicit MainComponent(engine::EngineController& controller);
+    MainComponent(session::Project& project, engine::EngineController& controller,
+                  juce::ApplicationCommandManager& commandManager);
     ~MainComponent() override;
 
-    void paint(juce::Graphics& g) override;
-    void resized() override;
-    bool keyPressed(const juce::KeyPress& key) override;
+    /** Asks to save unsaved changes, then calls `quit` (unless the user cancels). */
+    void requestQuit(std::function<void()> quit);
+
+    /** Opens a session file (e.g. given on the command line). */
+    void openSessionFile(const juce::File& file);
+
+    /** Imports audio files onto new tracks at the playhead (e.g. given on the command line). */
+    void importAudioFiles(const juce::StringArray& paths);
 
     /** Number of UI frames processed so far (used by the start-up smoke test). */
     [[nodiscard]] std::uint64_t getFrameCount() const noexcept { return frameCount_; }
 
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+
+    // juce::ApplicationCommandTarget
+    juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }
+    void getAllCommands(juce::Array<juce::CommandID>& commands) override;
+    void getCommandInfo(juce::CommandID commandID, juce::ApplicationCommandInfo& result) override;
+    bool perform(const InvocationInfo& info) override;
+
 private:
     void onDisplayRefresh(double timestampSeconds);
     void refreshStatusBar();
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
 
+    // Document actions
+    void ensureSavedThen(std::function<void()> proceed);
+    void save(std::function<void(bool saved)> onDone);
+    void saveAs(std::function<void(bool saved)> onDone);
+    void showOpenChooser();
+    void showImportChooser();
+    void startNewSession();
+    void afterDocumentLoaded();
+
+    // Dialogs
+    void showAudioSettings();
+    void showMessage(const juce::String& title, const juce::String& message);
+    void showShortcutHelp();
+
+    session::Project& project_;
     engine::EngineController& controller_;
+    juce::ApplicationCommandManager& commandManager_;
+
+    EditorState editor_; // before the components that observe it
 
     TransportBar transport_;
     BrowserPanel browser_;
     ArrangerView arranger_;
     MixerPanel mixer_;
     StatusBar statusBar_;
+
+    std::unique_ptr<juce::FileChooser> chooser_;
+    juce::ScopedMessageBox messageBox_;
+    juce::Component::SafePointer<juce::DialogWindow> settingsWindow_;
 
     double lastFrameTimestamp_ = 0.0;
     double lastStatusRefresh_ = 0.0;

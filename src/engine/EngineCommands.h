@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Types.h"
+#include "engine/RenderGraph.h"
 
 #include <type_traits>
 #include <variant>
@@ -58,10 +59,19 @@ struct SetTestTone
     double frequencyHz = 440.0;
     double linearGain = 0.125;
 };
+
+/** Replace the render graph (tracks, clips, mix parameters). Ownership of `graph` passes to the
+    engine; the graph it replaces comes back through AudioEngine::releaseRetiredGraphs(). Never
+    coalesced: EngineController keeps at most one graph in flight and merges newer ones itself. */
+struct SwapGraph
+{
+    static constexpr bool coalescable = false;
+    RenderGraph* graph = nullptr;
+};
 } // namespace command
 
-using EngineCommand =
-    std::variant<command::SetPlaying, command::Locate, command::SetMasterGain, command::SetTestTone>;
+using EngineCommand = std::variant<command::SetPlaying, command::Locate, command::SetMasterGain,
+                                   command::SetTestTone, command::SwapGraph>;
 
 static_assert(std::is_trivially_copyable_v<EngineCommand>,
               "EngineCommand must stay trivially copyable to travel through the lock-free command queue");

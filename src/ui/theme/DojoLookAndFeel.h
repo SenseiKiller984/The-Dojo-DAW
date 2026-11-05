@@ -35,6 +35,17 @@ public:
                           juce::Slider& slider) override;
     int getSliderThumbRadius(juce::Slider& slider) override;
 
+    /** Knobs. Sliders whose range is symmetric around zero (pan) draw their arc from the centre. */
+    void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height, float sliderPosProportional,
+                          float rotaryStartAngle, float rotaryEndAngle, juce::Slider& slider) override;
+
+    // Combo boxes and menus
+    juce::Font getComboBoxFont(juce::ComboBox& box) override;
+    juce::Font getMenuBarFont(juce::MenuBarComponent& bar, int itemIndex,
+                              const juce::String& itemText) override;
+    void drawMenuBarBackground(juce::Graphics& g, int width, int height, bool isMouseOverBar,
+                               juce::MenuBarComponent& bar) override;
+
     // Text
     juce::Font getLabelFont(juce::Label& label) override;
     juce::Font getPopupMenuFont() override;

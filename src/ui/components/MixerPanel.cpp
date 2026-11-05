@@ -1,12 +1,10 @@
 #include "ui/components/MixerPanel.h"
 
-#include "ui/PlaceholderSession.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <cmath>
-#include <tuple>
 
 namespace dojo::ui
 {
@@ -14,49 +12,253 @@ namespace
 {
 constexpr int kHeaderHeight = 26;
 constexpr int kMasterStripWidth = 132;
-constexpr float kFaderMinDb = static_cast<float>(engine::EngineController::kMinusInfinityDb);
-constexpr float kFaderMaxDb = 6.0f;
+constexpr int kStripWidth = 86;
+constexpr float kFaderMinDb = static_cast<float>(session::kMinusInfinityDb);
+constexpr float kFaderMaxDb = static_cast<float>(session::kMaxVolumeDb);
 constexpr double kPeakReadoutHoldSeconds = 2.0;
 
 juce::String formatDecibels(double decibels)
 {
-    if (decibels <= engine::EngineController::kMinusInfinityDb + 0.001)
+    if (decibels <= session::kMinusInfinityDb + 0.001)
         return "-inf";
 
     return (decibels > 0.0 ? "+" : "") + juce::String(decibels, 1);
 }
 
-/** Fader travel proportion for a dB value, matching the master fader's skew (mid-point at -12 dB). */
-float faderProportion(float decibels)
+juce::String formatPan(double pan)
 {
-    juce::NormalisableRange<float> range(kFaderMinDb, kFaderMaxDb);
-    range.setSkewForCentre(-12.0f);
-    return range.convertTo0to1(juce::jlimit(kFaderMinDb, kFaderMaxDb, decibels));
+    const int percent = juce::roundToInt(std::abs(pan) * 100.0);
+    return percent == 0 ? juce::String("C") : (pan < 0.0 ? "L" : "R") + juce::String(percent);
+}
+
+void configureFader(juce::Slider& fader)
+{
+    fader.setSliderStyle(juce::Slider::LinearVertical);
+    fader.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    fader.setRange(kFaderMinDb, kFaderMaxDb, 0.01);
+    fader.setSkewFactorFromMidPoint(-12.0);
+    fader.setDoubleClickReturnValue(true, 0.0);
+    fader.setWantsKeyboardFocus(false);
+}
+
+void configureToggle(juce::TextButton& button, const juce::String& text, juce::Colour onColour,
+                     const juce::String& tip)
+{
+    button.setButtonText(text);
+    button.setClickingTogglesState(true);
+    button.setWantsKeyboardFocus(false);
+    button.setTooltip(tip);
+    button.setColour(juce::TextButton::buttonOnColourId, onColour);
+    button.setColour(juce::TextButton::textColourOnId, theme::colour::windowBackground);
 }
 } // namespace
 
 //==================================================================================================
-// MasterStrip
+// ChannelStrip
 
-MasterStrip::MasterStrip(engine::EngineController& controller)
-    : controller_(controller)
+ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce::ValueTree track)
+    : session_(session)
+    , editor_(editor)
+    , track_(std::move(track))
 {
-    fader_.setSliderStyle(juce::Slider::LinearVertical);
-    fader_.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
-    fader_.setRange(kFaderMinDb, kFaderMaxDb, 0.01);
-    fader_.setSkewFactorFromMidPoint(-12.0);
-    fader_.setValue(0.0, juce::dontSendNotification);
-    fader_.setDoubleClickReturnValue(true, 0.0);
-    fader_.setWantsKeyboardFocus(false);
-    fader_.setTooltip("Master gain. Double-click to reset to 0 dB.");
+    pan_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    pan_.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    pan_.setRange(-1.0, 1.0, 0.01);
+    pan_.setDoubleClickReturnValue(true, 0.0);
+    pan_.setWantsKeyboardFocus(false);
+    pan_.setTooltip("Pan. Double-click to centre.");
+    pan_.onDragStart = [this]
+    {
+        panDragging_ = true;
+        session_.beginTransaction("Change Pan");
+    };
+    pan_.onDragEnd = [this]
+    {
+        panDragging_ = false;
+    };
+    pan_.onValueChange = [this]
+    {
+        if (!panDragging_) // e.g. double-click reset: its own undo step
+            session_.beginTransaction("Change Pan");
+        session::track::setPan(track_, pan_.getValue(), &session_.getUndoManager());
+    };
+
+    configureFader(fader_);
+    fader_.setTooltip("Track volume. Double-click to reset to 0 dB.");
+    fader_.onDragStart = [this]
+    {
+        faderDragging_ = true;
+        session_.beginTransaction("Change Volume");
+    };
+    fader_.onDragEnd = [this]
+    {
+        faderDragging_ = false;
+    };
     fader_.onValueChange = [this]
     {
-        controller_.setMasterGainDecibels(fader_.getValue());
-        updateGainReadout();
+        if (!faderDragging_)
+            session_.beginTransaction("Change Volume");
+        session::track::setVolumeDb(track_, fader_.getValue(), &session_.getUndoManager());
+    };
+
+    configureToggle(mute_, "M", theme::colour::gold, "Mute");
+    configureToggle(solo_, "S", theme::colour::play, "Solo");
+    configureToggle(phase_, juce::String::fromUTF8("\xc3\x98"), juce::Colour(0xff4f8fd9),
+                    "Invert phase (polarity)");
+
+    mute_.onClick = [this]
+    {
+        session_.beginTransaction("Mute");
+        session::track::setMuted(track_, mute_.getToggleState(), &session_.getUndoManager());
+    };
+    solo_.onClick = [this]
+    {
+        session_.beginTransaction("Solo");
+        session::track::setSoloed(track_, solo_.getToggleState(), &session_.getUndoManager());
+    };
+    phase_.onClick = [this]
+    {
+        session_.beginTransaction("Invert Phase");
+        session::track::setPhaseInverted(track_, phase_.getToggleState(), &session_.getUndoManager());
+    };
+
+    for (auto* child :
+         std::initializer_list<juce::Component*>{&pan_, &mute_, &solo_, &phase_, &fader_, &meter_})
+        addAndMakeVisible(child);
+
+    syncFromModel();
+    track_.addListener(this);
+    editor_.addListener(this);
+}
+
+ChannelStrip::~ChannelStrip()
+{
+    editor_.removeListener(this);
+    track_.removeListener(this);
+}
+
+void ChannelStrip::syncFromModel()
+{
+    pan_.setValue(session::track::getPan(track_), juce::dontSendNotification);
+    fader_.setValue(session::track::getVolumeDb(track_), juce::dontSendNotification);
+    mute_.setToggleState(session::track::isMuted(track_), juce::dontSendNotification);
+    solo_.setToggleState(session::track::isSoloed(track_), juce::dontSendNotification);
+    phase_.setToggleState(session::track::isPhaseInverted(track_), juce::dontSendNotification);
+    repaint();
+}
+
+void ChannelStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier&)
+{
+    if (tree == track_)
+        syncFromModel();
+}
+
+void ChannelStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
+{
+    meter_.update(peakLeft, peakRight, elapsedSeconds);
+}
+
+void ChannelStrip::mouseDown(const juce::MouseEvent&)
+{
+    editor_.selectTrack(session::track::getId(track_));
+}
+
+void ChannelStrip::resized()
+{
+    auto area = getLocalBounds().reduced(6, 4);
+    area.removeFromTop(3);
+    nameArea_ = area.removeFromTop(18);
+    pan_.setBounds(area.removeFromTop(38).withSizeKeepingCentre(34, 34));
+    area.removeFromTop(2);
+
+    auto buttons = area.removeFromTop(20).withSizeKeepingCentre(3 * 22 + 2 * 3, 20);
+    for (auto* button : {&mute_, &solo_, &phase_})
+    {
+        button->setBounds(buttons.removeFromLeft(22));
+        buttons.removeFromLeft(3);
+    }
+
+    area.removeFromTop(6);
+    readoutArea_ = area.removeFromBottom(16);
+    area.removeFromBottom(4);
+    meter_.setBounds(area.removeFromRight(14));
+    area.removeFromRight(2);
+    fader_.setBounds(area);
+}
+
+void ChannelStrip::paint(juce::Graphics& g)
+{
+    using namespace theme;
+
+    const bool selected = session::track::getId(track_) == editor_.getSelectedTrack();
+    auto bounds = getLocalBounds();
+
+    g.setColour(selected ? colour::panelHeader.brighter(0.05f) : colour::panel);
+    g.fillRect(bounds);
+    g.setColour(colour::outline);
+    g.fillRect(bounds.removeFromRight(1));
+    g.setColour(session::track::getColour(track_));
+    g.fillRect(bounds.removeFromTop(selected ? 4 : 3));
+
+    g.setColour(colour::textPrimary);
+    g.setFont(sansBold(11.5f));
+    g.drawText(session::track::getName(track_), nameArea_, juce::Justification::centred, true);
+
+    g.setColour(colour::textMuted);
+    g.setFont(mono(10.0f));
+    g.drawText(formatDecibels(session::track::getVolumeDb(track_)) + "  " +
+                   formatPan(session::track::getPan(track_)),
+               readoutArea_, juce::Justification::centred, false);
+}
+
+//==================================================================================================
+// MasterStrip
+
+MasterStrip::MasterStrip(session::Session& session)
+    : session_(session)
+{
+    configureFader(fader_);
+    fader_.setTooltip("Master volume. Double-click to reset to 0 dB.");
+    fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
+    fader_.onDragStart = [this]
+    {
+        dragging_ = true;
+        session_.beginTransaction("Change Master Volume");
+    };
+    fader_.onDragEnd = [this]
+    {
+        dragging_ = false;
+    };
+    fader_.onValueChange = [this]
+    {
+        if (!dragging_)
+            session_.beginTransaction("Change Master Volume");
+        session_.setMasterVolumeDb(fader_.getValue());
+        repaint(readoutArea_);
     };
 
     addAndMakeVisible(fader_);
     addAndMakeVisible(meter_);
+    session_.getState().addListener(this);
+}
+
+MasterStrip::~MasterStrip()
+{
+    session_.getState().removeListener(this);
+}
+
+void MasterStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property)
+{
+    if (tree == session_.getState() && property == session::ids::masterVolume)
+    {
+        fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
+        repaint(readoutArea_);
+    }
+}
+
+void MasterStrip::valueTreeRedirected(juce::ValueTree&)
+{
+    fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
 }
 
 void MasterStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
@@ -76,20 +278,14 @@ void MasterStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeco
     }
 }
 
-void MasterStrip::updateGainReadout()
-{
-    repaint(readoutArea_);
-}
-
 void MasterStrip::resized()
 {
     auto area = getLocalBounds().reduced(8, 0);
-    area.removeFromTop(28); // title
+    area.removeFromTop(28);
     readoutArea_ = area.removeFromBottom(40);
     area.removeFromBottom(6);
 
-    auto meterArea = area.removeFromRight(22);
-    meter_.setBounds(meterArea);
+    meter_.setBounds(area.removeFromRight(22));
     scaleArea_ = area.removeFromRight(26);
     fader_.setBounds(area);
 }
@@ -101,7 +297,6 @@ void MasterStrip::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds();
     g.setColour(colour::panelRaised);
     g.fillRect(bounds);
-
     g.setColour(colour::accent);
     g.fillRect(bounds.withHeight(3));
 
@@ -122,27 +317,24 @@ void MasterStrip::paint(juce::Graphics& g)
                    juce::Justification::centredRight, false);
     }
 
-    // Readouts: fader gain (left) and held output peak (right).
     auto readout = readoutArea_;
-    auto gainBox = readout.removeFromLeft(readout.getWidth() / 2).reduced(2, 4);
-    auto peakBox = readout.reduced(2, 4);
-
-    for (const auto& [box, text, caption, textColour] :
-         {std::tuple{gainBox, formatDecibels(fader_.getValue()), "GAIN", colour::textPrimary},
-          std::tuple{peakBox, formatDecibels(heldPeakDb_), "PEAK",
-                     heldPeakDb_ > 0.0f ? colour::meterClip : colour::textPrimary}})
+    const auto paintReadout =
+        [&g](juce::Rectangle<int> box, const juce::String& text, const char* caption, juce::Colour textColour)
     {
         g.setColour(colour::meterBackground);
         g.fillRoundedRectangle(box.toFloat(), 3.0f);
-
-        auto inner = box;
         g.setColour(colour::textMuted);
         g.setFont(label(8.0f));
-        g.drawText(caption, inner.removeFromBottom(12), juce::Justification::centred, false);
+        g.drawText(caption, box.removeFromBottom(12), juce::Justification::centred, false);
         g.setColour(textColour);
         g.setFont(mono(11.0f));
-        g.drawText(text, inner, juce::Justification::centred, false);
-    }
+        g.drawText(text, box, juce::Justification::centred, false);
+    };
+
+    paintReadout(readout.removeFromLeft(readout.getWidth() / 2).reduced(2, 4),
+                 formatDecibels(fader_.getValue()), "GAIN", colour::textPrimary);
+    paintReadout(readout.reduced(2, 4), formatDecibels(heldPeakDb_), "PEAK",
+                 heldPeakDb_ > 0.0f ? colour::meterClip : colour::textPrimary);
 
     g.setColour(colour::outline);
     g.fillRect(bounds.withWidth(1));
@@ -151,23 +343,93 @@ void MasterStrip::paint(juce::Graphics& g)
 //==================================================================================================
 // MixerPanel
 
-MixerPanel::MixerPanel(engine::EngineController& controller)
-    : master_(controller)
+MixerPanel::MixerPanel(session::Project& project, engine::EngineController& controller, EditorState& editor)
+    : project_(project)
+    , controller_(controller)
+    , editor_(editor)
+    , master_(project.getSession())
 {
     setOpaque(true);
+    viewport_.setViewedComponent(&stripHolder_, false);
+    viewport_.setScrollBarsShown(false, true);
+    viewport_.setScrollBarThickness(10);
+    addAndMakeVisible(viewport_);
     addAndMakeVisible(master_);
+
+    project_.getSession().getState().addListener(this);
+    rebuildStrips();
 }
 
-void MixerPanel::pushMasterLevels(float peakLeft, float peakRight, double elapsedSeconds)
+MixerPanel::~MixerPanel()
 {
-    master_.pushLevels(peakLeft, peakRight, elapsedSeconds);
+    project_.getSession().getState().removeListener(this);
+}
+
+void MixerPanel::rebuildStrips()
+{
+    strips_.clear();
+    auto& session = project_.getSession();
+
+    for (int i = 0; i < session.getNumTracks(); ++i)
+    {
+        auto strip = std::make_unique<ChannelStrip>(session, editor_, session.getTrack(i));
+        stripHolder_.addAndMakeVisible(*strip);
+        strips_.push_back(std::move(strip));
+    }
+
+    layoutStrips();
+    repaint();
+}
+
+void MixerPanel::layoutStrips()
+{
+    const int height = viewport_.getMaximumVisibleHeight();
+    stripHolder_.setSize(static_cast<int>(strips_.size()) * kStripWidth, juce::jmax(0, height));
+
+    int x = 0;
+    for (auto& strip : strips_)
+    {
+        strip->setBounds(x, 0, kStripWidth, height);
+        x += kStripWidth;
+    }
+}
+
+void MixerPanel::valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree&)
+{
+    if (parent == project_.getSession().getState())
+        rebuildStrips();
+}
+
+void MixerPanel::valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree&, int)
+{
+    if (parent == project_.getSession().getState())
+        rebuildStrips();
+}
+
+void MixerPanel::valueTreeChildOrderChanged(juce::ValueTree& parent, int, int)
+{
+    if (parent == project_.getSession().getState())
+        rebuildStrips();
+}
+
+void MixerPanel::updateMeters(const engine::TelemetrySnapshot& telemetry, double elapsedSeconds)
+{
+    master_.pushLevels(telemetry.masterPeakLeft, telemetry.masterPeakRight, elapsedSeconds);
+
+    for (auto& strip : strips_)
+    {
+        const int slot = project_.getCompiler().getSlot(session::track::getId(strip->getTrack()));
+        const auto peak = slot >= 0 ? controller_.collectTrackPeak(slot) : engine::StereoPeak{};
+        strip->pushLevels(peak.left, peak.right, elapsedSeconds);
+    }
 }
 
 void MixerPanel::resized()
 {
     auto area = getLocalBounds().withTrimmedTop(kHeaderHeight);
     master_.setBounds(area.removeFromRight(kMasterStripWidth));
-    stripsArea_ = area;
+    viewport_.setBounds(area);
+    layoutStrips();
 }
 
 void MixerPanel::paint(juce::Graphics& g)
@@ -184,93 +446,21 @@ void MixerPanel::paint(juce::Graphics& g)
     g.drawText("MIXER", header.reduced(14, 0), juce::Justification::centredLeft, false);
     g.setColour(colour::textMuted);
     g.setFont(sans(11.0f));
-    g.drawText("Channel strips: layout preview  |  Master: live", header.reduced(14, 0),
-               juce::Justification::centredRight, false);
+    g.drawText("Fader / pan: drag, double-click to reset  |  M mute  S solo  " +
+                   juce::String::fromUTF8("\xc3\x98") + " phase",
+               header.reduced(14, 0), juce::Justification::centredRight, false);
     g.setColour(colour::outline);
     g.fillRect(header.removeFromBottom(1));
     g.fillRect(getLocalBounds().removeFromTop(1));
 
-    auto strips = stripsArea_;
-    const auto& tracks = placeholder::getTracks();
-
-    for (std::size_t i = 0; i < tracks.size() && strips.getWidth() >= metrics::channelStripWidth; ++i)
-        paintPlaceholderStrip(g, strips.removeFromLeft(metrics::channelStripWidth), i);
-}
-
-void MixerPanel::paintPlaceholderStrip(juce::Graphics& g, juce::Rectangle<int> area,
-                                       std::size_t trackIndex) const
-{
-    using namespace theme;
-
-    const auto& track = placeholder::getTracks()[trackIndex];
-    const float dim = 0.7f;
-
-    g.setColour(trackIndex % 2 == 0 ? colour::panel : colour::panelRaised.withAlpha(0.6f));
-    g.fillRect(area);
-    g.setColour(colour::outline);
-    g.fillRect(area.removeFromRight(1));
-
-    g.setColour(track.colour.withMultipliedAlpha(dim));
-    g.fillRect(area.removeFromTop(3));
-
-    auto content = area.reduced(6, 4);
-
-    g.setColour(colour::textPrimary.withMultipliedAlpha(dim));
-    g.setFont(sansBold(11.5f));
-    g.drawText(track.name, content.removeFromTop(16), juce::Justification::centred, true);
-    g.setColour(colour::textMuted);
-    g.setFont(label(8.0f));
-    g.drawText(placeholder::getKindLabel(track.kind), content.removeFromTop(12), juce::Justification::centred,
-               false);
-
-    // Pan knob.
-    const auto knob = content.removeFromTop(34).withSizeKeepingCentre(26, 26).toFloat();
-    g.setColour(colour::control);
-    g.fillEllipse(knob);
-    g.setColour(colour::outlineStrong);
-    g.drawEllipse(knob, 1.0f);
-    const float angle = track.pan * juce::MathConstants<float>::pi * 0.75f;
-    const auto centre = knob.getCentre();
-    g.setColour(colour::textSecondary.withMultipliedAlpha(dim));
-    g.drawLine(centre.x, centre.y, centre.x + std::sin(angle) * 10.0f, centre.y - std::cos(angle) * 10.0f,
-               2.0f);
-
-    // Mute / solo / phase.
-    auto buttons = content.removeFromTop(22).withSizeKeepingCentre(3 * 19 + 2 * 3, 17);
-    for (const auto* text : {"M", "S", "\xc3\x98"})
+    if (strips_.empty())
     {
-        const auto box = buttons.removeFromLeft(19).toFloat();
-        buttons.removeFromLeft(3);
-        g.setColour(colour::control);
-        g.fillRoundedRectangle(box, 3.0f);
+        auto empty = viewport_.getBounds();
         g.setColour(colour::textMuted);
-        g.setFont(sansBold(9.5f));
-        g.drawText(juce::String::fromUTF8(text), box, juce::Justification::centred, false);
+        g.setFont(sans(12.5f));
+        g.drawText("Channel strips appear here as you add tracks.", empty, juce::Justification::centred,
+                   false);
     }
-
-    // Fader + meter grooves.
-    auto readout = content.removeFromBottom(16);
-    content.removeFromBottom(4);
-    content.removeFromTop(4);
-
-    auto meterGroove = content.removeFromRight(10).toFloat();
-    g.setColour(colour::meterBackground);
-    g.fillRoundedRectangle(meterGroove, 2.0f);
-
-    const auto groove = juce::Rectangle<float>(4.0f, static_cast<float>(content.getHeight()))
-                            .withCentre(content.toFloat().getCentre());
-    g.fillRoundedRectangle(groove, 2.0f);
-
-    const float capY = groove.getBottom() - groove.getHeight() * faderProportion(track.faderDb);
-    const auto cap = juce::Rectangle<float>(26.0f, 14.0f).withCentre({groove.getCentreX(), capY});
-    g.setColour(colour::control.brighter(0.1f));
-    g.fillRoundedRectangle(cap, 2.5f);
-    g.setColour(colour::textMuted);
-    g.fillRect(cap.withSizeKeepingCentre(18.0f, 1.5f));
-
-    g.setColour(colour::textMuted);
-    g.setFont(mono(10.0f));
-    g.drawText(formatDecibels(track.faderDb), readout, juce::Justification::centred, false);
 }
 
 } // namespace dojo::ui

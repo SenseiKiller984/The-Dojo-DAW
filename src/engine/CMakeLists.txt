@@ -5,6 +5,9 @@ add_library(dojo_engine STATIC
     EngineController.cpp
     EngineController.h
     EngineTelemetry.h
+    RenderGraph.h
+    dsp/ClipRenderer.cpp
+    dsp/ClipRenderer.h
     dsp/TestToneGenerator.cpp
     dsp/TestToneGenerator.h
     io/AudioDeviceHost.cpp

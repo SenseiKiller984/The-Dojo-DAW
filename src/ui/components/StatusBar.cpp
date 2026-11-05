@@ -62,6 +62,10 @@ juce::String StatusBar::describeEngine() const
     if (info_.realtimeTrapInstalled)
         text << "RT violations " << static_cast<juce::int64>(info_.realtimeViolations) << kSeparator;
 
+    if (info_.pendingImports > 0)
+        text << "Loading " << info_.pendingImports << (info_.pendingImports == 1 ? " file" : " files")
+             << kSeparator;
+
     if (info_.parkedCommands > 0)
         text << "Commands parked " << static_cast<int>(info_.parkedCommands) << kSeparator;
 

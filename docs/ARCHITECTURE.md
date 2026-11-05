@@ -21,10 +21,14 @@ This document describes the foundation laid in Phase 1 and the rules every later
 src/
   core/     pure C++20, no JUCE: lock-free SPSC queue, RT guards + allocation trap,
             musical-time maths, shared types, generated Version.h
-  engine/   AudioEngine (real-time state + process()), command/telemetry protocol,
-            EngineController (the UI's façade), io/AudioDeviceHost (driver binding), dsp/
-  ui/       DojoLookAndFeel + theme tokens, MainComponent and panels
-  app/      JUCEApplication (UI-thread entry), MainWindow, CLI options, smoke test
+  engine/   AudioEngine (real-time state + process()), RenderGraph, command/telemetry protocol,
+            EngineController (the UI's façade), io/AudioDeviceHost (driver binding),
+            dsp/ (clip renderer with resampling + declick fades, test tone)
+  session/  the document: Session (juce::ValueTree + UndoManager), AudioAssetCache (background
+            decoding + waveform peaks), GraphCompiler (session -> RenderGraph), Project (file I/O)
+  ui/       look-and-feel, MainComponent (commands, menus, document actions), arranger, mixer,
+            browser, transport, EditorState (selection + grid)
+  app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
 resources/  embedded fonts (OFL)
 tests/      Catch2 suite
 cmake/      options, compiler policy, pinned dependencies
@@ -52,8 +56,10 @@ flowchart LR
 |---|---|---|
 | Message / UI | `DojoApplication::initialise()` (via `START_JUCE_APPLICATION`) | JUCE |
 | Audio | `AudioDeviceHost::EngineCallback::audioDeviceIOCallbackWithContext()` → `AudioEngine::process()` | The audio driver (ASIO / WASAPI / ALSA / JACK). JUCE raises it to real-time priority (MMCSS "Pro Audio" on Windows, `SCHED_FIFO` on Linux when permitted). |
-| *Engine workers* (Phase 3) | Fixed pool of N−1 real-time threads | Engine. They process independent tracks and busses in parallel and are woken per block by the audio thread through lock-free signalling. |
-| *Disk streaming* (Phase 3) | Background reader for audio clips | Engine |
+| Audio decoding (2 threads) | `AudioAssetCache` job pool | Session. Decodes imported files and computes waveform peaks off the UI thread, then hands results back with `MessageManager::callAsync`. |
+| Browser scanning | `juce::TimeSliceThread` | UI. Lists folders for the file browser. |
+| *Engine workers* (later phase) | Fixed pool of N−1 real-time threads | Engine. They process independent tracks and busses in parallel and are woken per block by the audio thread through lock-free signalling. |
+| *Disk streaming* (later phase) | Background reader for long audio clips | Engine. Clips are memory-resident for now. |
 | *Plug-in scanner* (plug-in phase) | Separate child process, so a crashing plug-in can't take down the DAW | App |
 
 ## 4. Real-time rules and how they are enforced
@@ -89,7 +95,16 @@ UI widget -> EngineController::play()/setMasterGainDecibels()/...
 
 The queue is bounded, so pushes can fail. The only realistic case is when no device is running and nothing drains the queue. In that case `EngineController` parks commands in a message-thread outbox and retries them in FIFO order on a timer. Consecutive *coalescable* commands are merged there. These are absolute setters such as gain, where only the newest value matters. Nothing is silently dropped.
 
-**Large objects (from Phase 2/3).** A rebuilt processing graph, a new plug-in instance or a loaded sample is constructed on the message thread and handed over by pointer in a command. The object it replaces travels back through a lock-free *return queue* and is destroyed on the message thread. The audio thread never frees memory.
+**Large objects: the render graph.** What the audio thread plays is an immutable `RenderGraph`: tracks with final left/right gains and their clips (pointers into decoded audio, kept alive by `shared_ptr`s owned by the graph).
+
+1. **Build.** Every session edit, coalesced per message-loop iteration, makes `GraphCompiler` build a fresh graph on the message thread.
+2. **Hand over.** `EngineController::publishGraph()` posts it to the audio thread by pointer (`command::SwapGraph`), with at most one graph in flight; newer graphs replace the pending one.
+3. **Swap and return.** The audio thread swaps the pointer and pushes the old graph onto a lock-free *return queue*.
+4. **Destroy.** `EngineController` destroys returned graphs on its housekeeping timer.
+
+So the audio thread never allocates or frees, even though the document changes freely. Per-track state that must outlive a swap (gain smoothing, meters) lives in fixed engine arrays indexed by a stable *slot* that the compiler assigns to each track. The test suite asserts zero heap activity on the audio thread while graphs are swapped during playback.
+
+**Sample-rate independence.** Clip positions are in seconds. The engine converts them per block and resamples sources whose rate differs from the device's (4-point Hermite). Changing the device rate therefore needs no rebuild, and the playhead keeps its time position across rate changes.
 
 ## 6. Audio → UI: telemetry
 
@@ -101,31 +116,43 @@ The UI **pulls** telemetry from a `juce::VBlankAttachment` callback once per dis
 
 ## 7. Signal path and precision
 
-The internal mix runs in `double` (`dojo::Sample`). Conversion to and from the driver's `float` happens once, at the device edge. Phase 1 path:
+The internal mix runs in `double` (`dojo::Sample`). Conversion to and from the driver's `float` happens once, at the device edge.
 
 ```
-test tone -> 64-bit master bus -> smoothed master gain -> metering -> float device buffers
+clips (resampled, faded) -> per-track 64-bit bus -> smoothed L/R gain (volume, pan, mute/solo, phase)
+     -> track meter -> 64-bit master bus (+ test tone) -> smoothed master gain -> meter -> float out
 ```
 
-The track/bus graph inserts ahead of the master bus in Phase 3.
+- **Pan law:** balance. At centre both sides are at unity, and panning attenuates the opposite side linearly.
+- **Clip edges:** every edge gets at least a 1 ms fade, so cuts never click. User fades lengthen it.
 
-## 8. Start-up and shutdown order
+## 8. The document (session layer)
+
+The session is a `juce::ValueTree` (`DOJO_SESSION > TRACK > CLIP`) with a `juce::UndoManager`.
+
+- **Undo.** Every UI gesture opens one transaction, so a fader drag or a clip move is one undo step.
+- **Change tracking.** Components observe the tree. Those listeners also drive graph compilation, the unsaved-changes flag and the window title.
+- **Files.** A session is saved as XML (`.dojo`). Clip paths are stored both absolute and relative to the session file, and the relative path wins on load, so a project folder can be moved or copied.
+- **Decoded audio.** `AudioAssetCache` holds one shared, immutable copy per file (at most 2 channels, up to 2 hours) plus a min/max peak overview for drawing.
+
+## 9. Start-up and shutdown order
 
 ```
-initialise: logger -> look-and-feel -> AudioEngine -> AudioDeviceHost (opens device; audio starts)
-            -> EngineController -> MainWindow
-shutdown:   MainWindow -> EngineController -> AudioDeviceHost (device stopped; no callback in flight)
-            -> AudioEngine -> look-and-feel -> logger
+initialise: logger -> look-and-feel -> settings -> AudioEngine -> AudioDeviceHost (opens the saved or
+            default device; audio starts) -> EngineController -> Project -> MainWindow
+shutdown:   MainWindow -> Project -> EngineController -> AudioDeviceHost (device stopped; no callback
+            in flight) -> AudioEngine (frees the last graphs) -> settings -> look-and-feel -> logger
 ```
 
-## 9. Windows / Linux parity policy
+## 10. Windows / Linux parity policy
 
 * **One code path.** Platform differences live only inside JUCE and the build scripts.
 * **Plug-in formats: VST3 and CLAP only.** Both exist on both OSes. LV2, LADSPA and AU are deliberately disabled because they would create features that only one OS has.
 * **Audio back-ends** are platform-native, with feature-equivalent capabilities. Windows: ASIO, WASAPI (shared/exclusive), DirectSound. Linux: ALSA, JACK. PulseAudio and PipeWire are reached through their ALSA PCM plug-ins and PipeWire's JACK implementation.
 * **Visual parity:** embedded Inter and JetBrains Mono fonts, plus JUCE-drawn window chrome.
-* **CI** builds, tests and smoke-runs the real app on Ubuntu (GCC and Clang) and Windows (MSVC) for every push, with warnings treated as errors.
+* **Vendored code** (JUCE and the codecs it bundles) is compiled without warnings. Dojo's own targets use JUCE's strict warning set, and CI treats those warnings as errors.
+* **CI** builds, tests and smoke-runs the real app on Ubuntu (GCC and Clang) and Windows (MSVC) for every pull request.
 
-## 10. Licensing note
+## 11. Licensing note
 
 JUCE 9 is dual-licensed: AGPLv3 or a commercial JUCE licence. The bundled ASIO SDK is GPLv3 or a Steinberg licence. Distributing The Dojo as closed source therefore requires a commercial JUCE licence and a Steinberg ASIO licence. Distributing it as open source requires an AGPLv3-compatible licence. The embedded fonts are SIL OFL 1.1.
