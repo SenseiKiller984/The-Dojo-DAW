@@ -108,6 +108,14 @@ int CaptureStream::drainToDisk()
         if (available <= 0)
             return total;
 
+        if (skip_ > 0)
+        {
+            const auto skipped = std::min<std::uint64_t>(skip_, static_cast<std::uint64_t>(available));
+            readPosition_.store(read + skipped, std::memory_order_release);
+            skip_ -= skipped;
+            continue;
+        }
+
         for (int ch = 0; ch < numChannels_; ++ch)
         {
             const float* ring = ring_.data() + static_cast<std::size_t>(ch) * static_cast<std::size_t>(capacity_);

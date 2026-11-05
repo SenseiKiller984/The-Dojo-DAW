@@ -9,10 +9,12 @@ include(Catch)
 
 add_executable(dojo_tests
     TestAudio.h
+    TestListener.cpp
     TestSupport.h
     AudioEngineTests.cpp
     DeviceTests.cpp
     EngineGraphTests.cpp
+    RecordExportTests.cpp
     EngineCommandTests.cpp
     MusicalTimeTests.cpp
     RenderGraphTests.cpp

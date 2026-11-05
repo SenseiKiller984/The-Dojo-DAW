@@ -650,6 +650,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         }
 
         graph->totalLatency = masterTarget + chainLatency(graph->masterDevices);
+        masterInputLatency_ = masterTarget;
         if (!changed)
             break;
     }

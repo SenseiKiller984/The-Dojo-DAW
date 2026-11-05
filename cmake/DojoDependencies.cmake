@@ -49,6 +49,9 @@ target_compile_definitions(dojo_juce
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
+        # Lets headless tests pump the message loop (MessageManager::runDispatchLoopUntil). The UI
+        # itself only uses asynchronous dialogs.
+        JUCE_MODAL_LOOPS_PERMITTED=1
         # Audio back-ends, each enabled only on its own platform. (JUCE can also build JACK on
         # Windows, which would need the JACK SDK headers there; The Dojo uses ASIO/WASAPI instead.)
         JUCE_ASIO=$<AND:$<BOOL:${DOJO_ENABLE_ASIO}>,$<PLATFORM_ID:Windows>>

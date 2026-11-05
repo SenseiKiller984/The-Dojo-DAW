@@ -115,3 +115,23 @@ double estimateFrequency(const std::vector<T>& data, std::size_t begin, std::siz
 }
 
 } // namespace dojo::test
+
+#include <juce_events/juce_events.h>
+
+namespace dojo::test
+{
+/** Runs the message loop (timers, async calls) until `done()` or the timeout. */
+template <typename Predicate>
+bool pumpMessagesUntil(Predicate&& done, int timeoutMs = 10'000)
+{
+    auto* mm = juce::MessageManager::getInstance();
+    const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
+    while (!done())
+    {
+        if (juce::Time::getMillisecondCounter() > deadline)
+            return false;
+        mm->runDispatchLoopUntil(5);
+    }
+    return true;
+}
+} // namespace dojo::test

@@ -22,11 +22,13 @@ add_library(dojo_engine STATIC
     dsp/TestToneGenerator.cpp
     dsp/TestToneGenerator.h
     io/AudioDeviceHost.cpp
-    io/AudioDeviceHost.h)
+    io/AudioDeviceHost.h
+    io/LameMp3Format.cpp
+    io/LameMp3Format.h)
 add_library(dojo::engine ALIAS dojo_engine)
 
 target_link_libraries(dojo_engine
     PUBLIC  dojo::core dojo::juce
-    PRIVATE dojo::stretch)
+    PRIVATE dojo::stretch dojo::lame)
 dojo_apply_project_warnings(dojo_engine)
 set_target_properties(dojo_engine PROPERTIES FOLDER "Dojo")

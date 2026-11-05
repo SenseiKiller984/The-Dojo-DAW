@@ -3,10 +3,14 @@ add_library(dojo_session STATIC
     AudioAssetCache.h
     DeviceManager.cpp
     DeviceManager.h
+    Exporter.cpp
+    Exporter.h
     GraphCompiler.cpp
     GraphCompiler.h
     Project.cpp
     Project.h
+    Recorder.cpp
+    Recorder.h
     Session.cpp
     Session.h)
 add_library(dojo::session ALIAS dojo_session)

@@ -12,6 +12,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -125,6 +126,13 @@ public:
         return telemetry_.captureActive.load(std::memory_order_acquire);
     }
     [[nodiscard]] double getCaptureStartSeconds() const noexcept { return telemetry_.captureStartSeconds.load(); }
+    /** Number of StopCapture commands the audio thread has handled (acknowledgement for the owner of
+        a CaptureSession: once this passes the value read before posting StopCapture, the session is
+        no longer referenced). */
+    [[nodiscard]] std::uint32_t getCaptureStopCount() const noexcept
+    {
+        return telemetry_.captureStops.load(std::memory_order_acquire);
+    }
 
     //==============================================================================================
     // Offline rendering (export thread)
@@ -138,6 +146,21 @@ public:
     void renderOffline(float* const* outputs, int numOutputs, int numSamples) noexcept;
 
     void endOfflineRender();
+
+    /** While rendering offline: sets the transport directly (the offline renderer owns it). With
+        `ignoreLoop`, the loop range is ignored until the next call. */
+    void setOfflineTransport(double positionSeconds, bool playing, bool ignoreLoop) noexcept;
+
+    /** While rendering offline: applies posted commands now (e.g. to stop the transport before
+        handing back to the live callback). Call from the thread that owns the offline render. */
+    void applyCommandsOffline() noexcept;
+
+    /** While rendering offline: a track slot's output (post-fader, latency-compensated) of the last
+        rendered block, for stem exports. */
+    [[nodiscard]] const juce::AudioBuffer<Sample>& getSlotOutput(int slot) const noexcept
+    {
+        return slots_[static_cast<std::size_t>(std::clamp(slot, 0, kMaxTracks - 1))].main;
+    }
 
     //==============================================================================================
     // Audio thread
@@ -233,6 +256,7 @@ private:
     double positionSeconds_ = 0.0;
     double speed_ = 1.0;
     bool playing_ = false;
+    bool ignoreLoop_ = false; ///< offline exports render straight through the loop range
     bool loopEnabled_ = false;
     double loopStart_ = 0.0;
     double loopEnd_ = 0.0;

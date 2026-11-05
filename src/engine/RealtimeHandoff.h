@@ -93,6 +93,10 @@ public:
     /** Disk thread: writes everything buffered so far to the file. Returns frames written. */
     int drainToDisk();
 
+    /** Disk side: discard the first `frames` captured frames (e.g. plug-in latency pre-roll). Call
+        before capturing starts. */
+    void skipFirstFrames(std::uint64_t frames) noexcept { skip_ = frames; }
+
     /** Frames dropped because the disk thread fell behind (should stay 0). */
     [[nodiscard]] std::uint64_t getOverflowCount() const noexcept { return overflow_.load(); }
     [[nodiscard]] std::uint64_t getFramesWritten() const noexcept { return framesWritten_; }
@@ -109,6 +113,7 @@ private:
     std::atomic<std::uint64_t> readPosition_{0};
     std::atomic<std::uint64_t> overflow_{0};
     std::uint64_t framesWritten_ = 0;
+    std::uint64_t skip_ = 0;
     juce::AudioBuffer<float> chunk_;
 };
 

@@ -210,6 +210,24 @@ void AudioEngine::renderOffline(float* const* outputs, int numOutputs, int numSa
     renderBlock(nullptr, 0, outputs, numOutputs, numSamples);
 }
 
+void AudioEngine::setOfflineTransport(double positionSeconds, bool playing, bool ignoreLoop) noexcept
+{
+    if (!offlineActive_.load(std::memory_order_acquire))
+        return;
+    positionSeconds_ = std::max(0.0, positionSeconds);
+    playing_ = playing;
+    ignoreLoop_ = ignoreLoop;
+    panicAll();
+    telemetry_.playheadSeconds.store(positionSeconds_, std::memory_order_relaxed);
+    telemetry_.playing.store(playing_, std::memory_order_relaxed);
+}
+
+void AudioEngine::applyCommandsOffline() noexcept
+{
+    if (offlineActive_.load(std::memory_order_acquire))
+        applyPendingCommands();
+}
+
 void AudioEngine::endOfflineRender()
 {
     offlineActive_.store(false, std::memory_order_release);
@@ -290,7 +308,8 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
         int subBlock = std::min(numSamples - offset, maxBlockSize_);
         bool wraps = false;
 
-        if (playing_ && loopEnabled_ && loopEnd_ > loopStart_ + 0.001 && positionSeconds_ < loopEnd_)
+        const bool loopSuspended = ignoreLoop_ || (capture_ != nullptr && capture_->suspendLoop);
+        if (playing_ && loopEnabled_ && !loopSuspended && loopEnd_ > loopStart_ + 0.001 && positionSeconds_ < loopEnd_)
         {
             const double secondsPerSample = speed_ / sampleRate_;
             const double samplesToLoopEnd = (loopEnd_ - positionSeconds_) / secondsPerSample;
@@ -489,6 +508,7 @@ void AudioEngine::handle(const command::StopCapture&) noexcept
 {
     capture_ = nullptr;
     telemetry_.captureActive.store(false, std::memory_order_release);
+    telemetry_.captureStops.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void AudioEngine::retire(RenderGraph* graph) noexcept

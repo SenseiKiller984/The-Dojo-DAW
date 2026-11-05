@@ -181,6 +181,11 @@ void EngineController::pumpGraphs()
 
 void EngineController::timerCallback()
 {
+    pump();
+}
+
+void EngineController::pump()
+{
     engine_.releaseRetiredGraphs();
     releasePool_.collect();
     flushOutbox();

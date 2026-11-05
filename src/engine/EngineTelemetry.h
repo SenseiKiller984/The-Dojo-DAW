@@ -45,6 +45,7 @@ struct EngineTelemetry
 
     std::atomic<bool> captureActive{false};      ///< the audio thread is writing a CaptureSession
     std::atomic<double> captureStartSeconds{-1.0}; ///< timeline time of the first captured sample
+    std::atomic<std::uint32_t> captureStops{0}; ///< StopCapture commands handled so far
 
     /** Post-fader track peaks, [slot * 2 + channel], max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks) * 2> trackPeaks{};

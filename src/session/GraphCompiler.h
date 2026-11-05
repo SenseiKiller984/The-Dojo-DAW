@@ -51,6 +51,8 @@ public:
 
     /** Latency of the master output in samples, as of the last build. */
     [[nodiscard]] int getTotalLatency() const noexcept { return totalLatency_; }
+    /** Latency at the master bus input (where all track outputs are aligned), as of the last build. */
+    [[nodiscard]] int getMasterInputLatency() const noexcept { return masterInputLatency_; }
 
     /** Balance pan law used for every track. Returns {left, right}. */
     static std::pair<double, double> panGains(double pan) noexcept { return engine::balancePanGains(pan); }
@@ -64,6 +66,7 @@ private:
     double sampleRate_ = 48000.0;
     int maxBlock_ = 2048;
     int totalLatency_ = 0;
+    int masterInputLatency_ = 0;
 };
 
 /**
@@ -91,6 +94,7 @@ public:
 
     [[nodiscard]] int getSlot(std::uint32_t trackId) const { return builder_.getSlot(trackId); }
     [[nodiscard]] int getTotalLatency() const noexcept { return builder_.getTotalLatency(); }
+    [[nodiscard]] int getMasterInputLatency() const noexcept { return builder_.getMasterInputLatency(); }
 
     /** Builds a graph without publishing it (for offline renders on a separate engine). */
     std::unique_ptr<engine::RenderGraph> buildGraph() { return builder_.build(session_, assets_, devices_); }

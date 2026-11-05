@@ -45,6 +45,7 @@ struct CaptureSession
     std::atomic<int> midiCount{0};
 
     bool onlyWhilePlaying = true;
+    bool suspendLoop = false; ///< ignore the loop range while capturing (recording)
 };
 
 } // namespace dojo::engine

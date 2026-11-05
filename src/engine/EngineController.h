@@ -98,6 +98,12 @@ public:
         one (which is destroyed here, on the message thread). */
     void publishGraph(std::unique_ptr<RenderGraph> graph);
 
+    /** Serial of the newest graph handed to publishGraph() (0 = none yet). */
+    [[nodiscard]] std::uint64_t getLatestGraphSerial() const noexcept { return nextGraphSerial_ - 1; }
+
+    /** Posts any parked commands and the pending graph now (normally done on a timer). */
+    void pump();
+
 private:
     void send(const EngineCommand& command);
     void flushOutbox();
