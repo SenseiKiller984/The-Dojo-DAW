@@ -1,6 +1,9 @@
 #include "session/Session.h"
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
+#include <set>
 
 namespace dojo::session
 {
@@ -13,12 +16,58 @@ juce::ValueTree createEmptyState()
     state.setProperty(ids::tempo, 120.0, nullptr);
     state.setProperty(ids::masterVolume, 0.0, nullptr);
     state.setProperty(ids::nextId, 1, nullptr);
+    state.setProperty(ids::loopEnabled, false, nullptr);
+    state.setProperty(ids::loopStart, 0.0, nullptr);
+    state.setProperty(ids::loopEnd, 8.0, nullptr);
+    state.setProperty(ids::speed, 1.0, nullptr);
+    state.setProperty(ids::keepPitch, false, nullptr);
+    state.setProperty(ids::transpose, 0.0, nullptr);
+    state.addChild(juce::ValueTree(ids::master), -1, nullptr);
     return state;
 }
 
 std::uint32_t readId(const juce::ValueTree& tree)
 {
     return static_cast<std::uint32_t>(static_cast<int>(tree.getProperty(ids::id, 0)));
+}
+
+void collectTracks(const juce::ValueTree& parent, std::vector<juce::ValueTree>& out)
+{
+    for (const auto& child : parent)
+    {
+        if (!child.hasType(ids::track))
+            continue;
+        out.push_back(child);
+        collectTracks(child, out);
+    }
+}
+
+int countTracks(const juce::ValueTree& parent)
+{
+    int count = 0;
+    for (const auto& child : parent)
+        if (child.hasType(ids::track))
+            count += 1 + countTracks(child);
+    return count;
+}
+
+/** Index among `parent`'s children at which a track may be inserted in front of `before`. */
+int childIndexOf(const juce::ValueTree& parent, const juce::ValueTree& before)
+{
+    return before.isValid() ? parent.indexOf(before) : -1;
+}
+
+juce::String defaultTrackName(TrackKind kind, bool folder, int number)
+{
+    if (folder)
+        return "Folder " + juce::String(number);
+    switch (kind)
+    {
+    case TrackKind::instrument: return "Instrument " + juce::String(number);
+    case TrackKind::bus:        return "Bus " + juce::String(number);
+    case TrackKind::audio:      break;
+    }
+    return "Audio " + juce::String(number);
 }
 } // namespace
 
@@ -37,43 +86,64 @@ const std::array<juce::Colour, 8>& getTrackPalette()
     return palette;
 }
 
+juce::String toString(TrackKind kind)
+{
+    switch (kind)
+    {
+    case TrackKind::instrument: return "instrument";
+    case TrackKind::bus:        return "bus";
+    case TrackKind::audio:      break;
+    }
+    return "audio";
+}
+
+TrackKind trackKindFromString(const juce::String& text)
+{
+    if (text == "instrument")
+        return TrackKind::instrument;
+    if (text == "bus")
+        return TrackKind::bus;
+    return TrackKind::audio;
+}
+
 //==================================================================================================
 // Track accessors
 
 namespace track
 {
-std::uint32_t getId(const juce::ValueTree& t)
-{
-    return readId(t);
-}
-juce::String getName(const juce::ValueTree& t)
-{
-    return t.getProperty(ids::name).toString();
-}
+std::uint32_t getId(const juce::ValueTree& t) { return readId(t); }
+juce::String getName(const juce::ValueTree& t) { return t.getProperty(ids::name).toString(); }
 juce::Colour getColour(const juce::ValueTree& t)
 {
     return juce::Colour::fromString(t.getProperty(ids::colour, "ffe0533d").toString());
 }
-double getVolumeDb(const juce::ValueTree& t)
+TrackKind getKind(const juce::ValueTree& t) { return trackKindFromString(t.getProperty(ids::kind).toString()); }
+bool isFolder(const juce::ValueTree& t) { return t.getProperty(ids::folder, false); }
+bool isCollapsed(const juce::ValueTree& t) { return t.getProperty(ids::collapsed, false); }
+double getVolumeDb(const juce::ValueTree& t) { return t.getProperty(ids::volume, 0.0); }
+double getPan(const juce::ValueTree& t) { return t.getProperty(ids::pan, 0.0); }
+bool isMuted(const juce::ValueTree& t) { return t.getProperty(ids::muted, false); }
+bool isSoloed(const juce::ValueTree& t) { return t.getProperty(ids::soloed, false); }
+bool isPhaseInverted(const juce::ValueTree& t) { return t.getProperty(ids::phase, false); }
+std::uint32_t getOutput(const juce::ValueTree& t)
 {
-    return t.getProperty(ids::volume, 0.0);
+    return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::output, 0)));
 }
-double getPan(const juce::ValueTree& t)
+int getInput(const juce::ValueTree& t) { return t.getProperty(ids::input, -1); }
+bool isInputStereo(const juce::ValueTree& t) { return t.getProperty(ids::inputStereo, true); }
+engine::MonitorMode getMonitor(const juce::ValueTree& t)
 {
-    return t.getProperty(ids::pan, 0.0);
+    return static_cast<engine::MonitorMode>(juce::jlimit(0, 2, static_cast<int>(t.getProperty(ids::monitor, 1))));
 }
-bool isMuted(const juce::ValueTree& t)
+bool isArmed(const juce::ValueTree& t) { return t.getProperty(ids::armed, false); }
+double getSpeed(const juce::ValueTree& t) { return t.getProperty(ids::speed, 1.0); }
+double getPitch(const juce::ValueTree& t) { return t.getProperty(ids::pitch, 0.0); }
+std::uint32_t getAuxSource(const juce::ValueTree& t)
 {
-    return t.getProperty(ids::muted, false);
+    return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::auxSource, 0)));
 }
-bool isSoloed(const juce::ValueTree& t)
-{
-    return t.getProperty(ids::soloed, false);
-}
-bool isPhaseInverted(const juce::ValueTree& t)
-{
-    return t.getProperty(ids::phase, false);
-}
+int getAuxChannel(const juce::ValueTree& t) { return t.getProperty(ids::auxChannel, 0); }
+bool isShowingAutomation(const juce::ValueTree& t) { return t.getProperty(ids::showAutomation, false); }
 
 void setName(juce::ValueTree t, const juce::String& name, juce::UndoManager* um)
 {
@@ -83,6 +153,7 @@ void setColour(juce::ValueTree t, juce::Colour colour, juce::UndoManager* um)
 {
     t.setProperty(ids::colour, colour.toString(), um);
 }
+void setCollapsed(juce::ValueTree t, bool collapsed, juce::UndoManager* um) { t.setProperty(ids::collapsed, collapsed, um); }
 void setVolumeDb(juce::ValueTree t, double db, juce::UndoManager* um)
 {
     t.setProperty(ids::volume, juce::jlimit(kMinusInfinityDb, kMaxVolumeDb, db), um);
@@ -91,17 +162,42 @@ void setPan(juce::ValueTree t, double pan, juce::UndoManager* um)
 {
     t.setProperty(ids::pan, juce::jlimit(-1.0, 1.0, pan), um);
 }
-void setMuted(juce::ValueTree t, bool muted, juce::UndoManager* um)
-{
-    t.setProperty(ids::muted, muted, um);
-}
-void setSoloed(juce::ValueTree t, bool soloed, juce::UndoManager* um)
-{
-    t.setProperty(ids::soloed, soloed, um);
-}
+void setMuted(juce::ValueTree t, bool muted, juce::UndoManager* um) { t.setProperty(ids::muted, muted, um); }
+void setSoloed(juce::ValueTree t, bool soloed, juce::UndoManager* um) { t.setProperty(ids::soloed, soloed, um); }
 void setPhaseInverted(juce::ValueTree t, bool inverted, juce::UndoManager* um)
 {
     t.setProperty(ids::phase, inverted, um);
+}
+void setOutput(juce::ValueTree t, std::uint32_t busId, juce::UndoManager* um)
+{
+    t.setProperty(ids::output, static_cast<int>(busId), um);
+}
+void setInput(juce::ValueTree t, int firstChannel, bool stereo, juce::UndoManager* um)
+{
+    t.setProperty(ids::input, std::max(-1, firstChannel), um);
+    t.setProperty(ids::inputStereo, stereo, um);
+}
+void setMonitor(juce::ValueTree t, engine::MonitorMode mode, juce::UndoManager* um)
+{
+    t.setProperty(ids::monitor, static_cast<int>(mode), um);
+}
+void setArmed(juce::ValueTree t, bool armed, juce::UndoManager* um) { t.setProperty(ids::armed, armed, um); }
+void setSpeed(juce::ValueTree t, double speed, juce::UndoManager* um)
+{
+    t.setProperty(ids::speed, juce::jlimit(kMinStretch, kMaxStretch, speed), um);
+}
+void setPitch(juce::ValueTree t, double semitones, juce::UndoManager* um)
+{
+    t.setProperty(ids::pitch, juce::jlimit(-24.0, 24.0, semitones), um);
+}
+void setAuxSource(juce::ValueTree t, std::uint32_t instrumentTrackId, int firstChannel, juce::UndoManager* um)
+{
+    t.setProperty(ids::auxSource, static_cast<int>(instrumentTrackId), um);
+    t.setProperty(ids::auxChannel, std::max(0, firstChannel), um);
+}
+void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um)
+{
+    t.setProperty(ids::showAutomation, show, um);
 }
 } // namespace track
 
@@ -110,46 +206,19 @@ void setPhaseInverted(juce::ValueTree t, bool inverted, juce::UndoManager* um)
 
 namespace clip
 {
-std::uint32_t getId(const juce::ValueTree& c)
-{
-    return readId(c);
-}
-juce::String getName(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::name).toString();
-}
-juce::File getFile(const juce::ValueTree& c)
-{
-    return juce::File(c.getProperty(ids::file).toString());
-}
-double getStart(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::start, 0.0);
-}
-double getLength(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::length, 0.0);
-}
-double getEnd(const juce::ValueTree& c)
-{
-    return getStart(c) + getLength(c);
-}
-double getOffset(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::offset, 0.0);
-}
-double getFadeIn(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::fadeIn, 0.0);
-}
-double getFadeOut(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::fadeOut, 0.0);
-}
-double getGainDb(const juce::ValueTree& c)
-{
-    return c.getProperty(ids::gain, 0.0);
-}
+std::uint32_t getId(const juce::ValueTree& c) { return readId(c); }
+bool isMidi(const juce::ValueTree& c) { return c.hasType(ids::midiClip); }
+juce::String getName(const juce::ValueTree& c) { return c.getProperty(ids::name).toString(); }
+juce::File getFile(const juce::ValueTree& c) { return juce::File(c.getProperty(ids::file).toString()); }
+double getStart(const juce::ValueTree& c) { return c.getProperty(ids::start, 0.0); }
+double getLength(const juce::ValueTree& c) { return c.getProperty(ids::length, 0.0); }
+double getEnd(const juce::ValueTree& c) { return getStart(c) + getLength(c); }
+double getOffset(const juce::ValueTree& c) { return c.getProperty(ids::offset, 0.0); }
+double getFadeIn(const juce::ValueTree& c) { return c.getProperty(ids::fadeIn, 0.0); }
+double getFadeOut(const juce::ValueTree& c) { return c.getProperty(ids::fadeOut, 0.0); }
+double getGainDb(const juce::ValueTree& c) { return c.getProperty(ids::gain, 0.0); }
+double getStretch(const juce::ValueTree& c) { return c.getProperty(ids::stretch, 1.0); }
+double getPitch(const juce::ValueTree& c) { return c.getProperty(ids::pitch, 0.0); }
 
 void setStart(juce::ValueTree c, double seconds, juce::UndoManager* um)
 {
@@ -159,9 +228,9 @@ void setLength(juce::ValueTree c, double seconds, juce::UndoManager* um)
 {
     c.setProperty(ids::length, std::max(kMinClipLength, seconds), um);
 }
-void setOffset(juce::ValueTree c, double seconds, juce::UndoManager* um)
+void setOffset(juce::ValueTree c, double value, juce::UndoManager* um)
 {
-    c.setProperty(ids::offset, std::max(0.0, seconds), um);
+    c.setProperty(ids::offset, isMidi(c) ? value : std::max(0.0, value), um);
 }
 void setFadeIn(juce::ValueTree c, double seconds, juce::UndoManager* um)
 {
@@ -171,11 +240,134 @@ void setFadeOut(juce::ValueTree c, double seconds, juce::UndoManager* um)
 {
     c.setProperty(ids::fadeOut, juce::jlimit(0.0, std::max(0.0, getLength(c) - getFadeIn(c)), seconds), um);
 }
-void setName(juce::ValueTree c, const juce::String& name, juce::UndoManager* um)
+void setGainDb(juce::ValueTree c, double db, juce::UndoManager* um)
 {
-    c.setProperty(ids::name, name, um);
+    c.setProperty(ids::gain, juce::jlimit(kMinusInfinityDb, 24.0, db), um);
 }
+void setStretch(juce::ValueTree c, double ratio, juce::UndoManager* um)
+{
+    c.setProperty(ids::stretch, juce::jlimit(kMinStretch, kMaxStretch, ratio), um);
+}
+void setPitch(juce::ValueTree c, double semitones, juce::UndoManager* um)
+{
+    c.setProperty(ids::pitch, juce::jlimit(-24.0, 24.0, semitones), um);
+}
+void setName(juce::ValueTree c, const juce::String& name, juce::UndoManager* um) { c.setProperty(ids::name, name, um); }
 } // namespace clip
+
+//==================================================================================================
+// Note accessors
+
+namespace note
+{
+double getStart(const juce::ValueTree& n) { return n.getProperty(ids::start, 0.0); }
+double getLength(const juce::ValueTree& n) { return n.getProperty(ids::length, 0.25); }
+double getEnd(const juce::ValueTree& n) { return getStart(n) + getLength(n); }
+int getNote(const juce::ValueTree& n) { return n.getProperty(ids::noteNumber, 60); }
+float getVelocity(const juce::ValueTree& n) { return static_cast<float>(static_cast<double>(n.getProperty(ids::velocity, 0.8))); }
+int getChannel(const juce::ValueTree& n) { return n.getProperty(ids::channel, 1); }
+
+void setStart(juce::ValueTree n, double beat, juce::UndoManager* um) { n.setProperty(ids::start, beat, um); }
+void setLength(juce::ValueTree n, double beats, juce::UndoManager* um)
+{
+    n.setProperty(ids::length, std::max(kMinNoteLength, beats), um);
+}
+void setNote(juce::ValueTree n, int noteNumber, juce::UndoManager* um)
+{
+    n.setProperty(ids::noteNumber, juce::jlimit(0, 127, noteNumber), um);
+}
+void setVelocity(juce::ValueTree n, float velocity, juce::UndoManager* um)
+{
+    n.setProperty(ids::velocity, juce::jlimit(0.01, 1.0, static_cast<double>(velocity)), um);
+}
+} // namespace note
+
+//==================================================================================================
+// Device / send / automation accessors
+
+namespace device
+{
+std::uint32_t getId(const juce::ValueTree& d) { return readId(d); }
+juce::String getType(const juce::ValueTree& d) { return d.getProperty(ids::type).toString(); }
+juce::String getName(const juce::ValueTree& d) { return d.getProperty(ids::name).toString(); }
+bool isBypassed(const juce::ValueTree& d) { return d.getProperty(ids::bypassed, false); }
+std::uint32_t getSidechain(const juce::ValueTree& d)
+{
+    return static_cast<std::uint32_t>(static_cast<int>(d.getProperty(ids::sidechain, 0)));
+}
+void setBypassed(juce::ValueTree d, bool bypassed, juce::UndoManager* um) { d.setProperty(ids::bypassed, bypassed, um); }
+void setSidechain(juce::ValueTree d, std::uint32_t trackId, juce::UndoManager* um)
+{
+    d.setProperty(ids::sidechain, static_cast<int>(trackId), um);
+}
+} // namespace device
+
+namespace send
+{
+std::uint32_t getId(const juce::ValueTree& s) { return readId(s); }
+std::uint32_t getTarget(const juce::ValueTree& s)
+{
+    return static_cast<std::uint32_t>(static_cast<int>(s.getProperty(ids::target, 0)));
+}
+double getGainDb(const juce::ValueTree& s) { return s.getProperty(ids::gain, -6.0); }
+bool isPreFader(const juce::ValueTree& s) { return s.getProperty(ids::preFader, false); }
+void setGainDb(juce::ValueTree s, double db, juce::UndoManager* um)
+{
+    s.setProperty(ids::gain, juce::jlimit(kMinusInfinityDb, kMaxVolumeDb, db), um);
+}
+void setPreFader(juce::ValueTree s, bool preFader, juce::UndoManager* um) { s.setProperty(ids::preFader, preFader, um); }
+} // namespace send
+
+namespace automation
+{
+juce::String getTarget(const juce::ValueTree& lane) { return lane.getProperty(ids::target).toString(); }
+bool isVisible(const juce::ValueTree& lane) { return lane.getProperty(ids::visible, true); }
+void setVisible(juce::ValueTree lane, bool visible, juce::UndoManager* um) { lane.setProperty(ids::visible, visible, um); }
+
+juce::String volumeTarget() { return "volume"; }
+juce::String panTarget() { return "pan"; }
+juce::String sendTarget(std::uint32_t sendId) { return "send:" + juce::String(static_cast<int>(sendId)); }
+juce::String parameterTarget(std::uint32_t deviceId, int parameterIndex)
+{
+    return "param:" + juce::String(static_cast<int>(deviceId)) + ":" + juce::String(parameterIndex);
+}
+
+bool parseParameterTarget(const juce::String& target, std::uint32_t& deviceId, int& parameterIndex)
+{
+    if (!target.startsWith("param:"))
+        return false;
+    const auto rest = target.fromFirstOccurrenceOf("param:", false, false);
+    const auto deviceText = rest.upToFirstOccurrenceOf(":", false, false);
+    const auto indexText = rest.fromFirstOccurrenceOf(":", false, false);
+    if (deviceText.isEmpty() || indexText.isEmpty())
+        return false;
+    deviceId = static_cast<std::uint32_t>(deviceText.getIntValue());
+    parameterIndex = indexText.getIntValue();
+    return deviceId != 0 && parameterIndex >= 0;
+}
+
+bool parseSendTarget(const juce::String& target, std::uint32_t& sendId)
+{
+    if (!target.startsWith("send:"))
+        return false;
+    sendId = static_cast<std::uint32_t>(target.fromFirstOccurrenceOf("send:", false, false).getIntValue());
+    return sendId != 0;
+}
+
+engine::AutomationCurve toCurve(const juce::ValueTree& lane)
+{
+    std::vector<engine::AutomationPoint> points;
+    points.reserve(static_cast<std::size_t>(lane.getNumChildren()));
+    for (const auto& p : lane)
+        if (p.hasType(ids::point))
+            points.push_back({static_cast<double>(p.getProperty(ids::time, 0.0)),
+                              juce::jlimit(0.0, 1.0, static_cast<double>(p.getProperty(ids::value, 0.0)))});
+
+    engine::AutomationCurve curve;
+    curve.setPoints(std::move(points));
+    return curve;
+}
+} // namespace automation
 
 //==================================================================================================
 // Session
@@ -192,71 +384,351 @@ std::uint32_t Session::allocateId()
     return static_cast<std::uint32_t>(next);
 }
 
-double Session::getTempo() const
+void Session::reassignIds(juce::ValueTree tree)
 {
-    return state_.getProperty(ids::tempo, 120.0);
+    if (tree.hasProperty(ids::id))
+        tree.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    for (auto child : tree)
+        reassignIds(child);
 }
 
-void Session::setTempo(double bpm)
-{
-    state_.setProperty(ids::tempo, juce::jlimit(kMinTempo, kMaxTempo, bpm), &undo_);
-}
+// --- Global ---------------------------------------------------------------------------------------
 
-double Session::getMasterVolumeDb() const
-{
-    return state_.getProperty(ids::masterVolume, 0.0);
-}
-
+double Session::getTempo() const { return state_.getProperty(ids::tempo, 120.0); }
+void Session::setTempo(double bpm) { state_.setProperty(ids::tempo, juce::jlimit(kMinTempo, kMaxTempo, bpm), &undo_); }
+double Session::getMasterVolumeDb() const { return state_.getProperty(ids::masterVolume, 0.0); }
 void Session::setMasterVolumeDb(double db)
 {
     state_.setProperty(ids::masterVolume, juce::jlimit(kMinusInfinityDb, kMaxVolumeDb, db), &undo_);
 }
 
+bool Session::isLoopEnabled() const { return state_.getProperty(ids::loopEnabled, false); }
+double Session::getLoopStart() const { return state_.getProperty(ids::loopStart, 0.0); }
+double Session::getLoopEnd() const { return state_.getProperty(ids::loopEnd, 8.0); }
+
+void Session::setLoop(bool enabled, double startSeconds, double endSeconds)
+{
+    startSeconds = std::max(0.0, startSeconds);
+    endSeconds = std::max(startSeconds + kMinClipLength, endSeconds);
+    state_.setProperty(ids::loopEnabled, enabled, &undo_);
+    state_.setProperty(ids::loopStart, startSeconds, &undo_);
+    state_.setProperty(ids::loopEnd, endSeconds, &undo_);
+}
+
+void Session::setLoopEnabled(bool enabled) { state_.setProperty(ids::loopEnabled, enabled, &undo_); }
+
+double Session::getSpeed() const { return state_.getProperty(ids::speed, 1.0); }
+bool Session::getKeepPitch() const { return state_.getProperty(ids::keepPitch, false); }
+void Session::setSpeed(double speed)
+{
+    state_.setProperty(ids::speed, juce::jlimit(kMinStretch, kMaxStretch, speed), &undo_);
+}
+void Session::setKeepPitch(bool keepPitch) { state_.setProperty(ids::keepPitch, keepPitch, &undo_); }
+double Session::getTranspose() const { return state_.getProperty(ids::transpose, 0.0); }
+void Session::setTranspose(double semitones)
+{
+    state_.setProperty(ids::transpose, juce::jlimit(-24.0, 24.0, semitones), &undo_);
+}
+
+juce::ValueTree Session::getMaster()
+{
+    auto masterNode = state_.getChildWithName(ids::master);
+    if (!masterNode.isValid())
+    {
+        masterNode = juce::ValueTree(ids::master);
+        state_.addChild(masterNode, 0, nullptr);
+    }
+    return masterNode;
+}
+
+// --- Tracks ---------------------------------------------------------------------------------------
+
+std::vector<juce::ValueTree> Session::getAllTracks() const
+{
+    std::vector<juce::ValueTree> tracks;
+    tracks.reserve(32);
+    collectTracks(state_, tracks);
+    return tracks;
+}
+
+int Session::getNumTracks() const { return countTracks(state_); }
+
+juce::ValueTree Session::getTrack(int index) const
+{
+    if (index < 0)
+        return {};
+    const auto tracks = getAllTracks();
+    return index < static_cast<int>(tracks.size()) ? tracks[static_cast<std::size_t>(index)] : juce::ValueTree();
+}
+
+int Session::indexOf(const juce::ValueTree& t) const
+{
+    const auto tracks = getAllTracks();
+    const auto it = std::find(tracks.begin(), tracks.end(), t);
+    return it != tracks.end() ? static_cast<int>(it - tracks.begin()) : -1;
+}
+
 juce::ValueTree Session::findTrack(std::uint32_t trackId) const
 {
-    for (const auto& t : state_)
+    if (trackId == 0)
+        return {};
+    for (const auto& t : getAllTracks())
         if (track::getId(t) == trackId)
             return t;
-
     return {};
+}
+
+juce::ValueTree Session::getParentFolder(const juce::ValueTree& t)
+{
+    const auto parent = t.getParent();
+    return parent.hasType(ids::track) ? parent : juce::ValueTree();
+}
+
+int Session::getDepth(const juce::ValueTree& t)
+{
+    int depth = 0;
+    for (auto parent = getParentFolder(t); parent.isValid(); parent = getParentFolder(parent))
+        ++depth;
+    return depth;
+}
+
+bool Session::isWithin(const juce::ValueTree& t, const juce::ValueTree& ancestor)
+{
+    for (auto node = t; node.isValid(); node = node.getParent())
+        if (node == ancestor)
+            return true;
+    return false;
+}
+
+bool Session::isVisibleInArranger(const juce::ValueTree& t)
+{
+    for (auto parent = getParentFolder(t); parent.isValid(); parent = getParentFolder(parent))
+        if (track::isCollapsed(parent))
+            return false;
+    return true;
+}
+
+juce::ValueTree Session::insertTrackTree(juce::ValueTree t, int index)
+{
+    juce::ValueTree parent = state_;
+    juce::ValueTree before;
+
+    if (index >= 0)
+    {
+        before = getTrack(index);
+        if (before.isValid())
+            parent = before.getParent();
+    }
+
+    parent.addChild(t, childIndexOf(parent, before), &undo_);
+    return t;
 }
 
 juce::ValueTree Session::addTrack(const juce::String& name, int index)
 {
+    return addTrack(TrackKind::audio, name, index);
+}
+
+juce::ValueTree Session::addTrack(TrackKind kind, const juce::String& name, int index)
+{
     juce::ValueTree t(ids::track);
     const auto id = allocateId();
     const auto& palette = getTrackPalette();
+    const int count = getNumTracks();
 
     t.setProperty(ids::id, static_cast<int>(id), nullptr);
-    t.setProperty(ids::name, name.isNotEmpty() ? name : "Audio " + juce::String(getNumTracks() + 1), nullptr);
-    t.setProperty(ids::colour, palette[static_cast<std::size_t>(getNumTracks()) % palette.size()].toString(),
-                  nullptr);
+    t.setProperty(ids::name, name.isNotEmpty() ? name : defaultTrackName(kind, false, count + 1), nullptr);
+    t.setProperty(ids::colour, palette[static_cast<std::size_t>(count) % palette.size()].toString(), nullptr);
+    t.setProperty(ids::kind, toString(kind), nullptr);
     t.setProperty(ids::volume, 0.0, nullptr);
     t.setProperty(ids::pan, 0.0, nullptr);
     t.setProperty(ids::muted, false, nullptr);
     t.setProperty(ids::soloed, false, nullptr);
     t.setProperty(ids::phase, false, nullptr);
 
-    state_.addChild(t, index, &undo_);
+    if (kind == TrackKind::audio)
+    {
+        t.setProperty(ids::input, 0, nullptr);
+        t.setProperty(ids::inputStereo, true, nullptr);
+    }
+
+    if (kind != TrackKind::bus)
+        t.setProperty(ids::monitor, static_cast<int>(engine::MonitorMode::automatic), nullptr);
+
+    return insertTrackTree(t, index);
+}
+
+juce::ValueTree Session::addFolder(const juce::String& name, int index)
+{
+    auto t = addTrack(TrackKind::bus, name.isNotEmpty() ? name : defaultTrackName(TrackKind::bus, true, getNumTracks() + 1),
+                      index);
+    t.setProperty(ids::folder, true, &undo_);
     return t;
+}
+
+juce::ValueTree Session::groupIntoFolder(const std::vector<juce::ValueTree>& tracks, const juce::String& name)
+{
+    if (tracks.empty())
+        return {};
+
+    auto parent = tracks.front().getParent();
+    for (const auto& t : tracks)
+        if (t.getParent() != parent)
+            return {};
+
+    juce::ValueTree folderTree(ids::track);
+    const int count = getNumTracks();
+    folderTree.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    folderTree.setProperty(ids::name, name.isNotEmpty() ? name : defaultTrackName(TrackKind::bus, true, count + 1), nullptr);
+    folderTree.setProperty(ids::colour, track::getColour(tracks.front()).toString(), nullptr);
+    folderTree.setProperty(ids::kind, toString(TrackKind::bus), nullptr);
+    folderTree.setProperty(ids::folder, true, nullptr);
+    folderTree.setProperty(ids::volume, 0.0, nullptr);
+    folderTree.setProperty(ids::pan, 0.0, nullptr);
+
+    int insertAt = parent.getNumChildren();
+    for (const auto& t : tracks)
+        insertAt = std::min(insertAt, parent.indexOf(t));
+
+    parent.addChild(folderTree, insertAt, &undo_);
+
+    // Keep the tracks' order: sort by their current position.
+    auto ordered = tracks;
+    std::sort(ordered.begin(), ordered.end(), [&](const auto& a, const auto& b) { return parent.indexOf(a) < parent.indexOf(b); });
+
+    for (const auto& t : ordered)
+    {
+        auto copy = t; // removeChild invalidates nothing, but keep a handle
+        parent.removeChild(copy, &undo_);
+        folderTree.addChild(copy, -1, &undo_);
+    }
+
+    return folderTree;
 }
 
 void Session::removeTrack(const juce::ValueTree& t)
 {
-    if (t.isValid() && t.getParent() == state_)
-        state_.removeChild(t, &undo_);
+    if (!t.isValid() || !t.hasType(ids::track))
+        return;
+
+    auto parent = t.getParent();
+    if (parent.isValid())
+        parent.removeChild(t, &undo_);
 }
 
 void Session::moveTrack(int fromIndex, int toIndex)
 {
-    const int last = getNumTracks() - 1;
-    if (fromIndex < 0 || fromIndex > last)
+    const auto tracks = getAllTracks();
+    const int count = static_cast<int>(tracks.size());
+    if (fromIndex < 0 || fromIndex >= count || fromIndex == toIndex)
         return;
 
-    toIndex = juce::jlimit(0, last, toIndex);
-    if (fromIndex != toIndex)
-        state_.moveChild(fromIndex, toIndex, &undo_);
+    auto moving = tracks[static_cast<std::size_t>(fromIndex)];
+    juce::ValueTree before = toIndex >= 0 && toIndex < count ? tracks[static_cast<std::size_t>(toIndex)] : juce::ValueTree();
+
+    // A folder can't move into itself: skip past its own contents.
+    while (before.isValid() && isWithin(before, moving))
+    {
+        const int next = static_cast<int>(std::find(tracks.begin(), tracks.end(), before) - tracks.begin()) + 1;
+        before = next < count ? tracks[static_cast<std::size_t>(next)] : juce::ValueTree();
+    }
+
+    auto oldParent = moving.getParent();
+    auto newParent = before.isValid() ? before.getParent() : state_;
+
+    if (oldParent == newParent)
+    {
+        const int from = oldParent.indexOf(moving);
+        int to = before.isValid() ? newParent.indexOf(before) : newParent.getNumChildren();
+        if (to > from)
+            --to;
+        if (to != from)
+            oldParent.moveChild(from, to, &undo_);
+        return;
+    }
+
+    oldParent.removeChild(moving, &undo_);
+    newParent.addChild(moving, before.isValid() ? newParent.indexOf(before) : -1, &undo_);
 }
+
+bool Session::moveIntoFolder(const juce::ValueTree& t, const juce::ValueTree& folderTree)
+{
+    if (!t.isValid() || !t.hasType(ids::track))
+        return false;
+
+    auto newParent = folderTree.isValid() ? folderTree : state_;
+    if (folderTree.isValid() && (!track::isFolder(folderTree) || isWithin(folderTree, t)))
+        return false;
+
+    auto oldParent = t.getParent();
+    if (oldParent == newParent)
+        return true;
+
+    auto moving = t;
+    oldParent.removeChild(moving, &undo_);
+    newParent.addChild(moving, -1, &undo_);
+    return true;
+}
+
+std::vector<juce::ValueTree> Session::getBusses() const
+{
+    std::vector<juce::ValueTree> busses;
+    for (const auto& t : getAllTracks())
+        if (track::getKind(t) == TrackKind::bus)
+            busses.push_back(t);
+    return busses;
+}
+
+juce::ValueTree Session::getDestination(const juce::ValueTree& t) const
+{
+    if (const auto output = track::getOutput(t); output != 0)
+    {
+        const auto bus = findTrack(output);
+        if (bus.isValid() && bus != t && track::getKind(bus) == TrackKind::bus)
+            return bus;
+    }
+
+    return getParentFolder(t);
+}
+
+bool Session::canFeed(const juce::ValueTree& source, const juce::ValueTree& bus) const
+{
+    if (!source.isValid() || !bus.isValid() || source == bus)
+        return false;
+
+    // Does `bus` already (directly or indirectly) feed `source`? Then source -> bus closes a loop.
+    const auto tracks = getAllTracks();
+    std::set<std::uint32_t> visited;
+    std::function<bool(const juce::ValueTree&)> reaches = [&](const juce::ValueTree& from) -> bool
+    {
+        if (from == source)
+            return true;
+        if (!visited.insert(track::getId(from)).second)
+            return false;
+
+        if (const auto dest = getDestination(from); dest.isValid() && reaches(dest))
+            return true;
+
+        for (const auto& s : getSends(from))
+            if (const auto target = findTrack(send::getTarget(s)); target.isValid() && reaches(target))
+                return true;
+
+        // Tracks that use `from` as a sidechain or aux source depend on it too.
+        for (const auto& other : tracks)
+        {
+            if (track::getAuxSource(other) == track::getId(from) && reaches(other))
+                return true;
+            for (const auto& d : getDevices(other))
+                if (device::getSidechain(d) == track::getId(from) && reaches(other))
+                    return true;
+        }
+        return false;
+    };
+
+    return !reaches(bus);
+}
+
+// --- Clips ----------------------------------------------------------------------------------------
 
 juce::ValueTree Session::addClip(juce::ValueTree t, const juce::File& file, double start, double length,
                                  double offset)
@@ -274,6 +746,24 @@ juce::ValueTree Session::addClip(juce::ValueTree t, const juce::File& file, doub
     c.setProperty(ids::fadeIn, 0.0, nullptr);
     c.setProperty(ids::fadeOut, 0.0, nullptr);
     c.setProperty(ids::gain, 0.0, nullptr);
+    c.setProperty(ids::stretch, 1.0, nullptr);
+    c.setProperty(ids::pitch, 0.0, nullptr);
+
+    t.addChild(c, -1, &undo_);
+    return c;
+}
+
+juce::ValueTree Session::addMidiClip(juce::ValueTree t, double start, double length, const juce::String& name)
+{
+    if (!t.isValid())
+        return {};
+
+    juce::ValueTree c(ids::midiClip);
+    c.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    c.setProperty(ids::name, name.isNotEmpty() ? name : track::getName(t), nullptr);
+    c.setProperty(ids::start, std::max(0.0, start), nullptr);
+    c.setProperty(ids::length, std::max(kMinClipLength, length), nullptr);
+    c.setProperty(ids::offset, 0.0, nullptr);
 
     t.addChild(c, -1, &undo_);
     return c;
@@ -281,9 +771,9 @@ juce::ValueTree Session::addClip(juce::ValueTree t, const juce::File& file, doub
 
 juce::ValueTree Session::findClip(std::uint32_t clipId) const
 {
-    for (const auto& t : state_)
+    for (const auto& t : getAllTracks())
         for (const auto& c : t)
-            if (clip::getId(c) == clipId)
+            if (isClip(c) && clip::getId(c) == clipId)
                 return c;
 
     return {};
@@ -297,11 +787,17 @@ void Session::moveClip(juce::ValueTree c, juce::ValueTree targetTrack, double ne
     clip::setStart(c, newStart, &undo_);
 
     auto currentTrack = c.getParent();
-    if (targetTrack.isValid() && targetTrack != currentTrack && currentTrack.isValid())
-    {
-        currentTrack.removeChild(c, &undo_);
-        targetTrack.addChild(c, -1, &undo_);
-    }
+    if (!targetTrack.isValid() || targetTrack == currentTrack || !currentTrack.isValid())
+        return;
+
+    // Audio clips live on audio tracks, MIDI clips on instrument tracks.
+    const auto kind = track::getKind(targetTrack);
+    const bool compatible = clip::isMidi(c) ? kind == TrackKind::instrument : kind == TrackKind::audio;
+    if (!compatible)
+        return;
+
+    currentTrack.removeChild(c, &undo_);
+    targetTrack.addChild(c, -1, &undo_);
 }
 
 void Session::removeClip(juce::ValueTree c)
@@ -318,9 +814,21 @@ juce::ValueTree Session::duplicateClip(const juce::ValueTree& original)
         return {};
 
     auto copy = original.createCopy();
-    copy.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    reassignIds(copy);
     copy.setProperty(ids::start, clip::getEnd(original), nullptr);
     parent.addChild(copy, -1, &undo_);
+    return copy;
+}
+
+juce::ValueTree Session::pasteClip(const juce::ValueTree& original, juce::ValueTree t, double start)
+{
+    if (!original.isValid() || !t.isValid())
+        return {};
+
+    auto copy = original.createCopy();
+    reassignIds(copy);
+    copy.setProperty(ids::start, std::max(0.0, start), nullptr);
+    t.addChild(copy, -1, &undo_);
     return copy;
 }
 
@@ -334,18 +842,31 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
         return {};
 
     auto right = c.createCopy();
+    reassignIds(right);
     const double leftLength = atSeconds - start;
 
-    right.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
     right.setProperty(ids::start, atSeconds, nullptr);
     right.setProperty(ids::length, end - atSeconds, nullptr);
-    right.setProperty(ids::offset, clip::getOffset(c) + leftLength, nullptr);
-    right.setProperty(ids::fadeIn, 0.0, nullptr);
+
+    if (clip::isMidi(c))
+    {
+        // MIDI clips are windows onto their notes: the right part shows the content from the split on.
+        const double beatsPerSecond = getTempo() / 60.0;
+        right.setProperty(ids::offset, clip::getOffset(c) + leftLength * beatsPerSecond, nullptr);
+    }
+    else
+    {
+        right.setProperty(ids::offset, clip::getOffset(c) + leftLength / std::max(kMinStretch, clip::getStretch(c)), nullptr);
+        right.setProperty(ids::fadeIn, 0.0, nullptr);
+        right.setProperty(ids::fadeOut, std::min(clip::getFadeOut(c), end - atSeconds), nullptr);
+    }
 
     c.setProperty(ids::length, leftLength, &undo_);
-    c.setProperty(ids::fadeOut, 0.0, &undo_);
-    c.setProperty(ids::fadeIn, std::min(clip::getFadeIn(c), leftLength), &undo_);
-    right.setProperty(ids::fadeOut, std::min(clip::getFadeOut(right), end - atSeconds), nullptr);
+    if (!clip::isMidi(c))
+    {
+        c.setProperty(ids::fadeOut, 0.0, &undo_);
+        c.setProperty(ids::fadeIn, std::min(clip::getFadeIn(c), leftLength), &undo_);
+    }
 
     parent.addChild(right, parent.indexOf(c) + 1, &undo_);
     return right;
@@ -354,11 +875,299 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
 double Session::getEndTime() const
 {
     double end = 0.0;
-    for (const auto& t : state_)
+    for (const auto& t : getAllTracks())
         for (const auto& c : t)
-            end = std::max(end, clip::getEnd(c));
+            if (isClip(c))
+                end = std::max(end, clip::getEnd(c));
     return end;
 }
+
+// --- MIDI -----------------------------------------------------------------------------------------
+
+juce::ValueTree Session::addNote(juce::ValueTree midiClipTree, double startBeat, double lengthBeats, int noteNumber,
+                                 float velocity, int channel)
+{
+    if (!midiClipTree.isValid())
+        return {};
+
+    juce::ValueTree n(ids::note);
+    n.setProperty(ids::start, startBeat, nullptr);
+    n.setProperty(ids::length, std::max(kMinNoteLength, lengthBeats), nullptr);
+    n.setProperty(ids::noteNumber, juce::jlimit(0, 127, noteNumber), nullptr);
+    n.setProperty(ids::velocity, juce::jlimit(0.01, 1.0, static_cast<double>(velocity)), nullptr);
+    n.setProperty(ids::channel, juce::jlimit(1, 16, channel), nullptr);
+    midiClipTree.addChild(n, -1, &undo_);
+    return n;
+}
+
+void Session::removeNote(juce::ValueTree n)
+{
+    auto parent = n.getParent();
+    if (parent.isValid())
+        parent.removeChild(n, &undo_);
+}
+
+juce::ValueTree Session::addControl(juce::ValueTree midiClipTree, int controller, double beat, float value, int channel)
+{
+    if (!midiClipTree.isValid())
+        return {};
+
+    juce::ValueTree c(ids::control);
+    c.setProperty(ids::controller, juce::jlimit(0, 128, controller), nullptr);
+    c.setProperty(ids::beat, beat, nullptr);
+    c.setProperty(ids::value, juce::jlimit(0.0, 1.0, static_cast<double>(value)), nullptr);
+    c.setProperty(ids::channel, juce::jlimit(1, 16, channel), nullptr);
+    midiClipTree.addChild(c, -1, &undo_);
+    return c;
+}
+
+void Session::removeControl(juce::ValueTree c)
+{
+    auto parent = c.getParent();
+    if (parent.isValid())
+        parent.removeChild(c, &undo_);
+}
+
+void Session::quantise(juce::ValueTree midiClipTree, const std::vector<juce::ValueTree>& notes, double gridBeats,
+                       double strength, bool ends)
+{
+    if (!midiClipTree.isValid() || gridBeats <= 0.0)
+        return;
+
+    strength = juce::jlimit(0.0, 1.0, strength);
+    std::vector<juce::ValueTree> targets = notes;
+    if (targets.empty())
+        for (const auto& n : midiClipTree)
+            if (n.hasType(ids::note))
+                targets.push_back(n);
+
+    for (auto& n : targets)
+    {
+        const double startBeat = note::getStart(n);
+        const double endBeat = note::getEnd(n);
+        const double snappedStart = std::round(startBeat / gridBeats) * gridBeats;
+        const double newStart = startBeat + (snappedStart - startBeat) * strength;
+        double newEnd = endBeat + (newStart - startBeat); // keep the length unless ends are quantised
+
+        if (ends)
+        {
+            const double snappedEnd = std::max(snappedStart + gridBeats, std::round(endBeat / gridBeats) * gridBeats);
+            newEnd = endBeat + (snappedEnd - endBeat) * strength;
+        }
+
+        n.setProperty(ids::start, newStart, &undo_);
+        n.setProperty(ids::length, std::max(kMinNoteLength, newEnd - newStart), &undo_);
+    }
+}
+
+juce::ValueTree Session::findNoteAt(const juce::ValueTree& midiClipTree, double beat, int noteNumber)
+{
+    for (const auto& n : midiClipTree)
+        if (n.hasType(ids::note) && note::getNote(n) == noteNumber && beat >= note::getStart(n) && beat < note::getEnd(n))
+            return n;
+    return {};
+}
+
+// --- Devices --------------------------------------------------------------------------------------
+
+juce::ValueTree Session::addDevice(juce::ValueTree owner, const juce::String& type, const juce::String& name, int index)
+{
+    if (!owner.isValid())
+        return {};
+
+    juce::ValueTree d(ids::device);
+    d.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    d.setProperty(ids::type, type, nullptr);
+    d.setProperty(ids::name, name, nullptr);
+    d.setProperty(ids::bypassed, false, nullptr);
+
+    // Chain position `index` among the owner's devices -> child index.
+    const auto devices = getDevices(owner);
+    int childIndex = -1;
+    if (index >= 0 && index < static_cast<int>(devices.size()))
+        childIndex = owner.indexOf(devices[static_cast<std::size_t>(index)]);
+
+    owner.addChild(d, childIndex, &undo_);
+    return d;
+}
+
+void Session::removeDevice(juce::ValueTree d)
+{
+    auto parent = d.getParent();
+    if (!parent.isValid())
+        return;
+
+    // Automation of the device's parameters goes with it.
+    const auto prefix = "param:" + juce::String(static_cast<int>(device::getId(d))) + ":";
+    for (auto lane : getAutomationLanes(parent))
+        if (automation::getTarget(lane).startsWith(prefix))
+            parent.removeChild(lane, &undo_);
+
+    parent.removeChild(d, &undo_);
+}
+
+void Session::moveDevice(juce::ValueTree d, int newIndex)
+{
+    auto parent = d.getParent();
+    if (!parent.isValid())
+        return;
+
+    const auto devices = getDevices(parent);
+    newIndex = juce::jlimit(0, static_cast<int>(devices.size()) - 1, newIndex);
+    const int from = parent.indexOf(d);
+    const int to = parent.indexOf(devices[static_cast<std::size_t>(newIndex)]);
+    if (from != to)
+        parent.moveChild(from, to, &undo_);
+}
+
+juce::ValueTree Session::findDevice(std::uint32_t deviceId) const
+{
+    if (deviceId == 0)
+        return {};
+
+    for (const auto& d : getDevices(getMaster()))
+        if (device::getId(d) == deviceId)
+            return d;
+
+    for (const auto& t : getAllTracks())
+        for (const auto& d : t)
+            if (d.hasType(ids::device) && device::getId(d) == deviceId)
+                return d;
+
+    return {};
+}
+
+std::vector<juce::ValueTree> Session::getDevices(const juce::ValueTree& owner)
+{
+    std::vector<juce::ValueTree> devices;
+    for (const auto& child : owner)
+        if (child.hasType(ids::device))
+            devices.push_back(child);
+    return devices;
+}
+
+// --- Sends ----------------------------------------------------------------------------------------
+
+juce::ValueTree Session::addSend(juce::ValueTree t, const juce::ValueTree& bus, double gainDb, bool preFader)
+{
+    if (!t.isValid() || !bus.isValid() || !canFeed(t, bus))
+        return {};
+
+    juce::ValueTree s(ids::send);
+    s.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    s.setProperty(ids::target, static_cast<int>(track::getId(bus)), nullptr);
+    s.setProperty(ids::gain, juce::jlimit(kMinusInfinityDb, kMaxVolumeDb, gainDb), nullptr);
+    s.setProperty(ids::preFader, preFader, nullptr);
+    t.addChild(s, -1, &undo_);
+    return s;
+}
+
+void Session::removeSend(juce::ValueTree s)
+{
+    auto parent = s.getParent();
+    if (!parent.isValid())
+        return;
+
+    if (auto lane = getAutomation(parent, automation::sendTarget(send::getId(s)), false); lane.isValid())
+        parent.removeChild(lane, &undo_);
+    parent.removeChild(s, &undo_);
+}
+
+std::vector<juce::ValueTree> Session::getSends(const juce::ValueTree& t)
+{
+    std::vector<juce::ValueTree> sends;
+    for (const auto& child : t)
+        if (child.hasType(ids::send))
+            sends.push_back(child);
+    return sends;
+}
+
+// --- Automation -----------------------------------------------------------------------------------
+
+juce::ValueTree Session::getAutomation(juce::ValueTree owner, const juce::String& target, bool create, double initialValue)
+{
+    for (const auto& lane : owner)
+        if (lane.hasType(ids::automation) && automation::getTarget(lane) == target)
+            return lane;
+
+    if (!create || !owner.isValid())
+        return {};
+
+    juce::ValueTree lane(ids::automation);
+    lane.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    lane.setProperty(ids::target, target, nullptr);
+    lane.setProperty(ids::visible, true, nullptr);
+
+    juce::ValueTree p(ids::point);
+    p.setProperty(ids::time, 0.0, nullptr);
+    p.setProperty(ids::value, juce::jlimit(0.0, 1.0, initialValue), nullptr);
+    lane.addChild(p, -1, nullptr);
+
+    owner.addChild(lane, -1, &undo_);
+    return lane;
+}
+
+std::vector<juce::ValueTree> Session::getAutomationLanes(const juce::ValueTree& owner)
+{
+    std::vector<juce::ValueTree> lanes;
+    for (const auto& child : owner)
+        if (child.hasType(ids::automation))
+            lanes.push_back(child);
+    return lanes;
+}
+
+juce::ValueTree Session::addAutomationPoint(juce::ValueTree lane, double time, double value)
+{
+    if (!lane.isValid())
+        return {};
+
+    juce::ValueTree p(ids::point);
+    p.setProperty(ids::time, std::max(0.0, time), nullptr);
+    p.setProperty(ids::value, juce::jlimit(0.0, 1.0, value), nullptr);
+
+    // Keep points sorted by time.
+    int index = 0;
+    while (index < lane.getNumChildren() && static_cast<double>(lane.getChild(index).getProperty(ids::time)) <= time)
+        ++index;
+
+    lane.addChild(p, index, &undo_);
+    return p;
+}
+
+void Session::moveAutomationPoint(juce::ValueTree p, double time, double value)
+{
+    auto lane = p.getParent();
+    if (!lane.isValid())
+        return;
+
+    // A point can't pass its neighbours (keeps the lane sorted and the drag predictable).
+    const int index = lane.indexOf(p);
+    double lower = 0.0;
+    double upper = std::numeric_limits<double>::max();
+    if (index > 0)
+        lower = lane.getChild(index - 1).getProperty(ids::time);
+    if (index + 1 < lane.getNumChildren())
+        upper = lane.getChild(index + 1).getProperty(ids::time);
+
+    p.setProperty(ids::time, juce::jlimit(lower, upper, std::max(0.0, time)), &undo_);
+    p.setProperty(ids::value, juce::jlimit(0.0, 1.0, value), &undo_);
+}
+
+void Session::removeAutomationPoint(juce::ValueTree p)
+{
+    auto lane = p.getParent();
+    if (lane.isValid() && lane.getNumChildren() > 1)
+        lane.removeChild(p, &undo_);
+}
+
+void Session::removeAutomation(juce::ValueTree lane)
+{
+    auto parent = lane.getParent();
+    if (parent.isValid())
+        parent.removeChild(lane, &undo_);
+}
+
+// --- Document -------------------------------------------------------------------------------------
 
 void Session::reset()
 {
@@ -366,15 +1175,40 @@ void Session::reset()
     undo_.clearUndoHistory();
 }
 
+std::vector<juce::File> Session::getReferencedFiles() const
+{
+    std::vector<juce::File> files;
+    for (const auto& t : getAllTracks())
+        for (const auto& c : t)
+            if (c.hasType(ids::clip))
+                if (const auto f = clip::getFile(c); std::find(files.begin(), files.end(), f) == files.end())
+                    files.push_back(f);
+    return files;
+}
+
+namespace
+{
+template <typename Fn>
+void forEachAudioClip(juce::ValueTree parent, Fn&& fn)
+{
+    for (auto child : parent)
+    {
+        if (child.hasType(ids::clip))
+            fn(child);
+        else if (child.hasType(ids::track))
+            forEachAudioClip(child, fn);
+    }
+}
+} // namespace
+
 juce::Result Session::save(const juce::File& file) const
 {
     auto copy = state_.createCopy();
     copy.setProperty(ids::version, kFileFormatVersion, nullptr);
 
     const auto folder = file.getParentDirectory();
-    for (auto t : copy)
-        for (auto c : t)
-            c.setProperty(ids::fileRelative, clip::getFile(c).getRelativePathFrom(folder), nullptr);
+    forEachAudioClip(copy, [&](juce::ValueTree c)
+                     { c.setProperty(ids::fileRelative, clip::getFile(c).getRelativePathFrom(folder), nullptr); });
 
     const auto xml = copy.createXml();
     if (xml == nullptr)
@@ -402,20 +1236,30 @@ juce::Result Session::load(const juce::File& file)
 
     // Prefer the path relative to the session file, so projects can be moved or copied as a folder.
     const auto folder = file.getParentDirectory();
-    for (auto t : loaded)
+    forEachAudioClip(loaded,
+                     [&](juce::ValueTree c)
+                     {
+                         const auto relative = c.getProperty(ids::fileRelative).toString();
+                         if (relative.isNotEmpty())
+                         {
+                             const auto candidate = folder.getChildFile(relative);
+                             if (candidate.existsAsFile())
+                                 c.setProperty(ids::file, candidate.getFullPathName(), nullptr);
+                         }
+                         c.removeProperty(ids::fileRelative, nullptr);
+                     });
+
+    // Older files: fill in what version 1 did not have.
+    const auto defaults = createEmptyState();
+    for (int i = 0; i < defaults.getNumProperties(); ++i)
     {
-        for (auto c : t)
-        {
-            const auto relative = c.getProperty(ids::fileRelative).toString();
-            if (relative.isNotEmpty())
-            {
-                const auto candidate = folder.getChildFile(relative);
-                if (candidate.existsAsFile())
-                    c.setProperty(ids::file, candidate.getFullPathName(), nullptr);
-            }
-            c.removeProperty(ids::fileRelative, nullptr);
-        }
+        const auto name = defaults.getPropertyName(i);
+        if (!loaded.hasProperty(name))
+            loaded.setProperty(name, defaults.getProperty(name), nullptr);
     }
+    if (!loaded.getChildWithName(ids::master).isValid())
+        loaded.addChild(juce::ValueTree(ids::master), 0, nullptr);
+    loaded.setProperty(ids::version, kFileFormatVersion, nullptr);
 
     state_.copyPropertiesAndChildrenFrom(loaded, nullptr);
     undo_.clearUndoHistory();

@@ -598,7 +598,8 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
         const auto t = session_.getTrack(i);
         const auto trackColour = session::track::getColour(t);
         for (const auto& c : t)
-            paintClip(g, c, i, trackColour);
+            if (session::Session::isClip(c))
+                paintClip(g, c, i, trackColour);
     }
 
     g.restoreState();

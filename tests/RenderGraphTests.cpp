@@ -45,18 +45,20 @@ RenderClip makeClip(const std::shared_ptr<FakeAsset>& asset, double start, doubl
     return clip;
 }
 
-std::unique_ptr<RenderGraph> makeGraph(const std::shared_ptr<FakeAsset>& asset, double gainLeft,
-                                       double gainRight, std::uint64_t serial)
+std::unique_ptr<RenderGraph> makeGraph(const std::shared_ptr<FakeAsset>& asset, double volume,
+                                       double pan, std::uint64_t serial)
 {
     auto graph = std::make_unique<RenderGraph>();
     graph->serial = serial;
     RenderTrack track;
     track.trackId = 1;
     track.slot = 0;
-    track.gainLeft = gainLeft;
-    track.gainRight = gainRight;
+    track.volume = volume;
+    track.pan = pan;
     track.clips.push_back(makeClip(asset, 0.0, 10.0, kRate));
     graph->tracks.push_back(std::move(track));
+    graph->levels = {{0}};
+    graph->masterSources = {0};
     graph->keepAlive.push_back(asset);
     return graph;
 }
@@ -96,7 +98,7 @@ TEST_CASE("Clip renderer copies same-rate audio exactly and declicks its edges",
 
     std::vector<Sample> left(4800, 0.0);
     std::vector<Sample> right(4800, 0.0);
-    REQUIRE(dsp::renderClip(clip, 0.0, kRate, 4800, left.data(), right.data()));
+    REQUIRE(dsp::renderClip(clip, 0.0, 1.0 / kRate, 4800, left.data(), right.data()));
 
     CHECK(left[0] == 0.0);                          // fade-in starts from silence
     CHECK_THAT(left[2400], WithinAbs(0.5, 1e-12));  // body is bit-exact
@@ -111,7 +113,7 @@ TEST_CASE("Clip renderer resamples sources recorded at another rate", "[engine][
 
     std::vector<Sample> left(48'000, 0.0);
     std::vector<Sample> right(48'000, 0.0);
-    REQUIRE(dsp::renderClip(clip, 0.0, kRate, 48'000, left.data(), right.data()));
+    REQUIRE(dsp::renderClip(clip, 0.0, 1.0 / kRate, 48'000, left.data(), right.data()));
 
     CHECK_THAT(left[24'000], WithinAbs(0.25, 1e-9)); // plays for the full second at device rate
     CHECK_THAT(right[40'000], WithinAbs(0.25, 1e-9));
@@ -125,9 +127,9 @@ TEST_CASE("Clip renderer only touches the samples inside the clip", "[engine][cl
     std::vector<Sample> left(512, 0.0);
     std::vector<Sample> right(512, 0.0);
 
-    CHECK_FALSE(dsp::renderClip(clip, 0.0, kRate, 512, left.data(), right.data()));  // before
-    CHECK_FALSE(dsp::renderClip(clip, 0.75, kRate, 512, left.data(), right.data())); // after
-    CHECK(dsp::renderClip(clip, 0.6, kRate, 512, left.data(), right.data()));        // inside
+    CHECK_FALSE(dsp::renderClip(clip, 0.0, 1.0 / kRate, 512, left.data(), right.data()));  // before
+    CHECK_FALSE(dsp::renderClip(clip, 0.75, 1.0 / kRate, 512, left.data(), right.data())); // after
+    CHECK(dsp::renderClip(clip, 0.6, 1.0 / kRate, 512, left.data(), right.data()));        // inside
 }
 
 TEST_CASE("Tracks play only while the transport runs, with their pan gains", "[engine][graph]")
@@ -135,7 +137,7 @@ TEST_CASE("Tracks play only while the transport runs, with their pan gains", "[e
     AudioEngine engine;
     engine.prepare(kRate, 256, 2);
     auto asset = std::make_shared<FakeAsset>(1, 480'000, 0.5f);
-    swapIn(engine, makeGraph(asset, 0.0, 1.0, 1)); // hard right
+    swapIn(engine, makeGraph(asset, 1.0, 1.0, 1)); // full volume, hard right
 
     Device device(256);
     device.render(engine, 4);
@@ -218,7 +220,7 @@ TEST_CASE("Rendering and swapping graphs never touches the heap on the audio thr
     // Build every graph up front: allocation is fine here, on the "message thread".
     std::vector<std::unique_ptr<RenderGraph>> graphs;
     for (std::uint64_t i = 1; i <= 40; ++i)
-        graphs.push_back(makeGraph(asset, 0.5 + 0.01 * static_cast<double>(i), 0.5, i));
+        graphs.push_back(makeGraph(asset, 0.5 + 0.01 * static_cast<double>(i), 0.0, i));
 
     Device device(256);
     const auto before = rt::getRealtimeViolationCount();

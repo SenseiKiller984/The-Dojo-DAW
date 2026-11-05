@@ -3,10 +3,12 @@
 namespace dojo::session
 {
 
-Project::Project(GraphCompiler::Publisher publishGraph)
-    : compiler_(session_, assets_, std::move(publishGraph))
+Project::Project(GraphCompiler::Publisher publishGraph, DeviceManager::Creator createDevice)
+    : devices_(session_, std::move(createDevice))
+    , compiler_(session_, assets_, &devices_, std::move(publishGraph))
 {
     session_.getState().addListener(this);
+    devices_.onParameterChanged = [this] { setDirty(true); };
 }
 
 Project::~Project()
@@ -57,16 +59,12 @@ juce::Result Project::open(const juce::File& file)
 
     // Start decoding every referenced file now; clips appear in the mix as their audio arrives.
     juce::StringArray missing;
-    for (const auto& t : session_.getState())
+    for (const auto& audioFile : session_.getReferencedFiles())
     {
-        for (const auto& c : t)
-        {
-            const auto audioFile = clip::getFile(c);
-            if (!audioFile.existsAsFile())
-                missing.addIfNotAlreadyThere(audioFile.getFullPathName());
-            else
-                assets_.request(audioFile, {});
-        }
+        if (!audioFile.existsAsFile())
+            missing.addIfNotAlreadyThere(audioFile.getFullPathName());
+        else
+            assets_.request(audioFile, {});
     }
 
     if (onDocumentStateChanged)
@@ -90,6 +88,7 @@ juce::Result Project::save()
 juce::Result Project::saveAs(const juce::File& file)
 {
     const auto target = file.hasFileExtension(".dojo") ? file : file.withFileExtension(".dojo");
+    devices_.storeStates();
     const auto result = session_.save(target);
 
     if (result.wasOk())
@@ -154,6 +153,8 @@ void Project::processFinishedImports()
         session_.beginTransaction("Import " + item->file.getFileName());
 
         auto t = session_.findTrack(item->targetTrackId);
+        if (t.isValid() && track::getKind(t) != TrackKind::audio)
+            t = {};
         if (!t.isValid())
         {
             const auto after = session_.findTrack(static_cast<std::uint32_t>(item->insertAfterTrackId));

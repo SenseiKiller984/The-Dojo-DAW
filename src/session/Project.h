@@ -2,6 +2,7 @@
 
 #include "engine/RenderGraph.h"
 #include "session/AudioAssetCache.h"
+#include "session/DeviceManager.h"
 #include "session/GraphCompiler.h"
 #include "session/Session.h"
 
@@ -21,11 +22,13 @@ namespace dojo::session
 class Project final : private juce::ValueTree::Listener
 {
 public:
-    explicit Project(GraphCompiler::Publisher publishGraph);
+    /** `createDevice` instantiates built-in devices and plug-ins for DEVICE trees. */
+    Project(GraphCompiler::Publisher publishGraph, DeviceManager::Creator createDevice);
     ~Project() override;
 
     [[nodiscard]] Session& getSession() noexcept { return session_; }
     [[nodiscard]] AudioAssetCache& getAssets() noexcept { return assets_; }
+    [[nodiscard]] DeviceManager& getDevices() noexcept { return devices_; }
     [[nodiscard]] GraphCompiler& getCompiler() noexcept { return compiler_; }
 
     // --- Document --------------------------------------------------------------------------------
@@ -70,13 +73,18 @@ private:
     void processFinishedImports();
     void setDirty(bool dirty);
 
-    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier&) override { setDirty(true); }
+    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier& property) override
+    {
+        if (property != ids::state) // device state is written back right before saving
+            setDirty(true);
+    }
     void valueTreeChildAdded(juce::ValueTree&, juce::ValueTree&) override { setDirty(true); }
     void valueTreeChildRemoved(juce::ValueTree&, juce::ValueTree&, int) override { setDirty(true); }
     void valueTreeChildOrderChanged(juce::ValueTree&, int, int) override { setDirty(true); }
 
     Session session_;
     AudioAssetCache assets_;
+    DeviceManager devices_;
     GraphCompiler compiler_;
 
     juce::File file_;

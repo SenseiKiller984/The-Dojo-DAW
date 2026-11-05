@@ -9,20 +9,21 @@
 namespace dojo::engine
 {
 
+struct CaptureSession;
+
 /**
     The UI -> audio protocol.
 
     Commands are the ONLY way the message thread may change state owned by the audio thread. They
     are small, trivially copyable value types, posted through a lock-free SPSC queue and applied by
-    the audio thread at the start of its next processing block (sample-accurate scheduling will be
-    layered on top in later phases).
+    the audio thread at the start of its next processing block.
 
     Rules for adding a command:
       1. It must be trivially copyable (enforced below) — no std::string, std::vector, shared_ptr…
-      2. If it needs to hand the audio thread a large object (e.g. a rebuilt processing graph), it
-         carries a raw pointer to an object fully constructed on the message thread. The object it
-         replaces is sent back to the message thread through a lock-free return queue and destroyed
-         there, so the audio thread never frees memory. (Introduced with the processing graph.)
+      2. If it needs to hand the audio thread a large object (a rebuilt RenderGraph, a capture
+         session), it carries a raw pointer to an object fully constructed on the message thread.
+         Replaced objects are handed back (return queue / acknowledgement) and destroyed on the
+         message thread, so the audio thread never frees memory.
       3. Handling it on the audio thread must be bounded-time, allocation free and lock free.
       4. It must declare `static constexpr bool coalescable`: true if it is an absolute "setter" for
          which only the most recent value matters. EngineController uses this to merge consecutive
@@ -44,7 +45,7 @@ struct Locate
     SampleCount positionSamples = 0;
 };
 
-/** Master output gain (linear). Smoothed on the audio thread to avoid zipper noise. */
+/** Master output gain (linear), when no graph sets it. Smoothed on the audio thread. */
 struct SetMasterGain
 {
     static constexpr bool coalescable = true;
@@ -60,18 +61,49 @@ struct SetTestTone
     double linearGain = 0.125;
 };
 
-/** Replace the render graph (tracks, clips, mix parameters). Ownership of `graph` passes to the
-    engine; the graph it replaces comes back through AudioEngine::releaseRetiredGraphs(). Never
-    coalesced: EngineController keeps at most one graph in flight and merges newer ones itself. */
+/** Loop playback between two timeline positions (seconds). */
+struct SetLoop
+{
+    static constexpr bool coalescable = true;
+    bool enabled = false;
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+};
+
+/** Global varispeed: the timeline runs at `rate` x real time (0.25 .. 4). */
+struct SetSpeed
+{
+    static constexpr bool coalescable = true;
+    double rate = 1.0;
+};
+
+/** Replace the render graph. Ownership of `graph` passes to the engine; the graph it replaces comes
+    back through AudioEngine::releaseRetiredGraphs(). Never coalesced: EngineController keeps at most
+    one graph in flight and merges newer ones itself. */
 struct SwapGraph
 {
     static constexpr bool coalescable = false;
     RenderGraph* graph = nullptr;
 };
+
+/** Start writing inputs / track outputs / the master into the session's capture streams (recording
+    or a real-time bounce). The session stays owned by the message thread; the audio thread stops
+    touching it after StopCapture is acknowledged (see TelemetrySnapshot::captureActive). */
+struct StartCapture
+{
+    static constexpr bool coalescable = false;
+    CaptureSession* session = nullptr;
+};
+
+struct StopCapture
+{
+    static constexpr bool coalescable = false;
+};
 } // namespace command
 
-using EngineCommand = std::variant<command::SetPlaying, command::Locate, command::SetMasterGain,
-                                   command::SetTestTone, command::SwapGraph>;
+using EngineCommand =
+    std::variant<command::SetPlaying, command::Locate, command::SetMasterGain, command::SetTestTone,
+                 command::SetLoop, command::SetSpeed, command::SwapGraph, command::StartCapture, command::StopCapture>;
 
 static_assert(std::is_trivially_copyable_v<EngineCommand>,
               "EngineCommand must stay trivially copyable to travel through the lock-free command queue");

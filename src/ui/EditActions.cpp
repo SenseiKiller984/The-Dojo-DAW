@@ -69,7 +69,7 @@ bool splitAt(session::Session& session, EditorState& editor, double seconds)
                 continue;
 
             for (const auto& c : t)
-                if (covers(c))
+                if (session::Session::isClip(c) && covers(c))
                     targets.push_back(c);
         }
     }
@@ -90,9 +90,10 @@ bool splitAt(session::Session& session, EditorState& editor, double seconds)
 void selectAllClips(session::Session& session, EditorState& editor)
 {
     std::set<std::uint32_t> all;
-    for (const auto& t : session.getState())
+    for (const auto& t : session.getAllTracks())
         for (const auto& c : t)
-            all.insert(session::clip::getId(c));
+            if (session::Session::isClip(c))
+                all.insert(session::clip::getId(c));
 
     editor.setSelectedClips(std::move(all));
 }

@@ -4,6 +4,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <cmath>
+
 namespace dojo::engine
 {
 namespace
@@ -14,6 +16,7 @@ constexpr int kHousekeepingIntervalMs = 33;
 EngineController::EngineController(AudioEngine& engine, AudioDeviceHost& deviceHost)
     : engine_(engine)
     , deviceHost_(deviceHost)
+    , releasePool_(engine)
 {
     startTimer(kHousekeepingIntervalMs);
 }
@@ -50,6 +53,39 @@ void EngineController::returnToStart()
 void EngineController::locate(SampleCount positionSamples)
 {
     send(command::Locate{positionSamples});
+}
+
+void EngineController::locateSeconds(double seconds)
+{
+    const double rate = getSampleRateOr(48000.0);
+    locate(static_cast<SampleCount>(std::llround(std::max(0.0, seconds) * rate)));
+}
+
+void EngineController::setLoop(bool enabled, double startSeconds, double endSeconds)
+{
+    send(command::SetLoop{enabled, startSeconds, endSeconds});
+}
+
+void EngineController::setSpeed(double rate)
+{
+    send(command::SetSpeed{rate});
+}
+
+void EngineController::startCapture(CaptureSession* session)
+{
+    command::StartCapture start;
+    start.session = session;
+    send(start);
+}
+
+void EngineController::stopCapture()
+{
+    send(command::StopCapture{});
+}
+
+bool EngineController::isCaptureActive() const noexcept
+{
+    return engine_.isCaptureActive();
 }
 
 //==================================================================================================
@@ -146,6 +182,7 @@ void EngineController::pumpGraphs()
 void EngineController::timerCallback()
 {
     engine_.releaseRetiredGraphs();
+    releasePool_.collect();
     flushOutbox();
     pumpGraphs();
 }

@@ -1,12 +1,14 @@
 #pragma once
 
+#include "core/Types.h"
 #include "core/rt/SpscQueue.h"
 #include "core/rt/ThreadOwnershipChecker.h"
-#include "core/Types.h"
-#include "engine/dsp/TestToneGenerator.h"
 #include "engine/EngineCommands.h"
 #include "engine/EngineTelemetry.h"
+#include "engine/RealtimeHandoff.h"
 #include "engine/RenderGraph.h"
+#include "engine/WorkerPool.h"
+#include "engine/dsp/TestToneGenerator.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -14,157 +16,244 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <functional>
+#include <vector>
 
 namespace dojo::engine
 {
+
+struct CaptureSession;
 
 /**
     The real-time heart of The Dojo.
 
     AudioEngine owns all state touched by the audio thread and is deliberately independent of how
     it is driven: the device host calls process() from the driver's callback, the test-suite calls
-    it directly, and the offline bouncer (export phase) will call it from a worker thread.
+    it directly, and the exporter calls renderOffline() from its own thread while live processing is
+    paused.
 
     Threading contract
     ------------------
-    | Function            | Thread                         | Real-time safe |
-    |---------------------|--------------------------------|----------------|
-    | prepare / release   | any non-RT thread, never while process() runs | no (allocates) |
-    | post                | the message thread (single producer)          | yes            |
-    | collectTelemetry    | the message thread (single consumer)          | yes            |
-    | process             | the audio thread                              | YES            |
+    | Function                     | Thread                                      | Real-time safe |
+    |------------------------------|---------------------------------------------|----------------|
+    | prepare / release            | any non-RT thread, never while rendering    | no (allocates) |
+    | post / collect* / release*   | the message thread                          | yes            |
+    | process                      | the audio thread (+ its worker pool)        | YES            |
+    | begin/endOfflineRender       | the export thread                           | no             |
+    | renderOffline                | the export thread, between begin/end        | yes            |
 
-    process() never allocates or frees memory, never takes a lock, never blocks and never calls into
-    the UI. Debug builds verify the allocation rule at run time (dojo::rt::ScopedRealtimeSection +
-    the allocation trap) and the test-suite asserts it.
+    Nothing reachable from process() allocates or frees memory, takes a lock, blocks or calls into the
+    UI. Debug builds verify the allocation rule on the audio thread *and* the worker threads
+    (dojo::rt::ScopedRealtimeSection + the allocation trap) and the test-suite asserts it.
 
-    Signal path
-    -----------
-        clips -> per-track 64-bit bus -> smoothed L/R gain (volume, pan, mute/solo, phase) -> meter
-              -> 64-bit master bus (+ test tone) -> smoothed master gain -> metering -> float out
-
-    What is rendered is described by an immutable RenderGraph swapped in by pointer; see
-    RenderGraph.h for the ownership protocol. Parallel rendering across a worker pool slots in at the
-    per-track stage in a later phase.
+    Signal path (per block)
+    -----------------------
+        for each dependency level of the RenderGraph, in parallel across the WorkerPool:
+            track source (clips / MIDI clips -> instrument / bus sum of children, sends, aux outs /
+                          monitored input)
+            -> device chain (sidechains pulled from earlier levels)
+            -> pre-fader copy (for pre-fader sends) -> smoothed volume/pan (automation) -> meter
+            -> latency-compensation delay
+        master: sum of tracks routed to master -> master devices -> master gain -> meter -> device out
 */
 class AudioEngine final
 {
 public:
     static constexpr std::size_t kCommandQueueCapacity = 4096;
 
-    AudioEngine();
+    explicit AudioEngine(int numWorkerThreads = WorkerPool::defaultWorkerCount());
     ~AudioEngine();
 
     AudioEngine(const AudioEngine&) = delete;
     AudioEngine& operator=(const AudioEngine&) = delete;
-    AudioEngine(AudioEngine&&) = delete;
-    AudioEngine& operator=(AudioEngine&&) = delete;
 
     //==============================================================================================
-    // Lifecycle — non-real-time; must not overlap process().
+    // Lifecycle — non-real-time; never while rendering.
 
-    /** Allocates every buffer the audio thread will need for blocks of up to `maximumBlockSize`. */
-    void prepare(double sampleRate, int maximumBlockSize, int numOutputChannels);
+    /** Allocates every buffer the audio thread will need for blocks of up to `maximumBlockSize`,
+        then calls onPrepare (to prepare every processor at the same rate/size). */
+    void prepare(double sampleRate, int maximumBlockSize, int numOutputChannels, int numInputChannels = 0);
 
     /** Marks the engine unprepared; process() outputs silence until the next prepare(). */
     void release() noexcept;
 
-    [[nodiscard]] bool isPrepared() const noexcept { return prepared_.load(std::memory_order_acquire); }
+    /** Called at the end of prepare() with (sampleRate, maximumBlockSize) — used to prepare devices. */
+    std::function<void(double, int)> onPrepare;
 
-    /** Sample rate of the most recent prepare() (0 if never prepared). Any thread. */
+    [[nodiscard]] bool isPrepared() const noexcept { return prepared_.load(std::memory_order_acquire); }
     [[nodiscard]] double getSampleRate() const noexcept
     {
         return publishedSampleRate_.load(std::memory_order_relaxed);
     }
+    [[nodiscard]] int getMaximumBlockSize() const noexcept
+    {
+        return publishedBlockSize_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] int getNumInputChannels() const noexcept { return numInputs_; }
+
+    /** The play head the engine exposes to devices and plug-ins (tempo, position, loop). */
+    [[nodiscard]] juce::AudioPlayHead* getPlayHead() noexcept { return &playHead_; }
 
     //==============================================================================================
     // Message thread
 
-    /** Enqueues a command for the audio thread. Wait-free. Returns false if the queue is full, in
-        which case the caller keeps the command and retries later (see EngineController). */
     [[nodiscard]] bool post(const EngineCommand& command) noexcept;
-
-    /** Copies the latest telemetry and resets the "max since last read" fields. Call once per frame. */
     [[nodiscard]] TelemetrySnapshot collectTelemetry() noexcept;
-
-    /** Post-fader peaks of the track rendered in `slot` since the previous call (then reset). */
     [[nodiscard]] StereoPeak collectTrackPeak(int slot) noexcept;
+    [[nodiscard]] float collectInputPeak(int channel) noexcept;
 
-    /** Serial of the RenderGraph the audio thread is currently rendering (0 = none yet). Any thread. */
     [[nodiscard]] std::uint64_t getAppliedGraphSerial() const noexcept
     {
         return telemetry_.appliedGraphSerial.load(std::memory_order_acquire);
     }
 
-    /** Destroys every graph the audio thread has swapped out. Call regularly; never allocates on the
-        audio thread's behalf, only frees what it handed back. */
     void releaseRetiredGraphs() noexcept;
+
+    [[nodiscard]] LiveMidiQueue& getLiveMidiQueue() noexcept { return liveMidi_; }
+
+    /** Monotonic count of finished processing cycles (live or offline). For deferred releases. */
+    [[nodiscard]] std::uint64_t getProcessEpoch() const noexcept { return epoch_.load(std::memory_order_acquire); }
+
+    /** False while nothing can be rendering: no device running and no offline render. */
+    [[nodiscard]] bool isProcessingActive() const noexcept
+    {
+        return isPrepared() || offlineActive_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool isCaptureActive() const noexcept
+    {
+        return telemetry_.captureActive.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] double getCaptureStartSeconds() const noexcept { return telemetry_.captureStartSeconds.load(); }
+
+    //==============================================================================================
+    // Offline rendering (export thread)
+
+    /** Pauses live processing (the device then outputs silence) and makes the calling thread the
+        renderer. Returns false if the live callback did not acknowledge within `timeoutMs`. */
+    bool beginOfflineRender(int timeoutMs = 2000);
+
+    /** Renders the next block exactly like the live callback would. Real-time safe. */
+    void renderOffline(float* const* outputs, int numOutputs, int numSamples) noexcept;
+
+    void endOfflineRender();
 
     //==============================================================================================
     // Audio thread
 
-    /** Renders one device block. `outputs[ch]` may be null for inactive channels. Handles blocks
-        larger than the prepared maximum by rendering in sub-blocks. */
     void process(const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
                  int numSamples) noexcept;
 
 private:
     using Clock = std::chrono::steady_clock;
 
+    struct SlotState
+    {
+        std::uint32_t trackId = 0;
+        juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> gainLeft;
+        juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> gainRight;
+        juce::AudioBuffer<Sample> main; ///< working buffer; holds the post-fader output after processing
+        juce::AudioBuffer<Sample> pre;  ///< pre-fader copy (when a pre-fader send needs it)
+        juce::MidiBuffer midi;
+        juce::AudioBuffer<Sample> delay; ///< latency-compensation ring
+        int delayWrite = 0;
+        int currentDelay = 0;
+        bool panic = false; ///< send all-notes-off before the next block
+    };
+
+    class PlayHead final : public juce::AudioPlayHead
+    {
+    public:
+        juce::Optional<PositionInfo> getPosition() const override { return info; }
+        PositionInfo info;
+    };
+
+    void renderBlock(const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                     int numSamples) noexcept;
+    void renderSubBlock(int inputOffset, float* const* outputs, int numOutputs, int offset,
+                        int numSamples) noexcept;
+
     void applyPendingCommands() noexcept;
     void handle(const command::SetPlaying& cmd) noexcept;
     void handle(const command::Locate& cmd) noexcept;
     void handle(const command::SetMasterGain& cmd) noexcept;
     void handle(const command::SetTestTone& cmd) noexcept;
+    void handle(const command::SetLoop& cmd) noexcept;
+    void handle(const command::SetSpeed& cmd) noexcept;
     void handle(const command::SwapGraph& cmd) noexcept;
+    void handle(const command::StartCapture& cmd) noexcept;
+    void handle(const command::StopCapture& cmd) noexcept;
     void retire(RenderGraph* graph) noexcept;
+    void panicAll() noexcept;
 
-    void renderTracks(int numSamples) noexcept;
+    static void processTrackTask(void* context, int taskIndex) noexcept;
+    void processTrack(int graphIndex) noexcept;
+    void renderAudioClips(const RenderTrack& track, SlotState& slot) noexcept;
+    void renderMidiClips(const RenderTrack& track, SlotState& slot) noexcept;
+    void addMonitoredInput(const RenderTrack& track, SlotState& slot) noexcept;
+    void sumBusSources(const RenderTrack& track, SlotState& slot) noexcept;
+    void applyFader(const RenderTrack& track, SlotState& slot) noexcept;
+    void applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept;
+    void applyParameterAutomation(const std::vector<ParameterLane>& lanes) noexcept;
 
-    void renderSubBlock(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
-    void applyMasterGain(int numSamples) noexcept;
+    void renderMaster(int numSamples) noexcept;
     void writeOutputsAndMeter(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
+    void captureInputs(int inputOffset, int numSamples) noexcept;
     void publishLoad(Clock::duration elapsed, int numSamples) noexcept;
+    void updatePlayHead() noexcept;
 
     // --- Cross-thread channels -------------------------------------------------------------------
     rt::SpscQueue<EngineCommand> commands_{kCommandQueueCapacity};
-    rt::SpscQueue<RenderGraph*> retiredGraphs_{64}; // audio -> message thread, for deletion
+    rt::SpscQueue<RenderGraph*> retiredGraphs_{64};
     EngineTelemetry telemetry_;
     rt::ThreadOwnershipChecker commandProducer_;
+    LiveMidiQueue liveMidi_;
+    WorkerPool workers_;
 
     std::atomic<bool> prepared_{false};
     std::atomic<double> publishedSampleRate_{0.0};
-    static_assert(std::atomic<double>::is_always_lock_free);
+    std::atomic<int> publishedBlockSize_{0};
+    std::atomic<std::uint64_t> epoch_{0};
+    std::atomic<bool> offlineRequested_{false};
+    std::atomic<bool> offlineActive_{false};
+    std::atomic<bool> liveAcknowledgedOffline_{false};
 
-    // --- Configuration: written by prepare(), read-only while processing ---------------------------
+    // --- Configuration: written by prepare(), read-only while rendering ---------------------------
     double sampleRate_ = 0.0;
     int maxBlockSize_ = 0;
     int numChannels_ = 0;
-    juce::AudioBuffer<Sample> masterBus_; // 64-bit internal mix
-    juce::AudioBuffer<Sample> trackBus_;  // 64-bit stereo scratch for one track at a time
+    int numInputs_ = 0;
+    juce::AudioBuffer<Sample> masterBus_;
+    juce::AudioBuffer<Sample> inputBus_; ///< device inputs as 64-bit, for monitoring and capture
+    juce::MidiBuffer masterMidi_;
+    std::vector<SlotState> slots_;
 
     // --- Audio-thread state ----------------------------------------------------------------------
-    SampleCount playhead_ = 0;
+    double positionSeconds_ = 0.0;
+    double speed_ = 1.0;
     bool playing_ = false;
+    bool loopEnabled_ = false;
+    double loopStart_ = 0.0;
+    double loopEnd_ = 0.0;
     double masterGainTarget_ = 1.0;
     juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> masterGain_;
     dsp::TestToneGenerator testTone_;
     double smoothedLoad_ = 0.0;
-
     RenderGraph* graph_ = nullptr; // owned; replaced only via command::SwapGraph
+    CaptureSession* capture_ = nullptr;
+    juce::MidiBuffer liveBlock_; ///< live MIDI drained this callback (events at offset 0)
+    bool liveBlockPending_ = false;
+    PlayHead playHead_;
 
-    /** Retired graphs that did not fit in retiredGraphs_ (practically never used). */
+    // Per-sub-block context read by the worker tasks (written before they are released).
+    const std::vector<int>* currentLevel_ = nullptr;
+    int currentNumSamples_ = 0;
+    int currentInputOffset_ = 0;
+    double blockStartSeconds_ = 0.0;
+    double secondsPerSample_ = 0.0;
+
     std::array<RenderGraph*, 16> retireBacklog_{};
     std::size_t retireBacklogSize_ = 0;
-
-    /** Per-track state that must persist across graph swaps (indexed by RenderTrack::slot). */
-    struct TrackRuntime
-    {
-        std::uint32_t trackId = 0;
-        juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> gainLeft;
-        juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> gainRight;
-    };
-    std::array<TrackRuntime, static_cast<std::size_t>(kMaxTracks)> trackRuntime_{};
 };
 
 } // namespace dojo::engine

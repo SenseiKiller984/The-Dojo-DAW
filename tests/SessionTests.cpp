@@ -209,23 +209,29 @@ TEST_CASE("The graph resolves mute, solo, pan and phase", "[session][graph]")
     track::setMuted(bass, true, nullptr);
 
     GraphBuilder builder;
-    auto graph = builder.build(session, cache);
+    auto graph = builder.build(session, cache, nullptr);
     REQUIRE(graph->tracks.size() == 3);
 
     const auto& leadTrack = graph->tracks[0];
-    CHECK_THAT(leadTrack.gainLeft, WithinAbs(0.5, 1e-9));
-    CHECK_THAT(leadTrack.gainRight, WithinAbs(1.0, 1e-9));
+    CHECK_THAT(leadTrack.pan, WithinAbs(0.5, 1e-9));
+    CHECK_THAT(leadTrack.volume, WithinAbs(1.0, 1e-9));
     REQUIRE(leadTrack.clips.size() == 2);
     CHECK(leadTrack.clips[0].startSeconds == 0.0); // sorted by start
     CHECK(leadTrack.clips[1].startSeconds == 2.0);
 
-    CHECK(graph->tracks[1].gainLeft < -0.49); // -6 dB, inverted
-    CHECK(graph->tracks[2].gainLeft == 0.0);  // muted
+    CHECK_THAT(graph->tracks[1].volume, WithinAbs(0.501, 1e-3)); // -6 dB
+    CHECK(graph->tracks[1].phaseInverted);
+    CHECK_FALSE(graph->tracks[2].audible); // muted
+    CHECK(graph->tracks[0].audible);
+
+    REQUIRE(graph->levels.size() == 1); // no busses: everything renders in parallel
+    CHECK(graph->levels[0].size() == 3);
+    CHECK(graph->masterSources.size() == 3);
 
     track::setSoloed(pad, true, nullptr);
-    graph = builder.build(session, cache);
-    CHECK(graph->tracks[0].gainLeft == 0.0); // not soloed while another track is
-    CHECK(graph->tracks[1].gainLeft != 0.0);
+    graph = builder.build(session, cache, nullptr);
+    CHECK_FALSE(graph->tracks[0].audible); // not soloed while another track is
+    CHECK(graph->tracks[1].audible);
 }
 
 TEST_CASE("Track slots stay stable and are recycled", "[session][graph]")
@@ -236,18 +242,18 @@ TEST_CASE("Track slots stay stable and are recycled", "[session][graph]")
 
     auto a = session.addTrack();
     auto b = session.addTrack();
-    (void)builder.build(session, cache);
+    (void)builder.build(session, cache, nullptr);
     const int slotA = builder.getSlot(track::getId(a));
     const int slotB = builder.getSlot(track::getId(b));
     CHECK(slotA != slotB);
 
     session.moveTrack(1, 0); // reordering must not change slots
-    (void)builder.build(session, cache);
+    (void)builder.build(session, cache, nullptr);
     CHECK(builder.getSlot(track::getId(a)) == slotA);
 
     session.removeTrack(a);
     auto c = session.addTrack();
-    (void)builder.build(session, cache);
+    (void)builder.build(session, cache, nullptr);
     CHECK(builder.getSlot(track::getId(a)) == -1);
     CHECK(builder.getSlot(track::getId(c)) == slotA); // freed slot reused by the new track
 }

@@ -56,10 +56,10 @@ target_compile_definitions(dojo_juce
         JUCE_DIRECTSOUND=$<PLATFORM_ID:Windows>
         JUCE_ALSA=$<PLATFORM_ID:Linux>
         JUCE_JACK=$<AND:$<BOOL:${DOJO_ENABLE_JACK}>,$<PLATFORM_ID:Linux>>
-        # Plug-in hosting is switched on in the plug-in hosting phase (VST3 + CLAP on both OSes).
-        # LV2/LADSPA/AU are deliberately never enabled: they are not available on BOTH Windows and
-        # Linux, and The Dojo guarantees feature parity across the two.
-        JUCE_PLUGINHOST_VST3=0
+        # Plug-in hosting: VST3 through JUCE, CLAP through Dojo's own host (src/plugins) on the official
+        # CLAP SDK. LV2/LADSPA/AU are deliberately never enabled: they are not available on BOTH
+        # Windows and Linux, and The Dojo guarantees feature parity across the two.
+        JUCE_PLUGINHOST_VST3=1
         JUCE_PLUGINHOST_LV2=0
         JUCE_PLUGINHOST_LADSPA=0
         JUCE_PLUGINHOST_AU=0)
@@ -83,3 +83,39 @@ if(MSVC)
 else()
     target_compile_options(dojo_juce PRIVATE -w)
 endif()
+
+# --------------------------------------------------------------------------------------------------
+# CLAP SDK (MIT) — headers only, for Dojo's CLAP plug-in host.
+FetchContent_Declare(clap
+    GIT_REPOSITORY https://github.com/free-audio/clap.git
+    GIT_TAG        1.2.10
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  dojo-headers-only) # nothing to add_subdirectory(): we only need include/
+FetchContent_MakeAvailable(clap)
+add_library(dojo_clap INTERFACE)
+add_library(dojo::clap ALIAS dojo_clap)
+target_include_directories(dojo_clap SYSTEM INTERFACE "${clap_SOURCE_DIR}/include")
+
+# --------------------------------------------------------------------------------------------------
+# Signalsmith Stretch (MIT) — polyphonic time-stretch and pitch-shift, for clip stretching and the
+# Speed & Pitch device. Header-only, plus its header-only FFT/STFT library.
+FetchContent_Declare(signalsmith_linear
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/linear.git
+    GIT_TAG        0.6.4
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  dojo-headers-only)
+FetchContent_Declare(signalsmith_stretch
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+    GIT_TAG        1.4.0
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  dojo-headers-only)
+FetchContent_MakeAvailable(signalsmith_linear signalsmith_stretch)
+add_library(dojo_stretch INTERFACE)
+add_library(dojo::stretch ALIAS dojo_stretch)
+target_include_directories(dojo_stretch SYSTEM INTERFACE
+    "${signalsmith_stretch_SOURCE_DIR}/include"
+    "${signalsmith_linear_SOURCE_DIR}/include")
+
+# --------------------------------------------------------------------------------------------------
+# LAME (LGPL) MP3 encoder, vendored under third_party/lame.
+add_subdirectory("${PROJECT_SOURCE_DIR}/third_party/lame" "${CMAKE_BINARY_DIR}/third_party/lame")

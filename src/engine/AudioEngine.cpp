@@ -2,10 +2,13 @@
 
 #include "core/rt/AtomicUtils.h"
 #include "core/rt/RealtimeGuard.h"
+#include "engine/Capture.h"
+#include "engine/ProcessorNode.h"
 #include "engine/dsp/ClipRenderer.h"
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 #include <variant>
 
 namespace dojo::engine
@@ -15,6 +18,7 @@ namespace
 constexpr double kMasterGainRampSeconds = 0.050;
 constexpr double kTrackGainRampSeconds = 0.030;
 constexpr double kLoadSmoothingCoefficient = 0.1; // one-pole, ~10-block time constant
+constexpr int kMidiBufferBytes = 16384;
 
 void clearOutputs(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
 {
@@ -22,14 +26,27 @@ void clearOutputs(float* const* outputs, int numOutputs, int offset, int numSamp
         if (outputs[ch] != nullptr)
             std::fill_n(outputs[ch] + offset, numSamples, 0.0f);
 }
+
+void addAllNotesOff(juce::MidiBuffer& midi) noexcept
+{
+    for (int channel = 1; channel <= 16; ++channel)
+    {
+        midi.addEvent(juce::MidiMessage::controllerEvent(channel, 64, 0), 0); // sustain off
+        midi.addEvent(juce::MidiMessage::allNotesOff(channel), 0);
+    }
+}
 } // namespace
 
-AudioEngine::AudioEngine() = default;
+AudioEngine::AudioEngine(int numWorkerThreads)
+    : workers_(numWorkerThreads)
+{
+    slots_.resize(static_cast<std::size_t>(kMaxTracks));
+}
 
 AudioEngine::~AudioEngine()
 {
-    // By contract the audio device has stopped, so this (message) thread may now act as the consumer
-    // of the command queue and reclaim every graph the engine still owns.
+    // By contract nothing is rendering any more, so this (message) thread may now act as the
+    // consumer of the command queue and reclaim every graph the engine still owns.
     EngineCommand command;
     while (commands_.tryPop(command))
         if (const auto* swap = std::get_if<command::SwapGraph>(&command))
@@ -46,37 +63,50 @@ AudioEngine::~AudioEngine()
 //==================================================================================================
 // Lifecycle
 
-void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutputChannels)
+void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutputChannels, int numInputChannels)
 {
     jassert(sampleRate > 0.0 && maximumBlockSize > 0 && numOutputChannels >= 0);
 
     prepared_.store(false, std::memory_order_release);
 
-    // Keep the playhead at the same *time* if the device's sample rate changed.
-    if (sampleRate_ > 0.0 && !juce::exactlyEqual(sampleRate_, sampleRate))
-        playhead_ =
-            static_cast<SampleCount>(std::llround(static_cast<double>(playhead_) * sampleRate / sampleRate_));
-
     sampleRate_ = sampleRate;
     maxBlockSize_ = std::max(1, maximumBlockSize);
     numChannels_ = std::max(0, numOutputChannels);
+    numInputs_ = std::clamp(numInputChannels, 0, kMaxInputChannels);
 
-    // The only allocation in the engine's life cycle — done here, never on the audio thread.
-    masterBus_.setSize(std::max(1, numChannels_), maxBlockSize_, false, true, false);
-    trackBus_.setSize(2, maxBlockSize_, false, true, false);
+    // The only allocations in the engine's life cycle — done here, never on the audio thread.
+    masterBus_.setSize(2, maxBlockSize_, false, true, false);
+    inputBus_.setSize(std::max(1, numInputs_), maxBlockSize_, false, true, false);
+    masterMidi_.ensureSize(kMidiBufferBytes);
+    liveBlock_.ensureSize(kMidiBufferBytes);
 
-    for (auto& track : trackRuntime_)
+    for (auto& slot : slots_)
     {
-        track.gainLeft.reset(sampleRate_, kTrackGainRampSeconds);
-        track.gainRight.reset(sampleRate_, kTrackGainRampSeconds);
+        slot.main.setSize(2, maxBlockSize_, false, true, false);
+        slot.pre.setSize(2, maxBlockSize_, false, true, false);
+        slot.midi.ensureSize(kMidiBufferBytes);
+        if (slot.delay.getNumSamples() != kMaxCompensationSamples)
+            slot.delay.setSize(2, kMaxCompensationSamples, false, true, false);
+        slot.delay.clear();
+        slot.delayWrite = 0;
+        slot.currentDelay = 0;
+        slot.gainLeft.reset(sampleRate_, kTrackGainRampSeconds);
+        slot.gainRight.reset(sampleRate_, kTrackGainRampSeconds);
+        slot.trackId = 0;
     }
 
     masterGain_.reset(sampleRate_, kMasterGainRampSeconds);
     masterGain_.setCurrentAndTargetValue(masterGainTarget_);
     testTone_.prepare(sampleRate_);
     smoothedLoad_ = 0.0;
+    updatePlayHead();
 
     publishedSampleRate_.store(sampleRate_, std::memory_order_relaxed);
+    publishedBlockSize_.store(maxBlockSize_, std::memory_order_relaxed);
+
+    if (onPrepare)
+        onPrepare(sampleRate_, maxBlockSize_);
+
     prepared_.store(true, std::memory_order_release);
 }
 
@@ -104,9 +134,11 @@ TelemetrySnapshot AudioEngine::collectTelemetry() noexcept
     snapshot.dspLoad = telemetry_.dspLoad.load(std::memory_order_relaxed);
     snapshot.dspLoadPeak = telemetry_.dspLoadPeak.exchange(0.0f, std::memory_order_acq_rel);
     snapshot.playheadSamples = telemetry_.playheadSamples.load(std::memory_order_relaxed);
+    snapshot.playheadSeconds = telemetry_.playheadSeconds.load(std::memory_order_relaxed);
     snapshot.playing = telemetry_.playing.load(std::memory_order_relaxed);
     snapshot.processedBlocks = telemetry_.processedBlocks.load(std::memory_order_relaxed);
     snapshot.clippedSamples = telemetry_.clippedSamples.load(std::memory_order_relaxed);
+    snapshot.captureActive = telemetry_.captureActive.load(std::memory_order_acquire);
     return snapshot;
 }
 
@@ -120,6 +152,13 @@ StereoPeak AudioEngine::collectTrackPeak(int slot) noexcept
             telemetry_.trackPeaks[index + 1].exchange(0.0f, std::memory_order_acq_rel)};
 }
 
+float AudioEngine::collectInputPeak(int channel) noexcept
+{
+    if (channel < 0 || channel >= kMaxInputChannels)
+        return 0.0f;
+    return telemetry_.inputPeaks[static_cast<std::size_t>(channel)].exchange(0.0f, std::memory_order_acq_rel);
+}
+
 void AudioEngine::releaseRetiredGraphs() noexcept
 {
     RenderGraph* graph = nullptr;
@@ -128,20 +167,73 @@ void AudioEngine::releaseRetiredGraphs() noexcept
 }
 
 //==================================================================================================
+// Offline rendering
+
+bool AudioEngine::beginOfflineRender(int timeoutMs)
+{
+    liveAcknowledgedOffline_.store(false, std::memory_order_release);
+    offlineRequested_.store(true, std::memory_order_release);
+
+    bool acknowledged = !isPrepared();
+    const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
+
+    while (!acknowledged && juce::Time::getMillisecondCounter() < deadline)
+    {
+        acknowledged = liveAcknowledgedOffline_.load(std::memory_order_acquire) || !isPrepared();
+        if (!acknowledged)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    offlineActive_.store(true, std::memory_order_release);
+    return acknowledged;
+}
+
+void AudioEngine::renderOffline(float* const* outputs, int numOutputs, int numSamples) noexcept
+{
+    const rt::ScopedRealtimeSection realtimeSection;
+    const juce::ScopedNoDenormals noDenormals;
+
+    if (numSamples <= 0)
+        return;
+
+    if (maxBlockSize_ <= 0 || sampleRate_ <= 0.0)
+    {
+        clearOutputs(outputs, numOutputs, 0, numSamples);
+        return;
+    }
+
+    renderBlock(nullptr, 0, outputs, numOutputs, numSamples);
+}
+
+void AudioEngine::endOfflineRender()
+{
+    offlineActive_.store(false, std::memory_order_release);
+    offlineRequested_.store(false, std::memory_order_release);
+}
+
+//==================================================================================================
 // Audio thread — THE AUDIO CALLBACK ENTRY POINT.
 //
 // Everything reachable from here must be real-time safe: no allocation/free, no locks, no blocking
 // I/O, no logging, no UI calls, no unbounded loops.
 
-void AudioEngine::process(const float* const* /*inputs*/, int /*numInputs*/, float* const* outputs,
-                          int numOutputs, int numSamples) noexcept
+void AudioEngine::process(const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                          int numSamples) noexcept
 {
     const rt::ScopedRealtimeSection realtimeSection; // arms the allocation trap for this thread
-    const juce::ScopedNoDenormals noDenormals;       // FTZ/DAZ: denormals can cost 100x CPU
+    const juce::ScopedNoDenormals noDenormals;        // FTZ/DAZ: denormals can cost 100x CPU
     const auto callbackStart = Clock::now();
 
     if (numSamples <= 0)
         return;
+
+    if (offlineRequested_.load(std::memory_order_acquire))
+    {
+        // An export thread is rendering: stay silent and keep our hands off all engine state.
+        clearOutputs(outputs, numOutputs, 0, numSamples);
+        liveAcknowledgedOffline_.store(true, std::memory_order_release);
+        return;
+    }
 
     if (!prepared_.load(std::memory_order_acquire))
     {
@@ -149,26 +241,166 @@ void AudioEngine::process(const float* const* /*inputs*/, int /*numInputs*/, flo
         return;
     }
 
+    renderBlock(inputs, numInputs, outputs, numOutputs, numSamples);
+    publishLoad(Clock::now() - callbackStart, numSamples);
+}
+
+void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                              int numSamples) noexcept
+{
     applyPendingCommands();
 
     // Hand back any retired graphs that did not fit in the return queue last time.
     while (retireBacklogSize_ > 0 && retiredGraphs_.tryPush(retireBacklog_[retireBacklogSize_ - 1]))
         --retireBacklogSize_;
 
-    // Drivers may (rarely) deliver more frames than they announced; never overrun our buffers.
+    // Live MIDI: drain everything that arrived since the last callback (placed at the block start of
+    // the first sub-block only).
+    liveBlock_.clear();
+    liveBlockPending_ = true;
+    LiveMidiEvent event;
+    while (liveMidi_.pop(event))
+    {
+        liveBlock_.addEvent(event.data, event.size, 0);
+
+        if (capture_ != nullptr && capture_->captureMidi && playing_)
+        {
+            const int index = capture_->midiCount.load(std::memory_order_relaxed);
+            if (index < static_cast<int>(capture_->midiEvents.size()))
+            {
+                auto& captured = capture_->midiEvents[static_cast<std::size_t>(index)];
+                captured.seconds = positionSeconds_;
+                std::copy_n(event.data, event.size, captured.data);
+                captured.size = event.size;
+                capture_->midiCount.store(index + 1, std::memory_order_release);
+            }
+        }
+    }
+
     for (int offset = 0; offset < numSamples;)
     {
-        const int subBlock = std::min(numSamples - offset, maxBlockSize_);
-        renderSubBlock(outputs, numOutputs, offset, subBlock);
+        int subBlock = std::min(numSamples - offset, maxBlockSize_);
+        bool wraps = false;
+
+        if (playing_ && loopEnabled_ && loopEnd_ > loopStart_ + 0.001 && positionSeconds_ < loopEnd_)
+        {
+            const double secondsPerSample = speed_ / sampleRate_;
+            const double samplesToLoopEnd = (loopEnd_ - positionSeconds_) / secondsPerSample;
+            if (samplesToLoopEnd <= static_cast<double>(subBlock))
+            {
+                subBlock = std::max(1, static_cast<int>(std::ceil(samplesToLoopEnd - 1.0e-9)));
+                wraps = true;
+            }
+        }
+
+        // Device inputs for this sub-block, as 64-bit (monitoring + capture).
+        for (int ch = 0; ch < numInputs_; ++ch)
+        {
+            Sample* dest = inputBus_.getWritePointer(ch);
+            const float* source = (inputs != nullptr && ch < numInputs) ? inputs[ch] : nullptr;
+            float peak = 0.0f;
+
+            if (source == nullptr)
+            {
+                std::fill_n(dest, subBlock, 0.0);
+                continue;
+            }
+
+            for (int i = 0; i < subBlock; ++i)
+            {
+                const float value = source[offset + i];
+                dest[i] = static_cast<Sample>(value);
+                peak = std::max(peak, std::abs(value));
+            }
+
+            rt::atomicStoreMax(telemetry_.inputPeaks[static_cast<std::size_t>(ch)], peak);
+        }
+
+        renderSubBlock(offset, outputs, numOutputs, offset, subBlock);
+
+        if (wraps)
+        {
+            positionSeconds_ = loopStart_ + std::max(0.0, positionSeconds_ - loopEnd_);
+            panicAll();
+        }
+
         offset += subBlock;
     }
 
-    telemetry_.playheadSamples.store(playhead_, std::memory_order_relaxed);
+    telemetry_.playheadSeconds.store(positionSeconds_, std::memory_order_relaxed);
+    telemetry_.playheadSamples.store(static_cast<SampleCount>(std::llround(positionSeconds_ * sampleRate_)),
+                                     std::memory_order_relaxed);
     telemetry_.playing.store(playing_, std::memory_order_relaxed);
     telemetry_.processedBlocks.fetch_add(1, std::memory_order_relaxed);
-
-    publishLoad(Clock::now() - callbackStart, numSamples);
+    epoch_.fetch_add(1, std::memory_order_acq_rel);
 }
+
+void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int numOutputs, int offset,
+                                 int numSamples) noexcept
+{
+    blockStartSeconds_ = positionSeconds_;
+    secondsPerSample_ = speed_ / sampleRate_;
+    currentNumSamples_ = numSamples;
+    updatePlayHead();
+
+    masterBus_.clear(0, numSamples);
+
+    if (graph_ != nullptr)
+    {
+        for (const auto& level : graph_->levels)
+        {
+            currentLevel_ = &level;
+            workers_.run(static_cast<int>(level.size()), &AudioEngine::processTrackTask, this);
+        }
+
+        renderMaster(numSamples);
+    }
+
+    testTone_.addTo(masterBus_, numSamples);
+
+    // Master gain (graph value or automation), smoothed.
+    if (graph_ != nullptr && !graph_->masterVolumeAutomation.isEmpty())
+        masterGain_.setTargetValue(automationToGain(graph_->masterVolumeAutomation.valueAt(blockStartSeconds_)));
+
+    if (!masterGain_.isSmoothing())
+    {
+        masterBus_.applyGain(0, numSamples, masterGain_.getTargetValue());
+    }
+    else
+    {
+        auto* left = masterBus_.getWritePointer(0);
+        auto* right = masterBus_.getWritePointer(1);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const Sample gain = masterGain_.getNextValue();
+            left[i] *= gain;
+            right[i] *= gain;
+        }
+    }
+
+    if (capture_ != nullptr && (playing_ || !capture_->onlyWhilePlaying))
+    {
+        captureInputs(0, numSamples);
+
+        if (capture_->master != nullptr)
+        {
+            const Sample* channels[2] = {masterBus_.getReadPointer(0), masterBus_.getReadPointer(1)};
+            capture_->master->write(channels, 2, numSamples);
+        }
+
+        if (telemetry_.captureStartSeconds.load(std::memory_order_relaxed) < 0.0)
+            telemetry_.captureStartSeconds.store(blockStartSeconds_, std::memory_order_release);
+    }
+
+    writeOutputsAndMeter(outputs, numOutputs, offset, numSamples);
+    liveBlockPending_ = false;
+
+    if (playing_)
+        positionSeconds_ += static_cast<double>(numSamples) * secondsPerSample_;
+}
+
+//==================================================================================================
+// Commands
 
 void AudioEngine::applyPendingCommands() noexcept
 {
@@ -180,12 +412,16 @@ void AudioEngine::applyPendingCommands() noexcept
 
 void AudioEngine::handle(const command::SetPlaying& cmd) noexcept
 {
+    if (playing_ && !cmd.shouldPlay)
+        panicAll();
     playing_ = cmd.shouldPlay;
 }
 
 void AudioEngine::handle(const command::Locate& cmd) noexcept
 {
-    playhead_ = std::max<SampleCount>(0, cmd.positionSamples);
+    const double rate = sampleRate_ > 0.0 ? sampleRate_ : 48000.0;
+    positionSeconds_ = std::max(0.0, static_cast<double>(cmd.positionSamples) / rate);
+    panicAll();
 }
 
 void AudioEngine::handle(const command::SetMasterGain& cmd) noexcept
@@ -199,6 +435,18 @@ void AudioEngine::handle(const command::SetTestTone& cmd) noexcept
     testTone_.setParameters(cmd.enabled, cmd.frequencyHz, cmd.linearGain);
 }
 
+void AudioEngine::handle(const command::SetLoop& cmd) noexcept
+{
+    loopEnabled_ = cmd.enabled;
+    loopStart_ = std::max(0.0, cmd.startSeconds);
+    loopEnd_ = std::max(loopStart_, cmd.endSeconds);
+}
+
+void AudioEngine::handle(const command::SetSpeed& cmd) noexcept
+{
+    speed_ = std::clamp(cmd.rate, 0.25, 4.0);
+}
+
 void AudioEngine::handle(const command::SwapGraph& cmd) noexcept
 {
     RenderGraph* const previous = graph_;
@@ -209,9 +457,30 @@ void AudioEngine::handle(const command::SwapGraph& cmd) noexcept
         masterGainTarget_ = std::clamp(graph_->masterGain, 0.0, 4.0);
         masterGain_.setTargetValue(masterGainTarget_);
         telemetry_.appliedGraphSerial.store(graph_->serial, std::memory_order_release);
+
+        if (graph_->hasTransportSettings)
+        {
+            speed_ = std::clamp(graph_->speed, 0.25, 4.0);
+            loopEnabled_ = graph_->loopEnabled;
+            loopStart_ = std::max(0.0, graph_->loopStart);
+            loopEnd_ = std::max(loopStart_, graph_->loopEnd);
+        }
     }
 
     retire(previous);
+}
+
+void AudioEngine::handle(const command::StartCapture& cmd) noexcept
+{
+    capture_ = cmd.session;
+    telemetry_.captureStartSeconds.store(-1.0, std::memory_order_release);
+    telemetry_.captureActive.store(capture_ != nullptr, std::memory_order_release);
+}
+
+void AudioEngine::handle(const command::StopCapture&) noexcept
+{
+    capture_ = nullptr;
+    telemetry_.captureActive.store(false, std::memory_order_release);
 }
 
 void AudioEngine::retire(RenderGraph* graph) noexcept
@@ -228,178 +497,401 @@ void AudioEngine::retire(RenderGraph* graph) noexcept
     // the only real-time-safe option left, and it is preferable to freeing memory on this thread.
 }
 
-void AudioEngine::renderTracks(int numSamples) noexcept
+void AudioEngine::panicAll() noexcept
 {
-    if (graph_ == nullptr || numChannels_ <= 0)
+    for (auto& slot : slots_)
+        slot.panic = true;
+}
+
+//==================================================================================================
+// Tracks (run on the audio thread and the worker threads; each task touches only its own slot,
+// and reads slots of earlier levels)
+
+void AudioEngine::processTrackTask(void* context, int taskIndex) noexcept
+{
+    auto* self = static_cast<AudioEngine*>(context);
+    self->processTrack((*self->currentLevel_)[static_cast<std::size_t>(taskIndex)]);
+}
+
+void AudioEngine::processTrack(int graphIndex) noexcept
+{
+    const auto& track = graph_->tracks[static_cast<std::size_t>(graphIndex)];
+    if (track.slot < 0 || track.slot >= kMaxTracks)
         return;
 
-    const double blockStartSeconds = static_cast<double>(playhead_) / sampleRate_;
-    Sample* const trackLeft = trackBus_.getWritePointer(0);
-    Sample* const trackRight = trackBus_.getWritePointer(1);
-    Sample* const masterLeft = masterBus_.getWritePointer(0);
-    Sample* const masterRight = numChannels_ > 1 ? masterBus_.getWritePointer(1) : nullptr;
+    auto& slot = slots_[static_cast<std::size_t>(track.slot)];
+    const int numSamples = currentNumSamples_;
 
-    for (const auto& track : graph_->tracks)
+    if (slot.trackId != track.trackId)
     {
-        if (track.slot < 0 || track.slot >= kMaxTracks)
-            continue;
+        // A different track now owns this slot: start clean.
+        slot.trackId = track.trackId;
+        slot.delay.clear();
+        slot.delayWrite = 0;
+        slot.currentDelay = track.compensationDelay;
+        slot.gainLeft.setCurrentAndTargetValue(0.0);
+        slot.gainRight.setCurrentAndTargetValue(0.0);
+        slot.panic = true;
+    }
 
-        auto& runtime = trackRuntime_[static_cast<std::size_t>(track.slot)];
+    slot.main.clear(0, numSamples);
+    slot.midi.clear();
 
-        if (runtime.trackId != track.trackId)
-        {
-            // A different track now owns this slot: start from its current gains, no ramp.
-            runtime.trackId = track.trackId;
-            runtime.gainLeft.setCurrentAndTargetValue(track.gainLeft);
-            runtime.gainRight.setCurrentAndTargetValue(track.gainRight);
-        }
-        else
-        {
-            runtime.gainLeft.setTargetValue(track.gainLeft);
-            runtime.gainRight.setTargetValue(track.gainRight);
-        }
+    if (slot.panic)
+    {
+        addAllNotesOff(slot.midi);
+        slot.panic = false;
+    }
 
-        bool hasAudio = false;
+    applyParameterAutomation(track.parameterLanes);
 
+    switch (track.kind)
+    {
+    case TrackKind::audio:
         if (playing_)
+            renderAudioClips(track, slot);
+        addMonitoredInput(track, slot);
+        break;
+
+    case TrackKind::instrument:
+        if (playing_)
+            renderMidiClips(track, slot);
+        if (track.receivesLiveMidi && liveBlockPending_)
+            slot.midi.addEvents(liveBlock_, 0, numSamples, 0);
+        break;
+
+    case TrackKind::bus:
+        sumBusSources(track, slot);
+        break;
+    }
+
+    for (const auto& device : track.devices)
+    {
+        const juce::AudioBuffer<Sample>* sidechain = nullptr;
+        if (device.sidechainSource >= 0)
         {
-            for (const auto& clip : track.clips)
-            {
-                if (clip.startSeconds * sampleRate_ >= static_cast<double>(playhead_ + numSamples))
-                    break; // clips are sorted by start: nothing later can overlap this block
-
-                if (!hasAudio && clip.endSeconds > blockStartSeconds)
-                {
-                    std::fill_n(trackLeft, numSamples, 0.0);
-                    std::fill_n(trackRight, numSamples, 0.0);
-                }
-
-                if (clip.endSeconds > blockStartSeconds)
-                    hasAudio = dsp::renderClip(clip, blockStartSeconds, sampleRate_, numSamples, trackLeft,
-                                               trackRight) ||
-                               hasAudio;
-            }
+            const auto& source = graph_->tracks[static_cast<std::size_t>(device.sidechainSource)];
+            sidechain = &slots_[static_cast<std::size_t>(source.slot)].main;
         }
 
-        if (!hasAudio)
+        device.node->process(slot.main, numSamples, slot.midi, sidechain);
+    }
+
+    if (track.needsPreFaderCopy)
+        for (int ch = 0; ch < 2; ++ch)
+            slot.pre.copyFrom(ch, 0, slot.main, ch, 0, numSamples);
+
+    applyFader(track, slot);
+    applyCompensationDelay(track, slot);
+
+    if (capture_ != nullptr && (playing_ || !capture_->onlyWhilePlaying))
+        if (auto* stream = capture_->trackOutputs[static_cast<std::size_t>(track.slot)])
         {
-            runtime.gainLeft.skip(numSamples);
-            runtime.gainRight.skip(numSamples);
+            const Sample* channels[2] = {slot.main.getReadPointer(0), slot.main.getReadPointer(1)};
+            stream->write(channels, 2, numSamples);
+        }
+}
+
+void AudioEngine::renderAudioClips(const RenderTrack& track, SlotState& slot) noexcept
+{
+    const int numSamples = currentNumSamples_;
+    const double blockEnd = blockStartSeconds_ + numSamples * secondsPerSample_;
+    Sample* left = slot.main.getWritePointer(0);
+    Sample* right = slot.main.getWritePointer(1);
+
+    for (const auto& clip : track.clips)
+    {
+        if (clip.startSeconds >= blockEnd)
+            break; // clips are sorted by start: nothing later can overlap this block
+        if (clip.endSeconds <= blockStartSeconds_)
             continue;
-        }
 
-        Sample peakLeft = 0.0;
-        Sample peakRight = 0.0;
+        dsp::renderClip(clip, blockStartSeconds_, secondsPerSample_, numSamples, left, right);
+    }
+}
 
-        for (int i = 0; i < numSamples; ++i)
+void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noexcept
+{
+    const int numSamples = currentNumSamples_;
+    const double t0 = blockStartSeconds_;
+    const double t1 = t0 + numSamples * secondsPerSample_;
+    const double tempoBeatsPerSecond = graph_->tempo / 60.0;
+
+    const auto offsetOf = [&](double seconds)
+    {
+        const auto offset = static_cast<int>(std::floor((seconds - t0) / secondsPerSample_));
+        return std::clamp(offset, 0, numSamples - 1);
+    };
+
+    for (const auto& clip : track.midiClips)
+    {
+        if (clip.startSeconds >= t1)
+            break;
+        if (clip.endSeconds <= t0)
+            continue;
+
+        const double beatsPerSecond = tempoBeatsPerSecond * (clip.rate > 0.0 ? clip.rate : 1.0);
+        const auto beatAt = [&](double seconds)
+        { return clip.contentStartBeat + (seconds - clip.startSeconds) * beatsPerSecond; };
+        const auto timeOf = [&](double beat)
+        { return clip.startSeconds + (beat - clip.contentStartBeat) / beatsPerSecond; };
+
+        const double beginBeat = beatAt(std::max(t0, clip.startSeconds));
+        const double endBeat = beatAt(std::min(t1, clip.endSeconds));
+        const double clipEndBeat = beatAt(clip.endSeconds);
+        const bool clipEndsInBlock = clip.endSeconds <= t1;
+
+        // Note-offs first, so a note re-struck at the same sample is released before it restarts.
+        for (const auto& note : clip.notes)
         {
-            const Sample l = trackLeft[i] * runtime.gainLeft.getNextValue();
-            const Sample r = trackRight[i] * runtime.gainRight.getNextValue();
-            peakLeft = std::max(peakLeft, std::abs(l));
-            peakRight = std::max(peakRight, std::abs(r));
+            if (note.startBeat < clip.contentStartBeat || note.startBeat >= clipEndBeat)
+                continue;
 
-            if (masterRight != nullptr)
-            {
-                masterLeft[i] += l;
-                masterRight[i] += r;
-            }
-            else
-            {
-                masterLeft[i] += 0.5 * (l + r); // mono device
-            }
+            const double offBeat = std::min(note.endBeat, clipEndBeat);
+            const bool inBlock = offBeat >= beginBeat && (offBeat < endBeat || (clipEndsInBlock && offBeat <= endBeat + 1.0e-9));
+            if (inBlock)
+                slot.midi.addEvent(juce::MidiMessage::noteOff(note.channel, note.note),
+                                   clipEndsInBlock && offBeat >= endBeat - 1.0e-9 ? numSamples - 1 : offsetOf(timeOf(offBeat)));
         }
 
-        const auto meterIndex = static_cast<std::size_t>(track.slot) * 2;
-        rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex], static_cast<float>(peakLeft));
-        rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + 1], static_cast<float>(peakRight));
+        for (const auto& note : clip.notes)
+        {
+            if (note.startBeat >= endBeat)
+                break;
+            if (note.startBeat < beginBeat || note.startBeat < clip.contentStartBeat)
+                continue;
+
+            slot.midi.addEvent(juce::MidiMessage::noteOn(note.channel, note.note, note.velocity),
+                               offsetOf(timeOf(note.startBeat)));
+        }
+
+        for (const auto& control : clip.controls)
+        {
+            if (control.beat >= endBeat)
+                break;
+            if (control.beat < beginBeat || control.beat < clip.contentStartBeat)
+                continue;
+
+            const int offset = offsetOf(timeOf(control.beat));
+            if (control.controller == 128)
+                slot.midi.addEvent(juce::MidiMessage::pitchWheel(control.channel,
+                                                                 juce::jlimit(0, 16383, juce::roundToInt(control.value * 16383.0f))),
+                                   offset);
+            else
+                slot.midi.addEvent(juce::MidiMessage::controllerEvent(control.channel, control.controller,
+                                                                      juce::jlimit(0, 127, juce::roundToInt(control.value * 127.0f))),
+                                   offset);
+        }
     }
 }
 
-void AudioEngine::renderSubBlock(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
+void AudioEngine::addMonitoredInput(const RenderTrack& track, SlotState& slot) noexcept
 {
-    // 1. Start from silence on the 64-bit master bus.
-    masterBus_.clear(0, numSamples);
+    const bool monitoring = track.monitor == MonitorMode::always || (track.monitor == MonitorMode::automatic && track.armed);
+    if (!monitoring || track.inputChannel < 0 || track.inputChannel >= numInputs_)
+        return;
 
-    // 2. Sources: every track in the current render graph, then the diagnostic test tone.
-    renderTracks(numSamples);
-    testTone_.addTo(masterBus_, numSamples);
-
-    // 3. Master section.
-    applyMasterGain(numSamples);
-
-    // 4. Down-convert to the driver's 32-bit float buffers, metering on the way out.
-    writeOutputsAndMeter(outputs, numOutputs, offset, numSamples);
-
-    if (playing_)
-        playhead_ += numSamples;
+    const int numSamples = currentNumSamples_;
+    const int second = track.inputStereo && track.inputChannel + 1 < numInputs_ ? track.inputChannel + 1 : track.inputChannel;
+    slot.main.addFrom(0, 0, inputBus_, track.inputChannel, 0, numSamples);
+    slot.main.addFrom(1, 0, inputBus_, second, 0, numSamples);
 }
 
-void AudioEngine::applyMasterGain(int numSamples) noexcept
+void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexcept
 {
-    if (!masterGain_.isSmoothing())
+    const int numSamples = currentNumSamples_;
+
+    for (const int source : track.busSources)
     {
-        masterBus_.applyGain(0, numSamples, masterGain_.getTargetValue()); // no-op when silent/unity
-        return;
+        const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(source)].slot)];
+        for (int ch = 0; ch < 2; ++ch)
+            slot.main.addFrom(ch, 0, sourceSlot.main, ch, 0, numSamples);
     }
 
-    if (masterBus_.hasBeenCleared())
+    for (const auto& send : track.sends)
     {
-        masterGain_.skip(numSamples);
-        return;
+        const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(send.sourceIndex)].slot)];
+        const auto& buffer = send.preFader ? sourceSlot.pre : sourceSlot.main;
+        const double gain = send.gainAutomation.isEmpty() ? send.gain
+                                                          : automationToGain(send.gainAutomation.valueAt(blockStartSeconds_));
+        for (int ch = 0; ch < 2; ++ch)
+            slot.main.addFrom(ch, 0, buffer, ch, 0, numSamples, gain);
     }
 
-    auto* const* channels = masterBus_.getArrayOfWritePointers();
-    const int numChannels = masterBus_.getNumChannels();
+    if (track.auxSourceIndex >= 0)
+    {
+        const auto& source = graph_->tracks[static_cast<std::size_t>(track.auxSourceIndex)];
+        if (!source.devices.empty())
+        {
+            const auto* node = source.devices.front().node;
+            for (int ch = 0; ch < 2; ++ch)
+                if (const Sample* aux = node->getAuxOutput(track.auxChannel + ch))
+                    juce::FloatVectorOperations::add(slot.main.getWritePointer(ch), aux, numSamples);
+        }
+    }
+}
+
+void AudioEngine::applyParameterAutomation(const std::vector<ParameterLane>& lanes) noexcept
+{
+    for (const auto& lane : lanes)
+    {
+        if (lane.parameter == nullptr || lane.curve.isEmpty())
+            continue;
+
+        const auto value = static_cast<float>(lane.curve.valueAt(blockStartSeconds_));
+        if (std::abs(lane.parameter->getValue() - value) > 1.0e-6f)
+            lane.parameter->setValue(value);
+    }
+}
+
+void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
+{
+    const int numSamples = currentNumSamples_;
+
+    double volume = track.volume;
+    double pan = track.pan;
+    if (!track.volumeAutomation.isEmpty())
+        volume = automationToGain(track.volumeAutomation.valueAt(blockStartSeconds_));
+    if (!track.panAutomation.isEmpty())
+        pan = track.panAutomation.valueAt(blockStartSeconds_) * 2.0 - 1.0;
+
+    const auto [panLeft, panRight] = balancePanGains(pan);
+    const double sign = track.phaseInverted ? -1.0 : 1.0;
+    slot.gainLeft.setTargetValue(track.audible ? volume * panLeft * sign : 0.0);
+    slot.gainRight.setTargetValue(track.audible ? volume * panRight * sign : 0.0);
+
+    Sample* left = slot.main.getWritePointer(0);
+    Sample* right = slot.main.getWritePointer(1);
+    Sample peakLeft = 0.0;
+    Sample peakRight = 0.0;
 
     for (int i = 0; i < numSamples; ++i)
     {
-        const Sample gain = masterGain_.getNextValue();
+        left[i] *= slot.gainLeft.getNextValue();
+        right[i] *= slot.gainRight.getNextValue();
+        peakLeft = std::max(peakLeft, std::abs(left[i]));
+        peakRight = std::max(peakRight, std::abs(right[i]));
+    }
 
-        for (int ch = 0; ch < numChannels; ++ch)
-            channels[ch][i] *= gain;
+    const auto meterIndex = static_cast<std::size_t>(track.slot) * 2;
+    rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex], static_cast<float>(peakLeft));
+    rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + 1], static_cast<float>(peakRight));
+}
+
+void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept
+{
+    const int delay = std::clamp(track.compensationDelay, 0, kMaxCompensationSamples - 1);
+
+    if (delay != slot.currentDelay)
+    {
+        slot.delay.clear();
+        slot.delayWrite = 0;
+        slot.currentDelay = delay;
+    }
+
+    if (delay == 0)
+        return;
+
+    const int numSamples = currentNumSamples_;
+    const int capacity = kMaxCompensationSamples;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        Sample* signal = slot.main.getWritePointer(ch);
+        Sample* ring = slot.delay.getWritePointer(ch);
+        int write = slot.delayWrite;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            ring[write] = signal[i];
+            signal[i] = ring[(write - delay + capacity) % capacity];
+            write = (write + 1) % capacity;
+        }
+    }
+
+    slot.delayWrite = (slot.delayWrite + numSamples) % capacity;
+}
+
+//==================================================================================================
+// Master
+
+void AudioEngine::renderMaster(int numSamples) noexcept
+{
+    for (const int source : graph_->masterSources)
+    {
+        const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(source)].slot)];
+        for (int ch = 0; ch < 2; ++ch)
+            masterBus_.addFrom(ch, 0, sourceSlot.main, ch, 0, numSamples);
+    }
+
+    applyParameterAutomation(graph_->masterParameterLanes);
+    masterMidi_.clear();
+
+    for (const auto& device : graph_->masterDevices)
+    {
+        const juce::AudioBuffer<Sample>* sidechain = nullptr;
+        if (device.sidechainSource >= 0)
+            sidechain = &slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(device.sidechainSource)].slot)].main;
+        device.node->process(masterBus_, numSamples, masterMidi_, sidechain);
     }
 }
 
-void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, int offset,
-                                       int numSamples) noexcept
+void AudioEngine::captureInputs(int /*inputOffset*/, int numSamples) noexcept
 {
-    Sample channelPeaks[2] = {0.0, 0.0};
+    for (const auto& target : capture_->inputs)
+    {
+        if (target.stream == nullptr || target.firstChannel >= numInputs_)
+            continue;
+
+        const Sample* channels[2] = {inputBus_.getReadPointer(target.firstChannel),
+                                     inputBus_.getReadPointer(std::min(target.firstChannel + 1, numInputs_ - 1))};
+        target.stream->write(channels, std::min(2, target.numChannels), numSamples);
+    }
+}
+
+void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
+{
+    const Sample* left = masterBus_.getReadPointer(0);
+    const Sample* right = masterBus_.getReadPointer(1);
+    Sample peakLeft = 0.0;
+    Sample peakRight = 0.0;
     std::uint64_t clipped = 0;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const Sample l = std::abs(left[i]);
+        const Sample r = std::abs(right[i]);
+        peakLeft = std::max(peakLeft, l);
+        peakRight = std::max(peakRight, r);
+        clipped += (l > 1.0 ? 1u : 0u) + (r > 1.0 ? 1u : 0u);
+    }
 
     for (int ch = 0; ch < numOutputs; ++ch)
     {
         float* const destination = outputs[ch];
-
         if (destination == nullptr)
             continue;
 
-        if (ch >= numChannels_)
+        if (ch >= 2) // the master is stereo; further device outputs stay silent
         {
             std::fill_n(destination + offset, numSamples, 0.0f);
             continue;
         }
 
-        const Sample* const source = masterBus_.getReadPointer(ch);
-        Sample peak = 0.0;
-
-        for (int i = 0; i < numSamples; ++i)
+        if (numOutputs == 1)
         {
-            const Sample value = source[i];
-            const Sample magnitude = std::abs(value);
-            peak = std::max(peak, magnitude);
-            clipped += magnitude > 1.0 ? 1u : 0u;
-            destination[offset + i] = static_cast<IoSample>(value);
+            for (int i = 0; i < numSamples; ++i)
+                destination[offset + i] = static_cast<IoSample>(0.5 * (left[i] + right[i]));
+            continue;
         }
 
-        if (ch < 2)
-            channelPeaks[ch] = peak;
+        const Sample* source = ch == 0 ? left : right;
+        for (int i = 0; i < numSamples; ++i)
+            destination[offset + i] = static_cast<IoSample>(source[i]);
     }
 
-    if (numChannels_ == 1)
-        channelPeaks[1] = channelPeaks[0]; // mono device: show the same level on both meters
-
-    rt::atomicStoreMax(telemetry_.masterPeakLeft, static_cast<float>(channelPeaks[0]));
-    rt::atomicStoreMax(telemetry_.masterPeakRight, static_cast<float>(channelPeaks[1]));
+    rt::atomicStoreMax(telemetry_.masterPeakLeft, static_cast<float>(peakLeft));
+    rt::atomicStoreMax(telemetry_.masterPeakRight, static_cast<float>(numChannels_ == 1 ? peakLeft : peakRight));
 
     if (clipped > 0)
         telemetry_.clippedSamples.fetch_add(clipped, std::memory_order_relaxed);
@@ -415,6 +907,26 @@ void AudioEngine::publishLoad(Clock::duration elapsed, int numSamples) noexcept
 
     telemetry_.dspLoad.store(static_cast<float>(smoothedLoad_), std::memory_order_relaxed);
     rt::atomicStoreMax(telemetry_.dspLoadPeak, static_cast<float>(instantaneousLoad));
+}
+
+void AudioEngine::updatePlayHead() noexcept
+{
+    const double tempo = graph_ != nullptr ? graph_->tempo : 120.0;
+    const double beatsPerSecond = tempo / 60.0;
+    const double ppq = positionSeconds_ * beatsPerSecond;
+
+    juce::AudioPlayHead::PositionInfo info;
+    info.setBpm(tempo);
+    info.setTimeSignature(juce::AudioPlayHead::TimeSignature{4, 4});
+    info.setTimeInSeconds(positionSeconds_);
+    info.setTimeInSamples(static_cast<juce::int64>(std::llround(positionSeconds_ * sampleRate_)));
+    info.setPpqPosition(ppq);
+    info.setPpqPositionOfLastBarStart(std::floor(ppq / 4.0) * 4.0);
+    info.setIsPlaying(playing_);
+    info.setIsRecording(capture_ != nullptr && !capture_->inputs.empty());
+    info.setIsLooping(loopEnabled_);
+    info.setLoopPoints(juce::AudioPlayHead::LoopPoints{loopStart_ * beatsPerSecond, loopEnd_ * beatsPerSecond});
+    playHead_.info = info;
 }
 
 } // namespace dojo::engine

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/dsp/ClipStretcher.h"
+
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
@@ -7,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace dojo::session
@@ -24,29 +27,39 @@ struct WaveformPeaks
     [[nodiscard]] int getNumBuckets() const noexcept { return static_cast<int>(minimum[0].size()); }
 };
 
-/** A decoded audio file. Immutable once published, shared by clips, the UI and render graphs. */
+/**
+    An audio file ready for playback: either decoded into memory, or (for long files) streamed from
+    disk. Immutable once published, shared by clips, the UI and render graphs.
+*/
 struct AudioAsset
 {
     juce::File file;
     double sampleRate = 0.0;
-    juce::AudioBuffer<float> audio; ///< at most 2 channels
+    int numChannels = 0;        ///< 1 or 2
+    juce::int64 numFrames = 0;
+    juce::AudioBuffer<float> audio;                  ///< decoded audio (empty when streamed)
+    std::shared_ptr<engine::StreamedAudio> streamed; ///< set for disk-streamed files
     WaveformPeaks peaks;
 
+    [[nodiscard]] bool isStreamed() const noexcept { return streamed != nullptr; }
     [[nodiscard]] double getLengthSeconds() const noexcept
     {
-        return sampleRate > 0.0 ? static_cast<double>(audio.getNumSamples()) / sampleRate : 0.0;
+        return sampleRate > 0.0 ? static_cast<double>(numFrames) / sampleRate : 0.0;
     }
 };
 
 using AudioAssetPtr = std::shared_ptr<const AudioAsset>;
 
 /**
-    Decodes audio files (WAV, AIFF, FLAC, Ogg Vorbis, MP3, Opus) on background threads and keeps one
-    shared, immutable copy of each in memory.
+    Loads audio files (WAV, AIFF, FLAC, Ogg Vorbis, MP3, Opus) on background threads and keeps one
+    shared, immutable copy of each.
+
+    Files up to the streaming threshold (default: 10 minutes) are decoded into memory. Longer ones are
+    streamed from disk: only the regions around what is being played are resident, kept loaded by a
+    background service thread (see engine::StreamedAudio).
 
     All public functions are message-thread only; completion callbacks also arrive on the message
-    thread. (Clips are fully memory-resident for now; disk streaming for very long files is a later
-    optimisation that will not change this interface.)
+    thread.
 */
 class AudioAssetCache final
 {
@@ -84,14 +97,25 @@ public:
 
     [[nodiscard]] bool canRead(const juce::File& file) const;
 
+    /** Files longer than this are streamed from disk instead of decoded into memory. */
+    void setStreamingThreshold(double seconds) noexcept { streamingThreshold_ = seconds; }
+    [[nodiscard]] double getStreamingThreshold() const noexcept { return streamingThreshold_; }
+
+    /** Source of the engine's process epoch (see AudioEngine::getProcessEpoch), used to free evicted
+        stream chunks only once no audio block can still be reading them. */
+    void setEpochSource(std::function<std::uint64_t()> source);
+
+    [[nodiscard]] juce::AudioFormatManager& getFormatManager() noexcept { return formats_; }
+
 private:
+    class StreamService;
     struct DecodeResult
     {
         std::shared_ptr<AudioAsset> asset;
         juce::String error;
     };
 
-    static DecodeResult decode(juce::AudioFormatManager& formats, const juce::File& file);
+    static DecodeResult decode(juce::AudioFormatManager& formats, const juce::File& file, double streamingThreshold);
     void finish(const juce::File& file, const DecodeResult& result);
 
     juce::AudioFormatManager formats_;
@@ -99,6 +123,8 @@ private:
     std::map<juce::String, std::vector<Completion>> pending_;
     std::map<juce::String, juce::String> failures_; ///< last decode error per file, to avoid retry storms
     juce::ListenerList<Listener> listeners_;
+    double streamingThreshold_ = 10.0 * 60.0;
+    std::unique_ptr<StreamService> streamService_;
     juce::ThreadPool pool_{2}; // declared last: destroyed (and joined) before everything it uses
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(AudioAssetCache)

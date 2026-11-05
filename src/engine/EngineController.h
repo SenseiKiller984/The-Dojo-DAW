@@ -3,6 +3,7 @@
 #include "core/Types.h"
 #include "engine/EngineCommands.h"
 #include "engine/EngineTelemetry.h"
+#include "engine/RealtimeHandoff.h"
 #include "engine/io/AudioDeviceHost.h"
 
 #include <juce_events/juce_events.h>
@@ -45,6 +46,16 @@ public:
     void togglePlayback();
     void returnToStart();
     void locate(SampleCount positionSamples);
+    void locateSeconds(double seconds);
+    void setLoop(bool enabled, double startSeconds, double endSeconds);
+    void setSpeed(double rate);
+
+    // --- Capture (recording / real-time bounce) ---------------------------------------------------
+    /** Hands `session` to the audio thread (the caller keeps ownership). */
+    void startCapture(CaptureSession* session);
+    /** Asks the audio thread to stop; poll isCaptureActive() until false before touching the session. */
+    void stopCapture();
+    [[nodiscard]] bool isCaptureActive() const noexcept;
 
     // --- Mixer ---------------------------------------------------------------------------------------
     /** Values at or below kMinusInfinityDb mute the output. */
@@ -66,6 +77,11 @@ public:
 
     /** The device host, for the audio settings UI. */
     [[nodiscard]] AudioDeviceHost& getDeviceHost() noexcept { return deviceHost_; }
+
+    [[nodiscard]] AudioEngine& getEngine() noexcept { return engine_; }
+
+    /** Deferred destruction for objects the audio thread may still be reading. */
+    [[nodiscard]] ReleasePool& getReleasePool() noexcept { return releasePool_; }
 
     /** The engine's sample rate, or `fallback` while no device is running. */
     [[nodiscard]] double getSampleRateOr(double fallback) const noexcept;
@@ -94,6 +110,7 @@ private:
     TelemetrySnapshot lastTelemetry_;
     bool testToneEnabled_ = false;
 
+    ReleasePool releasePool_;
     std::unique_ptr<RenderGraph> pendingGraph_;
     std::uint64_t nextGraphSerial_ = 1;
     std::uint64_t inFlightGraphSerial_ = 0; ///< posted but not yet applied (0 = none)

@@ -77,7 +77,12 @@ void DojoApplication::initialise(const juce::String&)
     // The document: every change is compiled into a render graph and handed to the engine.
     project_ = std::make_unique<session::Project>(
         [controller = controller_.get()](std::unique_ptr<engine::RenderGraph> graph)
-        { controller->publishGraph(std::move(graph)); });
+        { controller->publishGraph(std::move(graph)); },
+        [](const juce::ValueTree&, double, int, juce::String& error) -> std::unique_ptr<juce::AudioProcessor>
+        {
+            error = "Devices are not available yet.";
+            return nullptr;
+        });
 
     if (options_.testTone)
         controller_->setTestToneEnabled(true);

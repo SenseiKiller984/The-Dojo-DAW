@@ -1,6 +1,8 @@
 add_library(dojo_session STATIC
     AudioAssetCache.cpp
     AudioAssetCache.h
+    DeviceManager.cpp
+    DeviceManager.h
     GraphCompiler.cpp
     GraphCompiler.h
     Project.cpp
