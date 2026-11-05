@@ -98,15 +98,65 @@ void selectAllClips(session::Session& session, EditorState& editor)
     editor.setSelectedClips(std::move(all));
 }
 
-juce::ValueTree addTrack(session::Session& session, EditorState& editor)
+juce::ValueTree addTrack(session::Session& session, EditorState& editor, session::TrackKind kind)
+{
+    const auto selected = session.findTrack(editor.getSelectedTrack());
+    int index = -1;
+    if (selected.isValid())
+    {
+        // Below the selected track and everything inside it (if it is a folder).
+        const auto tracks = session.getAllTracks();
+        index = session.indexOf(selected) + 1;
+        while (index < static_cast<int>(tracks.size()) && session::Session::isWithin(tracks[static_cast<std::size_t>(index)], selected))
+            ++index;
+        if (index >= static_cast<int>(tracks.size()))
+            index = -1;
+    }
+
+    const char* name = kind == session::TrackKind::instrument ? "Add Instrument Track"
+                       : kind == session::TrackKind::bus      ? "Add Bus"
+                                                              : "Add Audio Track";
+    session.beginTransaction(name);
+    auto t = session.addTrack(kind, {}, index);
+
+    // Keep the new track in the selected track's folder.
+    if (selected.isValid())
+        if (const auto folder = session::Session::getParentFolder(selected); folder.isValid() && t.getParent() != folder)
+            session.moveIntoFolder(t, folder);
+
+    editor.selectTrack(session::track::getId(t));
+    return t;
+}
+
+juce::ValueTree addInstrumentTrack(session::Session& session, EditorState& editor, const juce::String& instrumentType,
+                                   const juce::String& instrumentName)
+{
+    auto t = addTrack(session, editor, session::TrackKind::instrument);
+    session::track::setName(t, instrumentName, &session.getUndoManager());
+    session.addDevice(t, instrumentType, instrumentName);
+    return t;
+}
+
+juce::ValueTree addFolder(session::Session& session, EditorState& editor)
 {
     const auto selected = session.findTrack(editor.getSelectedTrack());
     const int index = selected.isValid() ? session.indexOf(selected) + 1 : -1;
+    session.beginTransaction("Add Folder");
+    auto folder = session.addFolder({}, index < session.getNumTracks() ? index : -1);
+    editor.selectTrack(session::track::getId(folder));
+    return folder;
+}
 
-    session.beginTransaction("Add Track");
-    auto t = session.addTrack({}, index);
-    editor.selectTrack(session::track::getId(t));
-    return t;
+juce::ValueTree groupSelectedTrackIntoFolder(session::Session& session, EditorState& editor)
+{
+    const auto selected = session.findTrack(editor.getSelectedTrack());
+    if (!selected.isValid())
+        return {};
+    session.beginTransaction("Group into Folder");
+    auto folder = session.groupIntoFolder({selected});
+    if (folder.isValid())
+        editor.selectTrack(session::track::getId(folder));
+    return folder;
 }
 
 bool deleteSelectedTrack(session::Session& session, EditorState& editor)

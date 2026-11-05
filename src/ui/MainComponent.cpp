@@ -23,15 +23,15 @@ juce::File defaultSessionFolder()
 }
 } // namespace
 
-MainComponent::MainComponent(session::Project& project, engine::EngineController& controller,
-                             juce::ApplicationCommandManager& commandManager)
-    : project_(project)
-    , controller_(controller)
-    , commandManager_(commandManager)
-    , transport_(controller, project.getSession(), editor_)
-    , browser_(project.getAssets().getWildcard())
-    , arranger_(project, controller, editor_)
-    , mixer_(project, controller, editor_)
+MainComponent::MainComponent(AppServices& services)
+    : services_(services)
+    , project_(services.project)
+    , controller_(services.controller)
+    , commandManager_(services.commands)
+    , transport_(services.controller, services.project.getSession(), editor_)
+    , browser_(services.project.getAssets().getWildcard())
+    , arranger_(services.project, services.controller, editor_)
+    , mixer_(services.project, services.controller, editor_)
     , vblank_(this, [this](double timestampSeconds) { onDisplayRefresh(timestampSeconds); })
 {
     setOpaque(true);

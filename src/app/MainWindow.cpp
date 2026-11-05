@@ -13,19 +13,19 @@ constexpr int kMinWidth = 1180;
 constexpr int kMinHeight = 680;
 } // namespace
 
-MainWindow::MainWindow(session::Project& project, engine::EngineController& controller,
-                       juce::ApplicationCommandManager& commandManager)
+MainWindow::MainWindow(ui::AppServices& services)
     : juce::DocumentWindow(version::kProductName, ui::theme::colour::windowBackground,
                            juce::DocumentWindow::allButtons)
-    , project_(project)
-    , menuModel_(commandManager)
+    , project_(services.project)
+    , menuModel_(services.commands)
 {
     setUsingNativeTitleBar(false);
     setTitleBarHeight(30);
     setResizable(true, false);
     setResizeLimits(kMinWidth, kMinHeight, 16384, 16384);
 
-    auto component = std::make_unique<ui::MainComponent>(project, controller, commandManager);
+    auto& commandManager = services.commands;
+    auto component = std::make_unique<ui::MainComponent>(services);
     mainComponent_ = component.get();
     setContentOwned(component.release(), false);
 

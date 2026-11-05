@@ -8,7 +8,11 @@
 #include "engine/AudioEngine.h"
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
+#include "plugins/PluginManager.h"
+#include "session/Exporter.h"
 #include "session/Project.h"
+#include "session/Recorder.h"
+#include "ui/AppServices.h"
 #include "ui/theme/DojoLookAndFeel.h"
 
 #include <cstdio>
@@ -75,24 +79,73 @@ void DojoApplication::initialise(const juce::String&)
     deviceHost_->getDeviceManager().addChangeListener(this); // persist later changes
     logStartupInformation(deviceError);
 
-    // The document: every change is compiled into a render graph and handed to the engine.
+    // Plug-ins: the scanner executable sits next to this one.
+    const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+#if JUCE_WINDOWS
+    const auto scanner = exe.getSiblingFile("dojo-plugin-scanner.exe");
+#else
+    const auto scanner = exe.getSiblingFile("dojo-plugin-scanner");
+#endif
+    plugins_ = std::make_unique<plugins::PluginManager>(
+        scanner, settings_->getUserSettings()->getFile().getSiblingFile("PluginList.xml"));
+
+    // The document: every change is compiled into a render graph and handed to the engine. Devices are
+    // created by type: native devices directly, hosted plug-ins through the plug-in manager.
     project_ = std::make_unique<session::Project>(
         [controller = controller_.get()](std::unique_ptr<engine::RenderGraph> graph)
         { controller->publishGraph(std::move(graph)); },
-        [](const juce::ValueTree& device, double, int, juce::String& error) -> std::unique_ptr<juce::AudioProcessor>
+        [pluginManager = plugins_.get()](const juce::ValueTree& device, double sampleRate, int blockSize,
+                                         juce::String& error) -> std::unique_ptr<juce::AudioProcessor>
         {
             const auto type = session::device::getType(device);
             if (devices::isBuiltinType(type))
                 return devices::createBuiltinDevice(type);
+
+            if (type == plugins::PluginManager::kDeviceType)
+            {
+                juce::PluginDescription description;
+                const auto xml = juce::parseXML(device.getProperty(session::ids::description).toString());
+                if (xml == nullptr || !description.loadFromXml(*xml))
+                {
+                    error = "The plug-in description is missing.";
+                    return nullptr;
+                }
+                return pluginManager->createInstance(description, sampleRate, blockSize, error);
+            }
+
             error = "Unknown device type: " + type;
             return nullptr;
         });
+
+    // Keep devices, clip stretchers and streaming in step with the audio device.
+    auto& devices = project_->getDevices();
+    devices.setPlayHead(engine_->getPlayHead());
+    project_->getAssets().setEpochSource([engine = engine_.get()] { return engine->getProcessEpoch(); });
+    engine_->onPrepare = [this](double sampleRate, int blockSize)
+    {
+        project_->getDevices().prepareAll(sampleRate, blockSize);
+        juce::MessageManager::callAsync([this, sampleRate, blockSize]
+                                        {
+                                            if (project_ != nullptr)
+                                                project_->getCompiler().setRenderFormat(sampleRate, blockSize);
+                                        });
+    };
+    if (engine_->isPrepared())
+    {
+        devices.prepareAll(engine_->getSampleRate(), engine_->getMaximumBlockSize());
+        project_->getCompiler().setRenderFormat(engine_->getSampleRate(), engine_->getMaximumBlockSize());
+    }
+
+    recorder_ = std::make_unique<session::Recorder>(*project_, *controller_);
+    exporter_ = std::make_unique<session::Exporter>(*project_, *controller_);
 
     if (options_.testTone)
         controller_->setTestToneEnabled(true);
 
     commandManager_ = std::make_unique<juce::ApplicationCommandManager>();
-    mainWindow_ = std::make_unique<MainWindow>(*project_, *controller_, *commandManager_);
+    services_ = std::make_unique<ui::AppServices>(ui::AppServices{*project_, *controller_, *commandManager_, *plugins_,
+                                                                   *recorder_, *exporter_, *settings_});
+    mainWindow_ = std::make_unique<MainWindow>(*services_);
 
     if (options_.sessionFile != juce::File())
         mainWindow_->getMainComponent().openSessionFile(options_.sessionFile);
@@ -122,11 +175,17 @@ void DojoApplication::shutdown()
 
     smokeTest_.reset();
     mainWindow_.reset(); // 1. UI goes first: nothing can post commands any more.
+    services_.reset();
     commandManager_.reset();
-    project_.reset(); //    The document; graphs already in the engine keep their audio alive.
-    controller_.reset();
+    exporter_.reset();
+    recorder_.reset();
+    if (engine_ != nullptr)
+        engine_->onPrepare = nullptr;
     deviceHost_.reset(); // 2. Stops the driver: no audio callback can be in flight after this.
-    engine_.reset();     // 3. Now the real-time state (and the last graphs) can be destroyed.
+    project_.reset(); //    The document; graphs still in the engine keep their devices alive.
+    plugins_.reset();
+    controller_.reset();
+    engine_.reset(); // 3. Now the real-time state (and the last graphs) can be destroyed.
 
     settings_.reset();
 

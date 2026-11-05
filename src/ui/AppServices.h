@@ -1,0 +1,26 @@
+#pragma once
+
+#include "engine/EngineController.h"
+#include "plugins/PluginManager.h"
+#include "session/Exporter.h"
+#include "session/Project.h"
+#include "session/Recorder.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+namespace dojo::ui
+{
+
+/** Everything the UI works with, owned by the application (see DojoApplication). */
+struct AppServices
+{
+    session::Project& project;
+    engine::EngineController& controller;
+    juce::ApplicationCommandManager& commands;
+    plugins::PluginManager& plugins;
+    session::Recorder& recorder;
+    session::Exporter& exporter;
+    juce::ApplicationProperties& settings;
+};
+
+} // namespace dojo::ui

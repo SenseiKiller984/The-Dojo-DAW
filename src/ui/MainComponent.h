@@ -2,6 +2,7 @@
 
 #include "engine/EngineController.h"
 #include "session/Project.h"
+#include "ui/AppServices.h"
 #include "ui/components/ArrangerView.h"
 #include "ui/components/BrowserPanel.h"
 #include "ui/components/MixerPanel.h"
@@ -46,8 +47,7 @@ class MainComponent final : public juce::Component,
                             private juce::ChangeListener
 {
 public:
-    MainComponent(session::Project& project, engine::EngineController& controller,
-                  juce::ApplicationCommandManager& commandManager);
+    explicit MainComponent(AppServices& services);
     ~MainComponent() override;
 
     /** Asks to save unsaved changes, then calls `quit` (unless the user cancels). */
@@ -90,6 +90,7 @@ private:
     void showMessage(const juce::String& title, const juce::String& message);
     void showShortcutHelp();
 
+    AppServices& services_;
     session::Project& project_;
     engine::EngineController& controller_;
     juce::ApplicationCommandManager& commandManager_;

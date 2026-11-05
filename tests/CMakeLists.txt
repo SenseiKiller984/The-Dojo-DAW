@@ -14,6 +14,7 @@ add_executable(dojo_tests
     AudioEngineTests.cpp
     DeviceTests.cpp
     EngineGraphTests.cpp
+    PluginTests.cpp
     RecordExportTests.cpp
     EngineCommandTests.cpp
     MusicalTimeTests.cpp
@@ -30,7 +31,21 @@ endif()
 target_compile_definitions(dojo_tests PRIVATE
     DOJO_EXPECT_ALLOCATION_TRAP=$<BOOL:${DOJO_ALLOCATION_TRAP_COMPATIBLE}>)
 
-target_link_libraries(dojo_tests PRIVATE dojo::session Catch2::Catch2WithMain)
+target_link_libraries(dojo_tests PRIVATE dojo::session dojo::plugins Catch2::Catch2WithMain)
+
+# A real CLAP binary (two plug-ins) for the hosting tests, and the out-of-process scanner.
+add_library(dojo_test_clap MODULE clap/DojoTestPlugins.cpp)
+target_link_libraries(dojo_test_clap PRIVATE dojo::clap)
+set_target_properties(dojo_test_clap PROPERTIES
+    PREFIX ""
+    SUFFIX ".clap"
+    OUTPUT_NAME "DojoTestPlugins"
+    CXX_VISIBILITY_PRESET hidden
+    FOLDER "Tests")
+add_dependencies(dojo_tests dojo_test_clap dojo-plugin-scanner)
+target_compile_definitions(dojo_tests PRIVATE
+    DOJO_TEST_CLAP_PATH="$<TARGET_FILE:dojo_test_clap>"
+    DOJO_SCANNER_PATH="$<TARGET_FILE:dojo-plugin-scanner>")
 set_target_properties(dojo_tests PROPERTIES FOLDER "Tests")
 
 catch_discover_tests(dojo_tests DISCOVERY_MODE PRE_TEST)

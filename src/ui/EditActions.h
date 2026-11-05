@@ -23,8 +23,19 @@ bool splitAt(session::Session& session, EditorState& editor, double seconds);
 /** Selects every clip in the session. */
 void selectAllClips(session::Session& session, EditorState& editor);
 
-/** Adds a track below the selected one (or at the end) and selects it. */
-juce::ValueTree addTrack(session::Session& session, EditorState& editor);
+/** Adds a track of `kind` below the selected one (or at the end) and selects it. */
+juce::ValueTree addTrack(session::Session& session, EditorState& editor,
+                         session::TrackKind kind = session::TrackKind::audio);
+
+/** Adds an instrument track with `instrumentType` (e.g. "builtin:drumrack") loaded, and selects it. */
+juce::ValueTree addInstrumentTrack(session::Session& session, EditorState& editor, const juce::String& instrumentType,
+                                   const juce::String& instrumentName);
+
+/** Adds an empty folder below the selected track and selects it. */
+juce::ValueTree addFolder(session::Session& session, EditorState& editor);
+
+/** Puts the selected track into a new folder. */
+juce::ValueTree groupSelectedTrackIntoFolder(session::Session& session, EditorState& editor);
 
 /** Deletes the selected track (with its clips). Returns false if no track is selected. */
 bool deleteSelectedTrack(session::Session& session, EditorState& editor);

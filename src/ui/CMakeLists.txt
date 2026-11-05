@@ -1,4 +1,5 @@
 add_library(dojo_ui STATIC
+    AppServices.h
     Commands.h
     EditActions.cpp
     EditActions.h
@@ -28,7 +29,7 @@ add_library(dojo_ui STATIC
 add_library(dojo::ui ALIAS dojo_ui)
 
 target_link_libraries(dojo_ui
-    PUBLIC  dojo::session
+    PUBLIC  dojo::session dojo::plugins
     PRIVATE dojo::resources)
 dojo_apply_project_warnings(dojo_ui)
 set_target_properties(dojo_ui PROPERTIES FOLDER "Dojo")

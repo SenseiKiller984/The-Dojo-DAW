@@ -91,7 +91,7 @@ void Sampler::readExtraState(const juce::XmlElement& xml)
 
     juce::String error;
     if (!loadSample(juce::File(path), error))
-        DBG("Sampler: " << error);
+        juce::Logger::writeToLog("Sampler: " + error);
 }
 
 void Sampler::noteOn(int note, float velocity) noexcept

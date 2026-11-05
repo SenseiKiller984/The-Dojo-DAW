@@ -1,7 +1,6 @@
 #pragma once
 
-#include "engine/EngineController.h"
-#include "session/Project.h"
+#include "ui/AppServices.h"
 #include "ui/MainComponent.h"
 #include "ui/MainMenuModel.h"
 
@@ -18,8 +17,7 @@ namespace dojo::app
 class MainWindow final : public juce::DocumentWindow
 {
 public:
-    MainWindow(session::Project& project, engine::EngineController& controller,
-               juce::ApplicationCommandManager& commandManager);
+    explicit MainWindow(ui::AppServices& services);
     ~MainWindow() override;
 
     void closeButtonPressed() override;

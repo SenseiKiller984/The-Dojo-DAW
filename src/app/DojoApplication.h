@@ -16,11 +16,19 @@ class EngineController;
 namespace dojo::session
 {
 class Project;
+class Recorder;
+class Exporter;
 } // namespace dojo::session
+
+namespace dojo::plugins
+{
+class PluginManager;
+} // namespace dojo::plugins
 
 namespace dojo::ui
 {
 class DojoLookAndFeel;
+struct AppServices;
 } // namespace dojo::ui
 
 namespace dojo::app
@@ -40,7 +48,9 @@ class SmokeTest;
         AudioEngine        real-time state; outlives everything that can call into it
         AudioDeviceHost    driver + callback adapter -> AudioEngine::process (audio thread entry)
         EngineController   the UI's message-thread façade over engine + device host
-        Project            the document (session, decoded audio, graph compiler -> controller)
+        PluginManager      known plug-ins (VST3, CLAP), out-of-process scanning, instantiation
+        Project            the document (session, decoded audio, devices, graph compiler -> controller)
+        Recorder/Exporter  recording onto armed tracks; offline / real-time bounces
         MainWindow         the UI
 
     Shutdown tears the UI and the document down first, then stops the audio device (after which no
@@ -73,8 +83,12 @@ private:
     std::unique_ptr<engine::AudioEngine> engine_;
     std::unique_ptr<engine::AudioDeviceHost> deviceHost_;
     std::unique_ptr<engine::EngineController> controller_;
+    std::unique_ptr<plugins::PluginManager> plugins_;
     std::unique_ptr<session::Project> project_;
+    std::unique_ptr<session::Recorder> recorder_;
+    std::unique_ptr<session::Exporter> exporter_;
     std::unique_ptr<juce::ApplicationCommandManager> commandManager_;
+    std::unique_ptr<ui::AppServices> services_;
     std::unique_ptr<MainWindow> mainWindow_;
     std::unique_ptr<SmokeTest> smokeTest_;
 };
