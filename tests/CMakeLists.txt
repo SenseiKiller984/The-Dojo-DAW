@@ -8,8 +8,11 @@ list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 
 add_executable(dojo_tests
+    TestAudio.h
     TestSupport.h
     AudioEngineTests.cpp
+    DeviceTests.cpp
+    EngineGraphTests.cpp
     EngineCommandTests.cpp
     MusicalTimeTests.cpp
     RenderGraphTests.cpp

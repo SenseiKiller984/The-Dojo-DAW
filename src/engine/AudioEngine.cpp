@@ -171,21 +171,26 @@ void AudioEngine::releaseRetiredGraphs() noexcept
 
 bool AudioEngine::beginOfflineRender(int timeoutMs)
 {
-    liveAcknowledgedOffline_.store(false, std::memory_order_release);
-    offlineRequested_.store(true, std::memory_order_release);
+    // Dekker-style hand-over (sequentially consistent): either a live callback that is starting now
+    // sees the request and bails out, or we see it running and wait for it to finish.
+    offlineRequested_.store(true);
 
-    bool acknowledged = !isPrepared();
     const auto deadline = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(timeoutMs);
-
-    while (!acknowledged && juce::Time::getMillisecondCounter() < deadline)
+    bool idle = !liveCallbackActive_.load();
+    while (!idle && juce::Time::getMillisecondCounter() < deadline)
     {
-        acknowledged = liveAcknowledgedOffline_.load(std::memory_order_acquire) || !isPrepared();
-        if (!acknowledged)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        idle = !liveCallbackActive_.load();
+    }
+
+    if (!idle)
+    {
+        offlineRequested_.store(false);
+        return false;
     }
 
     offlineActive_.store(true, std::memory_order_release);
-    return acknowledged;
+    return true;
 }
 
 void AudioEngine::renderOffline(float* const* outputs, int numOutputs, int numSamples) noexcept
@@ -227,22 +232,25 @@ void AudioEngine::process(const float* const* inputs, int numInputs, float* cons
     if (numSamples <= 0)
         return;
 
-    if (offlineRequested_.load(std::memory_order_acquire))
+    liveCallbackActive_.store(true);
+    if (offlineRequested_.load())
     {
         // An export thread is rendering: stay silent and keep our hands off all engine state.
+        liveCallbackActive_.store(false);
         clearOutputs(outputs, numOutputs, 0, numSamples);
-        liveAcknowledgedOffline_.store(true, std::memory_order_release);
         return;
     }
 
     if (!prepared_.load(std::memory_order_acquire))
     {
+        liveCallbackActive_.store(false);
         clearOutputs(outputs, numOutputs, 0, numSamples);
         return;
     }
 
     renderBlock(inputs, numInputs, outputs, numOutputs, numSamples);
     publishLoad(Clock::now() - callbackStart, numSamples);
+    liveCallbackActive_.store(false);
 }
 
 void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
@@ -578,8 +586,17 @@ void AudioEngine::processTrack(int graphIndex) noexcept
     }
 
     if (track.needsPreFaderCopy)
+    {
+        // Pre-fader sends ignore the fader, but not mute/solo (a muted track must not leak into a
+        // reverb bus).
         for (int ch = 0; ch < 2; ++ch)
-            slot.pre.copyFrom(ch, 0, slot.main, ch, 0, numSamples);
+        {
+            if (track.audible)
+                slot.pre.copyFrom(ch, 0, slot.main, ch, 0, numSamples);
+            else
+                slot.pre.clear(ch, 0, numSamples);
+        }
+    }
 
     applyFader(track, slot);
     applyCompensationDelay(track, slot);

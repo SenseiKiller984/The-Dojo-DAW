@@ -257,3 +257,199 @@ TEST_CASE("Track slots stay stable and are recycled", "[session][graph]")
     CHECK(builder.getSlot(track::getId(a)) == -1);
     CHECK(builder.getSlot(track::getId(c)) == slotA); // freed slot reused by the new track
 }
+
+//==================================================================================================
+// Session v2: folders, devices, sends, automation, MIDI, persistence
+
+#include "devices/DeviceRegistry.h"
+#include "devices/Dynamics.h"
+#include "session/DeviceManager.h"
+
+namespace
+{
+std::unique_ptr<juce::AudioProcessor> makeBuiltin(const juce::ValueTree& d, double, int, juce::String&)
+{
+    return dojo::devices::createBuiltinDevice(device::getType(d));
+}
+} // namespace
+
+TEST_CASE("Folders nest tracks and track indices follow the arranger order", "[session][folder]")
+{
+    Session session;
+    auto a = session.addTrack("A");
+    auto b = session.addTrack("B");
+    auto c = session.addTrack("C");
+
+    auto folder = session.groupIntoFolder({a, b}, "Drums");
+    REQUIRE(folder.isValid());
+    CHECK(track::isFolder(folder));
+    CHECK(track::getKind(folder) == TrackKind::bus);
+    REQUIRE(session.getNumTracks() == 4);
+    CHECK(session.getTrack(0) == folder);
+    CHECK(session.getTrack(1) == a);
+    CHECK(session.getTrack(2) == b);
+    CHECK(session.getTrack(3) == c);
+    CHECK(Session::getDepth(a) == 1);
+    CHECK(session.getDestination(a) == folder);
+
+    // Moving C in front of B puts it inside the folder.
+    session.moveTrack(3, 2);
+    CHECK(Session::getParentFolder(c) == folder);
+    CHECK(session.indexOf(c) == 2);
+
+    track::setCollapsed(folder, true, nullptr);
+    CHECK_FALSE(Session::isVisibleInArranger(a));
+
+    CHECK(session.moveIntoFolder(c, {}));
+    CHECK_FALSE(Session::getParentFolder(c).isValid());
+    CHECK_FALSE(session.moveIntoFolder(folder, folder)); // not into itself
+
+    session.beginTransaction("Delete folder");
+    session.removeTrack(folder);
+    CHECK(session.getNumTracks() == 1); // the folder took its children with it
+    session.getUndoManager().undo();
+    CHECK(session.getNumTracks() == 4);
+}
+
+TEST_CASE("Removing a device keeps its state for undo", "[session][devices]")
+{
+    Session session;
+    DeviceManager manager(session, makeBuiltin);
+    auto t = session.addTrack();
+
+    session.beginTransaction("Add");
+    auto d = session.addDevice(t, "builtin:compressor", "Compressor");
+    auto node = manager.getNode(d);
+    REQUIRE(node != nullptr);
+    auto* threshold = dynamic_cast<juce::RangedAudioParameter*>(node->getProcessor().getParameters()[0]);
+    threshold->setValueNotifyingHost(threshold->convertTo0to1(-42.0f));
+
+    session.beginTransaction("Remove");
+    session.removeDevice(d);
+    CHECK(Session::getDevices(t).empty());
+    manager.purgeUnused();
+    CHECK(manager.findNode(device::getId(d)) == nullptr);
+
+    session.getUndoManager().undo();
+    auto restored = Session::getDevices(t);
+    REQUIRE(restored.size() == 1);
+    auto again = manager.getNode(restored[0]);
+    REQUIRE(again != nullptr);
+    CHECK(again != node); // a fresh instance...
+    auto* restoredThreshold = dynamic_cast<juce::RangedAudioParameter*>(again->getProcessor().getParameters()[0]);
+    CHECK_THAT(restoredThreshold->convertFrom0to1(restoredThreshold->getValue()), WithinAbs(-42.0, 0.05)); // ...same state
+}
+
+TEST_CASE("Automation lanes keep their points sorted and parse their targets", "[session][automation]")
+{
+    Session session;
+    auto t = session.addTrack();
+    auto lane = session.getAutomation(t, automation::volumeTarget(), true, 0.5);
+    REQUIRE(lane.isValid());
+    CHECK(session.getAutomation(t, automation::volumeTarget(), false) == lane);
+
+    session.addAutomationPoint(lane, 2.0, 1.0);
+    session.addAutomationPoint(lane, 1.0, 0.0);
+    const auto curve = automation::toCurve(lane);
+    REQUIRE(curve.getPoints().size() == 3);
+    CHECK(curve.getPoints()[1].time == 1.0);
+    CHECK_THAT(curve.valueAt(1.0), WithinAbs(0.0, 1e-9));
+
+    // A point can't be dragged past its neighbours.
+    auto middle = lane.getChild(1);
+    session.moveAutomationPoint(middle, 5.0, 0.3);
+    CHECK(static_cast<double>(middle.getProperty(ids::time)) == 2.0);
+
+    std::uint32_t deviceId = 0;
+    int index = 0;
+    CHECK(automation::parseParameterTarget(automation::parameterTarget(17, 3), deviceId, index));
+    CHECK(deviceId == 17);
+    CHECK(index == 3);
+    CHECK_FALSE(automation::parseParameterTarget("volume", deviceId, index));
+}
+
+TEST_CASE("MIDI notes quantise to the grid with strength", "[session][midi]")
+{
+    Session session;
+    auto t = session.addTrack(TrackKind::instrument, "Keys");
+    auto c = session.addMidiClip(t, 0.0, 4.0);
+    auto n1 = session.addNote(c, 0.1, 0.4, 60);
+    auto n2 = session.addNote(c, 1.2, 0.2, 64);
+
+    session.quantise(c, {}, 0.25, 1.0, false);
+    CHECK_THAT(note::getStart(n1), WithinAbs(0.0, 1e-9));
+    CHECK_THAT(note::getLength(n1), WithinAbs(0.4, 1e-9));
+    CHECK_THAT(note::getStart(n2), WithinAbs(1.25, 1e-9));
+
+    auto n3 = session.addNote(c, 2.1, 0.3, 67);
+    session.quantise(c, {n3}, 0.5, 0.5, true);
+    CHECK_THAT(note::getStart(n3), WithinAbs(2.05, 1e-9)); // half-way to 2.0
+
+    CHECK(Session::findNoteAt(c, 1.3, 64) == n2);
+    CHECK_FALSE(Session::findNoteAt(c, 1.3, 65).isValid());
+
+    // Splitting a MIDI clip keeps the content aligned.
+    auto right = session.splitClip(c, 1.0); // 1 s = 2 beats at 120 bpm
+    REQUIRE(right.isValid());
+    CHECK_THAT(clip::getOffset(right), WithinAbs(2.0, 1e-9));
+}
+
+TEST_CASE("Version 2 sessions round-trip folders, devices, sends and automation", "[session][file]")
+{
+    TempFolder temp;
+    const auto file = temp.dir.getChildFile("song.dojo");
+
+    {
+        Session session;
+        auto a = session.addTrack("Kick");
+        auto keys = session.addTrack(TrackKind::instrument, "Keys");
+        auto fx = session.addTrack(TrackKind::bus, "FX");
+        session.groupIntoFolder({a}, "Drums");
+        session.addDevice(keys, "builtin:sampler", "Sampler");
+        session.addSend(a, fx, -9.0, true);
+        session.getAutomation(a, automation::panTarget(), true, 0.2);
+        auto c = session.addMidiClip(keys, 1.0, 2.0);
+        session.addNote(c, 0.5, 1.0, 72, 0.6f);
+        session.addDevice(session.getMaster(), "builtin:limiter", "Limiter");
+        session.setLoop(true, 2.0, 6.0);
+        session.setSpeed(1.5);
+        REQUIRE(session.save(file).wasOk());
+    }
+
+    Session loaded;
+    REQUIRE(loaded.load(file).wasOk());
+    REQUIRE(loaded.getNumTracks() == 4);
+    CHECK(track::isFolder(loaded.getTrack(0)));
+    CHECK(Session::getParentFolder(loaded.getTrack(1)) == loaded.getTrack(0));
+    const auto keys = loaded.getTrack(2);
+    CHECK(track::getKind(keys) == TrackKind::instrument);
+    CHECK(Session::getDevices(keys).size() == 1);
+    CHECK(Session::getSends(loaded.getTrack(1)).size() == 1);
+    CHECK(send::isPreFader(Session::getSends(loaded.getTrack(1))[0]));
+    CHECK(Session::getDevices(loaded.getMaster()).size() == 1);
+    CHECK(loaded.isLoopEnabled());
+    CHECK(loaded.getSpeed() == 1.5);
+    const auto midi = keys.getChildWithName(ids::midiClip);
+    REQUIRE(midi.isValid());
+    CHECK(note::getNote(midi.getChildWithName(ids::note)) == 72);
+}
+
+TEST_CASE("Version 1 sessions still load", "[session][file]")
+{
+    TempFolder temp;
+    const auto file = temp.dir.getChildFile("old.dojo");
+    file.replaceWithText(R"(<?xml version="1.0" encoding="UTF-8"?>
+<DOJO_SESSION version="1" tempo="98.0" masterVolumeDb="-3.0" nextId="4">
+  <TRACK id="1" name="Old" colour="ffe0533d" volumeDb="0.0" pan="0.0" muted="0" soloed="0" phaseInverted="0">
+    <CLIP id="2" name="a" file="/nowhere/a.wav" start="1.0" length="2.0" offset="0.0" fadeIn="0.0" fadeOut="0.0" gainDb="0.0"/>
+  </TRACK>
+</DOJO_SESSION>)");
+
+    Session session;
+    REQUIRE(session.load(file).wasOk());
+    REQUIRE(session.getNumTracks() == 1);
+    CHECK(track::getKind(session.getTrack(0)) == TrackKind::audio);
+    CHECK(session.getMaster().isValid());
+    CHECK(session.getTempo() == 98.0);
+    CHECK(session.getSpeed() == 1.0);
+}

@@ -130,7 +130,8 @@ public:
     // Offline rendering (export thread)
 
     /** Pauses live processing (the device then outputs silence) and makes the calling thread the
-        renderer. Returns false if the live callback did not acknowledge within `timeoutMs`. */
+        renderer. Waits for a live callback that is in progress to finish; returns false (and does
+        not pause) if it does not finish within `timeoutMs`. */
     bool beginOfflineRender(int timeoutMs = 2000);
 
     /** Renders the next block exactly like the live callback would. Real-time safe. */
@@ -216,7 +217,7 @@ private:
     std::atomic<std::uint64_t> epoch_{0};
     std::atomic<bool> offlineRequested_{false};
     std::atomic<bool> offlineActive_{false};
-    std::atomic<bool> liveAcknowledgedOffline_{false};
+    std::atomic<bool> liveCallbackActive_{false};
 
     // --- Configuration: written by prepare(), read-only while rendering ---------------------------
     double sampleRate_ = 0.0;

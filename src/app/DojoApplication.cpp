@@ -4,6 +4,7 @@
 #include "app/SmokeTest.h"
 #include "core/rt/RealtimeGuard.h"
 #include "core/Version.h"
+#include "devices/DeviceRegistry.h"
 #include "engine/AudioEngine.h"
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
@@ -78,9 +79,12 @@ void DojoApplication::initialise(const juce::String&)
     project_ = std::make_unique<session::Project>(
         [controller = controller_.get()](std::unique_ptr<engine::RenderGraph> graph)
         { controller->publishGraph(std::move(graph)); },
-        [](const juce::ValueTree&, double, int, juce::String& error) -> std::unique_ptr<juce::AudioProcessor>
+        [](const juce::ValueTree& device, double, int, juce::String& error) -> std::unique_ptr<juce::AudioProcessor>
         {
-            error = "Devices are not available yet.";
+            const auto type = session::device::getType(device);
+            if (devices::isBuiltinType(type))
+                return devices::createBuiltinDevice(type);
+            error = "Unknown device type: " + type;
             return nullptr;
         });
 
