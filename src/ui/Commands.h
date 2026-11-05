@@ -34,6 +34,21 @@ enum : juce::CommandID
     audioSettings,
     toggleTestTone,
     showShortcuts,
+    record,
+    toggleLoop,
+    exportAudio,
+    addInstrumentTrack,
+    addBusTrack,
+    addFolder,
+    groupIntoFolder,
+    showMixer,
+    showDevices,
+    showEditor,
+    scanPlugins,
+    openDemo,
+    cutClips,
+    copyClips,
+    pasteClips,
 };
 
 namespace categories

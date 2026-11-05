@@ -1,0 +1,139 @@
+#include "ui/DeviceActions.h"
+
+#include "devices/DeviceRegistry.h"
+#include "ui/EditActions.h"
+
+#include <map>
+
+namespace dojo::ui::deviceActions
+{
+namespace
+{
+constexpr const char* kPrefix = "DojoDevice:";
+constexpr const char* kPluginPrefix = "DojoDevice:plugin:";
+} // namespace
+
+std::vector<DeviceChoice> getNativeChoices()
+{
+    std::vector<DeviceChoice> choices;
+    for (const auto& info : devices::getBuiltinDevices())
+        choices.push_back({info.type, info.name, info.category, info.isInstrument, {}, {}});
+    return choices;
+}
+
+std::vector<DeviceChoice> getPluginChoices(plugins::PluginManager& plugins)
+{
+    std::vector<DeviceChoice> choices;
+    for (const auto& description : plugins.getKnownPlugins().getTypes())
+    {
+        DeviceChoice choice;
+        choice.type = plugins::PluginManager::kDeviceType;
+        choice.name = description.name;
+        choice.category = description.manufacturerName.isNotEmpty() ? description.manufacturerName : description.pluginFormatName;
+        choice.instrument = description.isInstrument;
+        if (auto xml = description.createXml())
+            choice.descriptionXml = xml->toString(juce::XmlElement::TextFormat().singleLine());
+        choice.identifier = description.createIdentifierString();
+        choices.push_back(std::move(choice));
+    }
+    std::sort(choices.begin(), choices.end(), [](const auto& a, const auto& b) { return a.name.compareIgnoreCase(b.name) < 0; });
+    return choices;
+}
+
+juce::String toDragDescription(const DeviceChoice& choice)
+{
+    if (choice.type == plugins::PluginManager::kDeviceType)
+        return juce::String(kPluginPrefix) + choice.identifier;
+    return juce::String(kPrefix) + choice.type;
+}
+
+std::optional<DeviceChoice> fromDragDescription(const juce::String& description, plugins::PluginManager& plugins)
+{
+    if (description.startsWith(kPluginPrefix))
+    {
+        const auto identifier = description.fromFirstOccurrenceOf(kPluginPrefix, false, false);
+        for (const auto& choice : getPluginChoices(plugins))
+            if (choice.identifier == identifier)
+                return choice;
+        return std::nullopt;
+    }
+
+    if (description.startsWith(kPrefix))
+    {
+        const auto type = description.fromFirstOccurrenceOf(kPrefix, false, false);
+        for (const auto& choice : getNativeChoices())
+            if (choice.type == type)
+                return choice;
+    }
+    return std::nullopt;
+}
+
+juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice)
+{
+    const bool isMaster = owner.hasType(session::ids::master);
+
+    if (!isMaster)
+    {
+        const bool ownerIsInstrumentTrack = owner.isValid() && session::track::getKind(owner) == session::TrackKind::instrument;
+        if (choice.instrument && !ownerIsInstrumentTrack)
+        {
+            owner = actions::addTrack(session, editor, session::TrackKind::instrument);
+            session::track::setName(owner, choice.name, &session.getUndoManager());
+        }
+        else if (!owner.isValid())
+        {
+            owner = actions::addTrack(session, editor, session::TrackKind::audio);
+        }
+        else
+        {
+            session.beginTransaction("Add " + choice.name);
+        }
+        editor.selectTrack(session::track::getId(owner));
+    }
+    else
+    {
+        session.beginTransaction("Add " + choice.name);
+    }
+
+    // Instruments lead the chain.
+    int index = -1;
+    if (choice.instrument)
+        index = 0;
+
+    auto device = session.addDevice(owner, choice.type, choice.name, index);
+    if (choice.descriptionXml.isNotEmpty())
+        device.setProperty(session::ids::description, choice.descriptionXml, &session.getUndoManager());
+    return device;
+}
+
+void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, bool includeInstruments,
+                        std::function<void(const DeviceChoice&)> onChosen)
+{
+    std::map<juce::String, juce::PopupMenu> nativeByCategory;
+    for (const auto& choice : getNativeChoices())
+    {
+        if (choice.instrument && !includeInstruments)
+            continue;
+        nativeByCategory[choice.category].addItem(choice.name, [onChosen, choice] { onChosen(choice); });
+    }
+
+    menu.addSectionHeader("The Dojo");
+    for (auto& [category, sub] : nativeByCategory)
+        menu.addSubMenu(category, sub);
+
+    std::map<juce::String, juce::PopupMenu> pluginsByVendor;
+    for (const auto& choice : getPluginChoices(plugins))
+    {
+        if (choice.instrument && !includeInstruments)
+            continue;
+        pluginsByVendor[choice.category].addItem(choice.name, [onChosen, choice] { onChosen(choice); });
+    }
+
+    menu.addSectionHeader("Plug-ins");
+    if (pluginsByVendor.empty())
+        menu.addItem("No plug-ins found - scan in the browser's Plug-ins tab", false, false, [] {});
+    for (auto& [vendor, sub] : pluginsByVendor)
+        menu.addSubMenu(vendor, sub);
+}
+
+} // namespace dojo::ui::deviceActions

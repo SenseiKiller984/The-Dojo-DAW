@@ -20,6 +20,19 @@ bool duplicateSelectedClips(session::Session& session, EditorState& editor);
 */
 bool splitAt(session::Session& session, EditorState& editor, double seconds);
 
+/** Copies the selected clips to the editor's clipboard. Returns false if nothing was selected. */
+bool copySelectedClips(session::Session& session, EditorState& editor);
+
+/** Copies, then deletes the selected clips (one undo step). */
+bool cutSelectedClips(session::Session& session, EditorState& editor);
+
+/**
+    Pastes the clipboard at `seconds`: the earliest clip lands there and the rest keep their relative
+    positions; the first clip's track becomes the selected track (others keep their track offsets,
+    falling back to the selected track where kinds don't match). Selects the pasted clips.
+*/
+bool pasteClips(session::Session& session, EditorState& editor, double seconds);
+
 /** Selects every clip in the session. */
 void selectAllClips(session::Session& session, EditorState& editor);
 

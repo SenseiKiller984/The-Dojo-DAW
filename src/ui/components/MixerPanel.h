@@ -7,6 +7,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -14,15 +15,18 @@ namespace dojo::ui
 {
 
 /**
-    One track's channel strip: name, pan, mute/solo/phase, fader and meter. Every control edits the
-    session (undoably) and follows external changes such as undo or the arranger's M/S buttons.
+    One track's channel strip: name, input (audio tracks), output routing, record arm and input
+    monitoring, sends (one level slider per send, "+" adds one), the device count (opens the
+    Devices panel), pan, mute/solo/phase, fader and meter. Every control edits the session
+    (undoably) and follows external changes such as undo or the arranger's buttons.
 */
 class ChannelStrip final : public juce::Component,
                            private juce::ValueTree::Listener,
                            private EditorState::Listener
 {
 public:
-    ChannelStrip(session::Session& session, EditorState& editor, juce::ValueTree track);
+    ChannelStrip(session::Session& session, EditorState& editor, juce::ValueTree track,
+                 std::function<juce::StringArray()> inputNames, std::function<void()> showDevices);
     ~ChannelStrip() override;
 
     [[nodiscard]] const juce::ValueTree& getTrack() const noexcept { return track_; }
@@ -33,13 +37,34 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
 
 private:
+    struct SendControl
+    {
+        juce::ValueTree send;
+        juce::Slider level;
+    };
+
     void syncFromModel();
+    void rebuildRouting();
+    void rebuildSends();
+    void showSendMenu();
     void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier&) override;
+    void valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child) override;
+    void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree& child, int) override;
     void editorStateChanged() override { repaint(); }
 
     session::Session& session_;
     EditorState& editor_;
     juce::ValueTree track_;
+    std::function<juce::StringArray()> inputNames_;
+    std::function<void()> showDevices_;
+    juce::ComboBox input_;
+    juce::ComboBox output_;
+    std::vector<std::uint32_t> outputIds_;
+    juce::TextButton arm_;
+    juce::TextButton monitor_;
+    juce::TextButton devices_;
+    juce::TextButton addSend_;
+    std::vector<std::unique_ptr<SendControl>> sends_;
 
     juce::Slider pan_;
     juce::TextButton mute_;
@@ -57,7 +82,7 @@ private:
 class MasterStrip final : public juce::Component, private juce::ValueTree::Listener
 {
 public:
-    explicit MasterStrip(session::Session& session);
+    MasterStrip(session::Session& session, EditorState& editor, std::function<void()> showDevices);
     ~MasterStrip() override;
 
     void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
@@ -70,6 +95,9 @@ private:
     void valueTreeRedirected(juce::ValueTree&) override;
 
     session::Session& session_;
+    EditorState& editor_;
+    std::function<void()> showDevices_;
+    juce::TextButton devices_;
     juce::Slider fader_;
     LevelMeter meter_;
     juce::Rectangle<int> scaleArea_;
@@ -80,10 +108,13 @@ private:
 };
 
 /** Bottom mixer panel: a scrollable row of channel strips and the master strip. */
-class MixerPanel final : public juce::Component, private juce::ValueTree::Listener
+class MixerPanel final : public juce::Component, private juce::ValueTree::Listener, private juce::AsyncUpdater
 {
 public:
     MixerPanel(session::Project& project, engine::EngineController& controller, EditorState& editor);
+
+    /** Shows the Devices panel (a strip's FX button was clicked). */
+    std::function<void()> onShowDevices;
     ~MixerPanel() override;
 
     /** Pulls every track's post-fader peaks from the engine and feeds the meters. Once per UI frame. */
@@ -95,10 +126,11 @@ public:
 private:
     void rebuildStrips();
     void layoutStrips();
-    void valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree&) override;
-    void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree&, int) override;
+    void valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child) override;
+    void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree& child, int) override;
     void valueTreeChildOrderChanged(juce::ValueTree& parent, int, int) override;
     void valueTreeRedirected(juce::ValueTree&) override { rebuildStrips(); }
+    void handleAsyncUpdate() override { rebuildStrips(); }
 
     session::Project& project_;
     engine::EngineController& controller_;

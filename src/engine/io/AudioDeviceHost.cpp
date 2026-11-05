@@ -90,23 +90,23 @@ AudioDeviceHost::AudioDeviceHost(AudioEngine& engine)
 
 void AudioDeviceHost::refreshMidiInputs()
 {
+    midiInputNames_.clear();
     for (const auto& input : juce::MidiInput::getAvailableDevices())
     {
-        if (knownMidiInputs_.contains(input.identifier))
-            continue;
-        knownMidiInputs_.add(input.identifier);
-        deviceManager_.setMidiInputDeviceEnabled(input.identifier, true);
-        juce::Logger::writeToLog("MIDI input enabled: " + input.name);
+        if (!knownMidiInputs_.contains(input.identifier))
+        {
+            knownMidiInputs_.add(input.identifier);
+            deviceManager_.setMidiInputDeviceEnabled(input.identifier, true);
+            juce::Logger::writeToLog("MIDI input enabled: " + input.name);
+        }
+        if (deviceManager_.isMidiInputDeviceEnabled(input.identifier))
+            midiInputNames_.add(input.name);
     }
 }
 
 juce::StringArray AudioDeviceHost::getMidiInputNames() const
 {
-    juce::StringArray names;
-    for (const auto& input : juce::MidiInput::getAvailableDevices())
-        if (deviceManager_.isMidiInputDeviceEnabled(input.identifier))
-            names.add(input.name);
-    return names;
+    return midiInputNames_; // refreshed on hot-plug (enumerating devices can be slow)
 }
 
 std::uint64_t AudioDeviceHost::getMidiMessageCount() const noexcept

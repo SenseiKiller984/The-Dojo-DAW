@@ -20,6 +20,8 @@ CommandLineOptions CommandLineOptions::parse(const juce::StringArray& arguments)
             options.testTone = true;
         else if (argument == "--play")
             options.play = true;
+        else if (argument == "--demo")
+            options.demo = true;
         else if (argument == "--version")
             options.printVersion = true;
         else if (argument == "--smoke-test")

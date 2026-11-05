@@ -24,74 +24,76 @@ void paintReadoutBox(juce::Graphics& g, juce::Rectangle<int> area)
 } // namespace
 
 //==================================================================================================
-/** Tempo readout that can be dragged or typed into. Edits are undoable. */
-class TransportBar::TempoField final : public juce::Component,
+/** A numeric readout that can be dragged or typed into, bound to a session property. Undoable. */
+class TransportBar::ValueField final : public juce::Component,
                                        public juce::SettableTooltipClient,
                                        private juce::ValueTree::Listener
 {
 public:
-    explicit TempoField(session::Session& session)
-        : session_(session)
+    struct Spec
     {
-        setTooltip("Tempo. Drag up/down to change (Shift: fine), double-click to type.");
-        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        juce::String caption;
+        juce::Identifier property;
+        std::function<double()> get;
+        std::function<void(double)> set;
+        std::function<juce::String(double)> format;
+        double perPixel = 0.25;
+        double finePerPixel = 0.01;
+        double minimum = 0.0;
+        double maximum = 1.0;
+        int decimals = 2;
+        juce::String undoName;
+        juce::String allowedCharacters = "0123456789.-";
+    };
 
+    ValueField(session::Session& session, Spec spec)
+        : session_(session)
+        , spec_(std::move(spec))
+    {
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
         editor_.setJustification(juce::Justification::centred);
         editor_.setFont(theme::mono(16.0f));
-        editor_.setInputRestrictions(7, "0123456789.");
-        editor_.onReturnKey = [this]
-        {
-            commitText();
-        };
-        editor_.onEscapeKey = [this]
-        {
-            editor_.setVisible(false);
-        };
-        editor_.onFocusLost = [this]
-        {
-            commitText();
-        };
+        editor_.setInputRestrictions(8, spec_.allowedCharacters);
+        editor_.onReturnKey = [this] { commitText(); };
+        editor_.onEscapeKey = [this] { editor_.setVisible(false); };
+        editor_.onFocusLost = [this] { commitText(); };
         addChildComponent(editor_);
-
         session_.getState().addListener(this);
     }
 
-    ~TempoField() override { session_.getState().removeListener(this); }
+    ~ValueField() override { session_.getState().removeListener(this); }
 
     void paint(juce::Graphics& g) override
     {
         paintReadoutBox(g, getLocalBounds());
         auto inner = getLocalBounds().reduced(6, 4);
-
         g.setColour(theme::colour::gold);
-        g.setFont(theme::mono(17.0f));
-        g.drawText(juce::String(session_.getTempo(), 2), inner.withTrimmedBottom(12),
-                   juce::Justification::centred, false);
-
+        g.setFont(theme::mono(16.0f));
+        g.drawText(spec_.format(spec_.get()), inner.withTrimmedBottom(12), juce::Justification::centred, false);
         g.setColour(theme::colour::textMuted);
         g.setFont(theme::label(8.5f));
-        g.drawText("BPM", inner.removeFromBottom(12), juce::Justification::centred, false);
+        g.drawText(spec_.caption, inner.removeFromBottom(12), juce::Justification::centred, false);
     }
 
     void resized() override { editor_.setBounds(getLocalBounds().reduced(4, 6).withTrimmedBottom(8)); }
 
     void mouseDown(const juce::MouseEvent&) override
     {
-        dragStartTempo_ = session_.getTempo();
-        session_.beginTransaction("Change Tempo");
+        dragStart_ = spec_.get();
+        session_.beginTransaction(spec_.undoName);
     }
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
-        const double perPixel = e.mods.isShiftDown() ? 0.01 : 0.25;
-        const double tempo =
-            std::round((dragStartTempo_ - e.getDistanceFromDragStartY() * perPixel) * 100.0) / 100.0;
-        session_.setTempo(tempo);
+        const double perPixel = e.mods.isShiftDown() ? spec_.finePerPixel : spec_.perPixel;
+        const double scale = std::pow(10.0, spec_.decimals);
+        const double value = std::round((dragStart_ - e.getDistanceFromDragStartY() * perPixel) * scale) / scale;
+        spec_.set(juce::jlimit(spec_.minimum, spec_.maximum, value));
     }
 
     void mouseDoubleClick(const juce::MouseEvent&) override
     {
-        editor_.setText(juce::String(session_.getTempo(), 2), false);
+        editor_.setText(juce::String(spec_.get(), spec_.decimals), false);
         editor_.setVisible(true);
         editor_.selectAll();
         editor_.grabKeyboardFocus();
@@ -102,27 +104,27 @@ private:
     {
         if (!editor_.isVisible())
             return;
-
         editor_.setVisible(false);
         const double value = editor_.getText().getDoubleValue();
-        if (value >= session::kMinTempo && value <= session::kMaxTempo)
+        if (value >= spec_.minimum && value <= spec_.maximum)
         {
-            session_.beginTransaction("Change Tempo");
-            session_.setTempo(value);
+            session_.beginTransaction(spec_.undoName);
+            spec_.set(value);
         }
     }
 
     void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property) override
     {
-        if (tree == session_.getState() && property == session::ids::tempo)
+        if (tree == session_.getState() && property == spec_.property)
             repaint();
     }
 
     void valueTreeRedirected(juce::ValueTree&) override { repaint(); }
 
     session::Session& session_;
+    Spec spec_;
     juce::TextEditor editor_;
-    double dragStartTempo_ = 120.0;
+    double dragStart_ = 0.0;
 };
 
 //==================================================================================================
@@ -136,13 +138,43 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     , stopButton_("Stop", IconButton::Icon::stop, theme::colour::textPrimary)
     , recordButton_("Record", IconButton::Icon::record, theme::colour::record)
     , loopButton_("Loop", IconButton::Icon::loop, theme::colour::gold)
-    , tempoField_(std::make_unique<TempoField>(session))
 {
+    tempoField_ = std::make_unique<ValueField>(
+        session, ValueField::Spec{"BPM", session::ids::tempo, [this] { return session_.getTempo(); },
+                                  [this](double v) { session_.setTempo(v); }, [](double v) { return juce::String(v, 2); }, 0.25,
+                                  0.01, session::kMinTempo, session::kMaxTempo, 2, "Change Tempo", "0123456789."});
+    tempoField_->setTooltip("Tempo. Drag up/down to change (Shift: fine), double-click to type.");
+
+    speedField_ = std::make_unique<ValueField>(
+        session, ValueField::Spec{"SPEED", session::ids::speed, [this] { return session_.getSpeed(); },
+                                  [this](double v) { session_.setSpeed(v); },
+                                  [](double v) { return juce::String(v, 2) + "x"; }, 0.01, 0.001, session::kMinStretch,
+                                  session::kMaxStretch, 2, "Change Speed", "0123456789."});
+    speedField_->setTooltip("Global playback speed (varispeed). With KEEP PITCH the pitch stays. Double-click to type.");
+
+    transposeField_ = std::make_unique<ValueField>(
+        session, ValueField::Spec{"PITCH", session::ids::transpose, [this] { return session_.getTranspose(); },
+                                  [this](double v) { session_.setTranspose(v); },
+                                  [](double v) { return (v > 0.0 ? "+" : "") + juce::String(v, 1); }, 0.1, 0.01, -24.0, 24.0, 1,
+                                  "Change Transpose"});
+    transposeField_->setTooltip("Global transposition in semitones (audio clips and MIDI). Double-click to type.");
+
+    keepPitchButton_.setButtonText("KEEP PITCH");
+    keepPitchButton_.setClickingTogglesState(true);
+    keepPitchButton_.setWantsKeyboardFocus(false);
+    keepPitchButton_.setTooltip("Keep the pitch when the speed changes (time-stretch instead of varispeed)");
+    keepPitchButton_.setToggleState(session_.getKeepPitch(), juce::dontSendNotification);
+    keepPitchButton_.onClick = [this]
+    {
+        session_.beginTransaction("Keep Pitch");
+        session_.setKeepPitch(keepPitchButton_.getToggleState());
+    };
+
     returnButton_.setTooltip("Return to start (Home)");
     playButton_.setTooltip("Play / pause (Space)");
     stopButton_.setTooltip("Stop. Press again to return to start.");
-    recordButton_.setTooltip("Recording arrives with audio/MIDI input (next phase)");
-    loopButton_.setTooltip("Loop playback arrives in a later phase");
+    recordButton_.setTooltip("Record onto the armed tracks (R)");
+    loopButton_.setTooltip("Loop playback between the loop markers (L). Drag in the ruler's top strip to set them.");
 
     returnButton_.onClick = [this]
     {
@@ -160,8 +192,16 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
             controller_.returnToStart();
     };
 
-    recordButton_.setEnabled(false);
-    loopButton_.setEnabled(false);
+    recordButton_.onClick = [this]
+    {
+        if (onRecordClicked)
+            onRecordClicked();
+    };
+    loopButton_.onClick = [this]
+    {
+        session_.beginTransaction("Toggle Loop");
+        session_.setLoopEnabled(!session_.isLoopEnabled());
+    };
 
     snapButton_.setButtonText("SNAP");
     snapButton_.setTooltip("Snap clip edits to the grid (hold Alt or Shift while dragging to bypass)");
@@ -185,7 +225,7 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
         editor_.setGrid(static_cast<EditorState::Grid>(juce::jlimit(0, 3, gridBox_.getSelectedId() - 1)));
     };
 
-    testToneButton_.setButtonText("TEST TONE");
+    testToneButton_.setButtonText("TONE");
     testToneButton_.setTooltip(
         "Play a -18 dBFS 440 Hz sine through the master bus to verify the audio device");
     testToneButton_.setClickingTogglesState(true);
@@ -208,7 +248,8 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
 
     for (auto* child : std::initializer_list<juce::Component*>{
              &returnButton_, &playButton_, &stopButton_, &recordButton_, &loopButton_, tempoField_.get(),
-             &snapButton_, &gridBox_, &testToneButton_, &audioSettingsButton_})
+             speedField_.get(), &keepPitchButton_, transposeField_.get(), &snapButton_, &gridBox_, &testToneButton_,
+             &audioSettingsButton_})
         addAndMakeVisible(child);
 
     editor_.addListener(this);
@@ -252,6 +293,23 @@ void TransportBar::update(const engine::TelemetrySnapshot& telemetry, double sam
 
     if (testToneButton_.getToggleState() != controller_.isTestToneEnabled())
         testToneButton_.setToggleState(controller_.isTestToneEnabled(), juce::dontSendNotification);
+
+    if (session_.isLoopEnabled() != loopShown_)
+    {
+        loopShown_ = session_.isLoopEnabled();
+        loopButton_.setLit(loopShown_);
+    }
+
+    if (keepPitchButton_.getToggleState() != session_.getKeepPitch())
+        keepPitchButton_.setToggleState(session_.getKeepPitch(), juce::dontSendNotification);
+}
+
+void TransportBar::setRecording(bool recording)
+{
+    if (recording == recording_)
+        return;
+    recording_ = recording;
+    recordButton_.setLit(recording_);
 }
 
 //==================================================================================================
@@ -261,7 +319,7 @@ void TransportBar::resized()
 {
     auto area = getLocalBounds().reduced(12, 0);
 
-    compactBrand_ = getWidth() < 1500;
+    compactBrand_ = getWidth() < 1760;
     brandArea_ = area.removeFromLeft(compactBrand_ ? 40 : 206);
     area.removeFromLeft(8);
 
@@ -277,9 +335,15 @@ void TransportBar::resized()
     positionArea_ = area.removeFromLeft(232).withSizeKeepingCentre(232, 44);
     area.removeFromLeft(8);
     tempoField_->setBounds(area.removeFromLeft(92).withSizeKeepingCentre(92, 44));
-    area.removeFromLeft(8);
-    signatureArea_ = area.removeFromLeft(60).withSizeKeepingCentre(60, 44);
-    area.removeFromLeft(12);
+    area.removeFromLeft(6);
+    signatureArea_ = area.removeFromLeft(50).withSizeKeepingCentre(50, 44);
+    area.removeFromLeft(6);
+    speedField_->setBounds(area.removeFromLeft(74).withSizeKeepingCentre(74, 44));
+    area.removeFromLeft(4);
+    keepPitchButton_.setBounds(area.removeFromLeft(82).withSizeKeepingCentre(82, 26));
+    area.removeFromLeft(4);
+    transposeField_->setBounds(area.removeFromLeft(64).withSizeKeepingCentre(64, 44));
+    area.removeFromLeft(10);
     snapButton_.setBounds(area.removeFromLeft(62).withSizeKeepingCentre(62, 30));
     area.removeFromLeft(4);
     gridBox_.setBounds(area.removeFromLeft(78).withSizeKeepingCentre(78, 30));
@@ -287,8 +351,8 @@ void TransportBar::resized()
     loadArea_ = area.removeFromRight(130).withSizeKeepingCentre(130, 44);
     area.removeFromRight(12);
     audioSettingsButton_.setBounds(area.removeFromRight(72).withSizeKeepingCentre(72, 30));
-    area.removeFromRight(8);
-    testToneButton_.setBounds(area.removeFromRight(100).withSizeKeepingCentre(100, 30));
+    area.removeFromRight(6);
+    testToneButton_.setBounds(area.removeFromRight(56).withSizeKeepingCentre(56, 30));
 }
 
 //==================================================================================================

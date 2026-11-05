@@ -22,6 +22,10 @@ public:
         std::uint64_t clippedSamples = 0;
         std::size_t parkedCommands = 0;
         int pendingImports = 0;
+        bool recording = false;
+        bool scanningPlugins = false;
+        int midiInputs = 0;
+        int latencySamples = 0; ///< plug-in delay compensation at the master
     };
 
     StatusBar();

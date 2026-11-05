@@ -42,7 +42,8 @@ juce::String StatusBar::describeDevice() const
     juce::String text;
     text << d.deviceType << kSeparator << d.deviceName << kSeparator << juce::String(d.sampleRate / 1000.0, 1)
          << " kHz" << kSeparator << d.bufferSizeSamples << " samples" << kSeparator
-         << juce::String(latencyMs, 1) << " ms out";
+         << juce::String(latencyMs, 1) << " ms out" << kSeparator << d.numInputChannels << " in" << kSeparator
+         << info_.midiInputs << " MIDI in";
 
     if (d.driverReportedError)
         text << kSeparator << "DRIVER ERROR";
@@ -53,6 +54,13 @@ juce::String StatusBar::describeDevice() const
 juce::String StatusBar::describeEngine() const
 {
     juce::String text;
+
+    if (info_.recording)
+        text << "RECORDING" << kSeparator;
+    if (info_.scanningPlugins)
+        text << "Scanning plug-ins" << kSeparator;
+    if (info_.latencySamples > 0)
+        text << "PDC " << info_.latencySamples << " smp" << kSeparator;
 
     if (info_.device.xrunCount >= 0)
         text << "XRuns " << info_.device.xrunCount << kSeparator;

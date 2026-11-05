@@ -44,10 +44,27 @@ void EditorState::clearClipSelection()
 
 void EditorState::selectTrack(std::uint32_t trackId)
 {
-    if (selectedTrack_ == trackId)
+    if (selectedTrack_ == trackId && !masterSelected_)
         return;
 
     selectedTrack_ = trackId;
+    masterSelected_ = false;
+    notify();
+}
+
+void EditorState::selectMaster()
+{
+    if (masterSelected_)
+        return;
+    masterSelected_ = true;
+    notify();
+}
+
+void EditorState::setEditedClip(std::uint32_t clipId)
+{
+    if (editedClip_ == clipId)
+        return;
+    editedClip_ = clipId;
     notify();
 }
 

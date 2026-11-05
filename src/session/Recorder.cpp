@@ -295,11 +295,11 @@ void Recorder::createMidiClips(double captureStart, double stopPosition)
         }
         else if (message.isController())
         {
-            controls.push_back({beat, message.getControllerNumber(), channel, message.getControllerValue() / 127.0f});
+            controls.push_back({beat, message.getControllerNumber(), channel, static_cast<float>(message.getControllerValue()) / 127.0f});
         }
         else if (message.isPitchWheel())
         {
-            controls.push_back({beat, 128, channel, message.getPitchWheelValue() / 16383.0f});
+            controls.push_back({beat, 128, channel, static_cast<float>(message.getPitchWheelValue()) / 16383.0f});
         }
     }
 

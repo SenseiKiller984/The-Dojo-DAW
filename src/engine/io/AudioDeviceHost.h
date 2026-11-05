@@ -97,6 +97,7 @@ private:
     juce::AudioDeviceManager deviceManager_;
     juce::String lastError_;
     juce::StringArray knownMidiInputs_;
+    juce::StringArray midiInputNames_;
     juce::MidiDeviceListConnection midiDeviceListConnection_;
 };
 

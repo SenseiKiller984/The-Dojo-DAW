@@ -4,6 +4,9 @@
 #include "core/rt/RealtimeGuard.h"
 #include "ui/Commands.h"
 #include "ui/EditActions.h"
+#include "engine/AudioEngine.h"
+#include "ui/DemoProject.h"
+#include "ui/components/ExportDialog.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -14,6 +17,8 @@ namespace dojo::ui
 {
 namespace
 {
+constexpr int kBottomTabHeight = 26;
+constexpr int kDividerHeight = 5;
 constexpr double kStatusRefreshIntervalSeconds = 0.25;
 constexpr double kMaxFrameDeltaSeconds = 0.1; // clamp after stalls so meters don't jump
 
@@ -23,15 +28,47 @@ juce::File defaultSessionFolder()
 }
 } // namespace
 
+//==================================================================================================
+/** The bar between the arranger and the bottom panel: drag to resize. */
+class MainComponent::Divider final : public juce::Component
+{
+public:
+    explicit Divider(std::function<void(int)> onDrag)
+        : onDrag_(std::move(onDrag))
+    {
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(theme::colour::windowBackground);
+        g.setColour(theme::colour::outlineStrong);
+        g.fillRect(getLocalBounds().withSizeKeepingCentre(40, 2));
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override { startY_ = e.getScreenY(); }
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        onDrag_(startY_ - e.getScreenY());
+        startY_ = e.getScreenY();
+    }
+
+private:
+    std::function<void(int)> onDrag_;
+    int startY_ = 0;
+};
+
 MainComponent::MainComponent(AppServices& services)
     : services_(services)
     , project_(services.project)
     , controller_(services.controller)
     , commandManager_(services.commands)
     , transport_(services.controller, services.project.getSession(), editor_)
-    , browser_(services.project.getAssets().getWildcard())
+    , browser_(services.project.getAssets().getWildcard(), services.plugins)
     , arranger_(services.project, services.controller, editor_)
     , mixer_(services.project, services.controller, editor_)
+    , devicePanel_(services.project, services.plugins, editor_)
+    , clipEditor_(services.project, editor_)
     , vblank_(this, [this](double timestampSeconds) { onDisplayRefresh(timestampSeconds); })
 {
     setOpaque(true);
@@ -40,7 +77,58 @@ MainComponent::MainComponent(AppServices& services)
     addAndMakeVisible(browser_);
     addAndMakeVisible(arranger_);
     addAndMakeVisible(mixer_);
+    addChildComponent(devicePanel_);
+    addChildComponent(clipEditor_);
     addAndMakeVisible(statusBar_);
+
+    divider_ = std::make_unique<Divider>([this](int delta)
+                                         {
+                                             bottomHeight_ = juce::jlimit(160, std::max(160, getHeight() - 260), bottomHeight_ + delta);
+                                             resized();
+                                         });
+    addAndMakeVisible(*divider_);
+
+    mixerTab_.setButtonText("MIXER");
+    devicesTab_.setButtonText("DEVICES");
+    editorTab_.setButtonText("EDITOR");
+    mixerTab_.setTooltip("Mixer (F3)");
+    devicesTab_.setTooltip("Devices of the selected track (F4)");
+    editorTab_.setTooltip("Piano roll / step sequencer / clip properties (F5)");
+    for (auto* b : {&mixerTab_, &devicesTab_, &editorTab_})
+    {
+        b->setRadioGroupId(9191);
+        b->setClickingTogglesState(true);
+        b->setWantsKeyboardFocus(false);
+        b->setColour(juce::TextButton::buttonOnColourId, theme::colour::control);
+        addAndMakeVisible(b);
+    }
+    mixerTab_.onClick = [this] { showBottomTab(BottomTab::mixer); };
+    devicesTab_.onClick = [this] { showBottomTab(BottomTab::devices); };
+    editorTab_.onClick = [this] { showBottomTab(BottomTab::editor); };
+    mixerTab_.setToggleState(true, juce::dontSendNotification);
+
+    transport_.onRecordClicked = [this] { toggleRecording(); };
+    arranger_.onOpenClip = [this](std::uint32_t clipId)
+    {
+        editor_.setEditedClip(clipId);
+        showBottomTab(BottomTab::editor);
+    };
+    arranger_.onDeviceDropped = [this](const juce::ValueTree& target, const juce::String& description)
+    {
+        if (const auto choice = deviceActions::fromDragDescription(description, services_.plugins))
+            addDevice(*choice, target);
+    };
+    browser_.onDeviceActivated = [this](const deviceActions::DeviceChoice& choice)
+    {
+        auto& session = project_.getSession();
+        addDevice(choice, editor_.isMasterSelected() ? session.getMaster() : session.findTrack(editor_.getSelectedTrack()));
+    };
+    mixer_.onShowDevices = [this] { showBottomTab(BottomTab::devices); };
+    services_.recorder.onStateChanged = [this]
+    {
+        transport_.setRecording(services_.recorder.isRecording());
+        commandManager_.commandStatusChanged();
+    };
 
     transport_.onAudioSettingsRequested = [this]
     {
@@ -67,6 +155,7 @@ MainComponent::MainComponent(AppServices& services)
 
 MainComponent::~MainComponent()
 {
+    services_.recorder.onStateChanged = nullptr;
     project_.getSession().getUndoManager().removeChangeListener(this);
     project_.onImportProblem = nullptr;
 
@@ -89,8 +178,14 @@ void MainComponent::resized()
     statusBar_.setBounds(area.removeFromBottom(statusBarHeight));
     browser_.setBounds(area.removeFromLeft(browserWidth));
 
-    const int mixerHeightClamped = juce::jlimit(180, juce::jmax(180, area.getHeight() / 2), mixerHeight);
-    mixer_.setBounds(area.removeFromBottom(mixerHeightClamped));
+    const int bottom = juce::jlimit(160, juce::jmax(160, area.getHeight() - 220), bottomHeight_);
+    auto bottomArea = area.removeFromBottom(bottom);
+    auto tabs = bottomArea.removeFromTop(kBottomTabHeight).reduced(6, 2);
+    for (auto* b : {&mixerTab_, &devicesTab_, &editorTab_})
+        b->setBounds(tabs.removeFromLeft(86));
+    divider_->setBounds(area.removeFromBottom(kDividerHeight));
+    for (auto* panel : std::initializer_list<juce::Component*>{&mixer_, &devicePanel_, &clipEditor_})
+        panel->setBounds(bottomArea);
     arranger_.setBounds(area);
 }
 
@@ -114,7 +209,11 @@ void MainComponent::onDisplayRefresh(double timestampSeconds)
     const double sampleRate = controller_.getSampleRateOr(48000.0);
 
     transport_.update(telemetry, sampleRate);
-    arranger_.setPlayhead(telemetry.playheadSamples, sampleRate, telemetry.playing);
+    arranger_.setPlayhead(telemetry.playheadSeconds, telemetry.playing);
+    arranger_.setRecording(services_.recorder.isRecording() && controller_.getEngine().getCaptureStartSeconds() >= 0.0,
+                           controller_.getEngine().getCaptureStartSeconds());
+    if (clipEditor_.isVisible())
+        clipEditor_.setPlayhead(telemetry.playheadSeconds);
     mixer_.updateMeters(telemetry, elapsed);
     loadPeakSinceStatusRefresh_ = juce::jmax(loadPeakSinceStatusRefresh_, telemetry.dspLoadPeak);
 
@@ -135,6 +234,10 @@ void MainComponent::refreshStatusBar()
     info.clippedSamples = controller_.getLastTelemetry().clippedSamples;
     info.parkedCommands = controller_.getParkedCommandCount();
     info.pendingImports = project_.getPendingImportCount();
+    info.recording = services_.recorder.isRecording();
+    info.scanningPlugins = services_.plugins.isScanning();
+    info.midiInputs = controller_.getDeviceHost().getMidiInputNames().size();
+    info.latencySamples = project_.getCompiler().getTotalLatency();
     statusBar_.setInfo(info);
     loadPeakSinceStatusRefresh_ = 0.0f;
 }
@@ -167,7 +270,22 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    zoomToFit,
                                    audioSettings,
                                    toggleTestTone,
-                                   showShortcuts};
+                                   showShortcuts,
+                                   record,
+                                   toggleLoop,
+                                   exportAudio,
+                                   addInstrumentTrack,
+                                   addBusTrack,
+                                   addFolder,
+                                   groupIntoFolder,
+                                   showMixer,
+                                   showDevices,
+                                   showEditor,
+                                   scanPlugins,
+                                   openDemo,
+                                   cutClips,
+                                   copyClips,
+                                   pasteClips};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -292,6 +410,75 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.setInfo("Keyboard Shortcuts", "List keyboard and mouse shortcuts", categories::options, 0);
         info.addDefaultKeypress(juce::KeyPress::F1Key, 0);
         break;
+    case record:
+        info.setInfo(services_.recorder.isRecording() ? "Stop Recording" : "Record", "Record onto the armed tracks",
+                     categories::transport, 0);
+        info.setTicked(services_.recorder.isRecording());
+        info.addDefaultKeypress('r', 0);
+        break;
+    case toggleLoop:
+        info.setInfo("Loop", "Loop playback between the loop markers", categories::transport, 0);
+        info.setTicked(session.isLoopEnabled());
+        info.addDefaultKeypress('l', 0);
+        break;
+    case exportAudio:
+        info.setInfo("Export Audio...", "Bounce the mix and/or stems to WAV, FLAC or MP3", categories::file, 0);
+        info.addDefaultKeypress('r', cmd);
+        break;
+    case addInstrumentTrack:
+        info.setInfo("Add Instrument Track", "Add an instrument track with a Sampler", categories::track, 0);
+        info.addDefaultKeypress('t', cmd | shift);
+        break;
+    case addBusTrack:
+        info.setInfo("Add Bus", "Add a bus (group or return)", categories::track, 0);
+        info.addDefaultKeypress('b', cmd);
+        break;
+    case addFolder:
+        info.setInfo("Add Folder", "Add a folder track", categories::track, 0);
+        info.addDefaultKeypress('f', cmd | shift);
+        break;
+    case groupIntoFolder:
+        info.setInfo("Group into Folder", "Put the selected track into a new folder", categories::track, 0);
+        info.setActive(session.findTrack(editor_.getSelectedTrack()).isValid());
+        info.addDefaultKeypress('g', cmd | shift);
+        break;
+    case showMixer:
+        info.setInfo("Mixer", "Show the mixer", categories::view, 0);
+        info.setTicked(bottomTab_ == BottomTab::mixer);
+        info.addDefaultKeypress(juce::KeyPress::F3Key, 0);
+        break;
+    case showDevices:
+        info.setInfo("Devices", "Show the selected track's devices", categories::view, 0);
+        info.setTicked(bottomTab_ == BottomTab::devices);
+        info.addDefaultKeypress(juce::KeyPress::F4Key, 0);
+        break;
+    case showEditor:
+        info.setInfo("Editor", "Show the piano roll / step sequencer / clip properties", categories::view, 0);
+        info.setTicked(bottomTab_ == BottomTab::editor);
+        info.addDefaultKeypress(juce::KeyPress::F5Key, 0);
+        break;
+    case scanPlugins:
+        info.setInfo("Scan for Plug-ins", "Look for new VST3 and CLAP plug-ins", categories::options, 0);
+        info.setActive(!services_.plugins.isScanning());
+        break;
+    case openDemo:
+        info.setInfo("Open Demo Project", "A short song that uses every kind of track and device", categories::file, 0);
+        break;
+    case cutClips:
+        info.setInfo("Cut", "Cut the selected clips", categories::edit, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('x', cmd);
+        break;
+    case copyClips:
+        info.setInfo("Copy", "Copy the selected clips", categories::edit, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('c', cmd);
+        break;
+    case pasteClips:
+        info.setInfo("Paste", "Paste clips at the playhead on the selected track", categories::edit, 0);
+        info.setActive(!editor_.getClipboard().empty());
+        info.addDefaultKeypress('v', cmd);
+        break;
     default:
         break;
     }
@@ -376,6 +563,52 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case showShortcuts:
         showShortcutHelp();
+        break;
+    case record:
+        toggleRecording();
+        break;
+    case toggleLoop:
+        session.beginTransaction("Toggle Loop");
+        session.setLoopEnabled(!session.isLoopEnabled());
+        break;
+    case exportAudio:
+        ExportDialog::show(project_, services_.exporter, this);
+        break;
+    case addInstrumentTrack:
+        actions::addInstrumentTrack(session, editor_, "builtin:sampler", "Sampler");
+        break;
+    case addBusTrack:
+        actions::addTrack(session, editor_, session::TrackKind::bus);
+        break;
+    case addFolder:
+        actions::addFolder(session, editor_);
+        break;
+    case groupIntoFolder:
+        actions::groupSelectedTrackIntoFolder(session, editor_);
+        break;
+    case showMixer:
+        showBottomTab(BottomTab::mixer);
+        break;
+    case showDevices:
+        showBottomTab(BottomTab::devices);
+        break;
+    case showEditor:
+        showBottomTab(BottomTab::editor);
+        break;
+    case scanPlugins:
+        browser_.scanPlugins(false);
+        break;
+    case openDemo:
+        ensureSavedThen([this] { openDemoProject(); });
+        break;
+    case cutClips:
+        actions::cutSelectedClips(session, editor_);
+        break;
+    case copyClips:
+        actions::copySelectedClips(session, editor_);
+        break;
+    case pasteClips:
+        actions::pasteClips(session, editor_, arranger_.getPlayheadSeconds());
         break;
     default:
         return false;
@@ -547,6 +780,22 @@ void MainComponent::showImportChooser()
                           });
 }
 
+void MainComponent::openDemoProject()
+{
+    controller_.stop();
+    project_.newSession();
+    const auto folder = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("The Dojo").getChildFile("Demo Samples");
+    const auto result = createDemoProject(project_, folder);
+    if (result.failed())
+    {
+        showMessage("Could not create the demo", result.getErrorMessage());
+        return;
+    }
+    afterDocumentLoaded();
+    editor_.selectTrack(project_.getSession().getNumTracks() > 1 ? session::track::getId(project_.getSession().getTrack(1)) : 0u);
+    showBottomTab(BottomTab::devices);
+}
+
 void MainComponent::importAudioFiles(const juce::StringArray& paths)
 {
     project_.importFiles(paths, {}, arranger_.getPlayheadSeconds());
@@ -555,6 +804,45 @@ void MainComponent::importAudioFiles(const juce::StringArray& paths)
 void MainComponent::requestQuit(std::function<void()> quit)
 {
     ensureSavedThen(std::move(quit));
+}
+
+//==================================================================================================
+// Bottom panel, recording, devices
+
+void MainComponent::showBottomTab(BottomTab tab)
+{
+    bottomTab_ = tab;
+    mixer_.setVisible(tab == BottomTab::mixer);
+    devicePanel_.setVisible(tab == BottomTab::devices);
+    clipEditor_.setVisible(tab == BottomTab::editor);
+    mixerTab_.setToggleState(tab == BottomTab::mixer, juce::dontSendNotification);
+    devicesTab_.setToggleState(tab == BottomTab::devices, juce::dontSendNotification);
+    editorTab_.setToggleState(tab == BottomTab::editor, juce::dontSendNotification);
+    commandManager_.commandStatusChanged();
+}
+
+void MainComponent::toggleRecording()
+{
+    auto& recorder = services_.recorder;
+    if (recorder.isRecording())
+    {
+        recorder.stop();
+        return;
+    }
+    if (recorder.isBusy())
+        return;
+
+    const auto message = recorder.start();
+    if (!recorder.isRecording())
+        showMessage("Cannot record", message);
+    else if (message.isNotEmpty())
+        showMessage("Recording", message);
+}
+
+void MainComponent::addDevice(const deviceActions::DeviceChoice& choice, juce::ValueTree target)
+{
+    deviceActions::addDevice(project_.getSession(), editor_, std::move(target), choice);
+    showBottomTab(BottomTab::devices);
 }
 
 //==================================================================================================
@@ -569,9 +857,10 @@ void MainComponent::showAudioSettings()
     }
 
     auto& deviceManager = controller_.getDeviceHost().getDeviceManager();
-    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent>(deviceManager, 0, 0, 1, 2, false,
+    // Inputs (for recording and monitoring) and MIDI inputs can be chosen here too.
+    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent>(deviceManager, 0, 32, 1, 2, true,
                                                                          false, true, false);
-    selector->setSize(560, 420);
+    selector->setSize(600, 560);
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(selector.release());
@@ -599,6 +888,12 @@ void MainComponent::showShortcutHelp()
 {
     const juce::String text =
         "Space\tPlay / stop\n"
+        "R\tRecord onto armed tracks\n"
+        "L\tLoop on / off\n"
+        "Ctrl+R\tExport audio\n"
+        "F3 / F4 / F5\tMixer / Devices / Editor\n"
+        "Ctrl+Shift+T / Ctrl+B / Ctrl+Shift+F\tAdd instrument track / bus / folder\n"
+        "Piano roll\tclick to draw, drag to move or resize, Q quantise, arrows move\n"
         "Home, Enter\tReturn to start\n"
         "Ctrl+T\tAdd audio track\n"
         "Ctrl+I\tImport audio\n"

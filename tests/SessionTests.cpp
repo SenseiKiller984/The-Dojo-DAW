@@ -17,7 +17,7 @@ struct TempFolder
 {
     TempFolder()
         : dir(juce::File::getSpecialLocation(juce::File::tempDirectory)
-                  .getNonexistentChildFile("dojo-tests", "", false))
+                  .getChildFile("dojo-tests-" + juce::Uuid().toString()))
     {
         dir.createDirectory();
     }

@@ -5,6 +5,8 @@
 #include "ui/AppServices.h"
 #include "ui/components/ArrangerView.h"
 #include "ui/components/BrowserPanel.h"
+#include "ui/components/ClipEditor.h"
+#include "ui/components/DevicePanel.h"
 #include "ui/components/MixerPanel.h"
 #include "ui/components/StatusBar.h"
 #include "ui/components/TransportBar.h"
@@ -56,8 +58,21 @@ public:
     /** Opens a session file (e.g. given on the command line). */
     void openSessionFile(const juce::File& file);
 
+    /** Replaces the session with the demo project (after asking to save changes). */
+    void openDemoProject();
+
     /** Imports audio files onto new tracks at the playhead (e.g. given on the command line). */
     void importAudioFiles(const juce::StringArray& paths);
+
+    enum class BottomTab
+    {
+        mixer,
+        devices,
+        editor,
+    };
+
+    /** Shows one of the bottom panel's tabs. */
+    void showBottomTab(BottomTab tab);
 
     /** Number of UI frames processed so far (used by the start-up smoke test). */
     [[nodiscard]] std::uint64_t getFrameCount() const noexcept { return frameCount_; }
@@ -85,6 +100,10 @@ private:
     void startNewSession();
     void afterDocumentLoaded();
 
+    // Recording, devices
+    void toggleRecording();
+    void addDevice(const deviceActions::DeviceChoice& choice, juce::ValueTree target);
+
     // Dialogs
     void showAudioSettings();
     void showMessage(const juce::String& title, const juce::String& message);
@@ -101,7 +120,17 @@ private:
     BrowserPanel browser_;
     ArrangerView arranger_;
     MixerPanel mixer_;
+    DevicePanel devicePanel_;
+    ClipEditor clipEditor_;
     StatusBar statusBar_;
+
+    class Divider;
+    std::unique_ptr<Divider> divider_;
+    juce::TextButton mixerTab_;
+    juce::TextButton devicesTab_;
+    juce::TextButton editorTab_;
+    BottomTab bottomTab_ = BottomTab::mixer;
+    int bottomHeight_ = 330;
 
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::ScopedMessageBox messageBox_;

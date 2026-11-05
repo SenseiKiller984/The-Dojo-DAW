@@ -1,6 +1,7 @@
 #include "devices/BuiltinProcessor.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace dojo::devices
 {
@@ -27,9 +28,20 @@ juce::AudioParameterFloat* BuiltinProcessor::addFloat(const juce::String& id, co
                                                       juce::NormalisableRange<float> range, float defaultValue,
                                                       const juce::String& label, bool automatable)
 {
+    // Readable values: 3 significant digits, "k" above 1000 (e.g. 2.50k Hz).
+    const auto format = [](float value, int maximumLength)
+    {
+        const float magnitude = std::abs(value);
+        juce::String text;
+        if (magnitude >= 1000.0f)
+            text = juce::String(value / 1000.0f, magnitude >= 10000.0f ? 1 : 2) + "k";
+        else
+            text = juce::String(value, magnitude >= 100.0f ? 0 : magnitude >= 10.0f ? 1 : 2);
+        return maximumLength > 0 ? text.substring(0, maximumLength) : text;
+    };
     auto parameter = std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{id, 1}, name, range, defaultValue,
-        juce::AudioParameterFloatAttributes().withLabel(label).withAutomatable(automatable));
+        juce::AudioParameterFloatAttributes().withLabel(label).withAutomatable(automatable).withStringFromValueFunction(format));
     auto* raw = parameter.get();
     addParameter(parameter.release());
     ranged_.push_back(raw);

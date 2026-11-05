@@ -27,11 +27,13 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
     case 0:
         menu.addCommandItem(cm, newSession);
         menu.addCommandItem(cm, openSession);
+        menu.addCommandItem(cm, openDemo);
         menu.addSeparator();
         menu.addCommandItem(cm, saveSession);
         menu.addCommandItem(cm, saveSessionAs);
         menu.addSeparator();
         menu.addCommandItem(cm, importAudio);
+        menu.addCommandItem(cm, exportAudio);
         menu.addSeparator();
         menu.addCommandItem(cm, juce::StandardApplicationCommandIDs::quit);
         break;
@@ -39,6 +41,9 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, undo);
         menu.addCommandItem(cm, redo);
         menu.addSeparator();
+        menu.addCommandItem(cm, cutClips);
+        menu.addCommandItem(cm, copyClips);
+        menu.addCommandItem(cm, pasteClips);
         menu.addCommandItem(cm, deleteSelection);
         menu.addCommandItem(cm, duplicateSelection);
         menu.addCommandItem(cm, splitAtPlayhead);
@@ -47,11 +52,19 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         break;
     case 2:
         menu.addCommandItem(cm, addTrack);
+        menu.addCommandItem(cm, addInstrumentTrack);
+        menu.addCommandItem(cm, addBusTrack);
+        menu.addCommandItem(cm, addFolder);
+        menu.addSeparator();
+        menu.addCommandItem(cm, groupIntoFolder);
         menu.addCommandItem(cm, deleteTrack);
         break;
     case 3:
         menu.addCommandItem(cm, playStop);
+        menu.addCommandItem(cm, record);
         menu.addCommandItem(cm, returnToStart);
+        menu.addSeparator();
+        menu.addCommandItem(cm, toggleLoop);
         break;
     case 4:
         menu.addCommandItem(cm, zoomIn);
@@ -59,10 +72,15 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, zoomToFit);
         menu.addSeparator();
         menu.addCommandItem(cm, toggleSnap);
+        menu.addSeparator();
+        menu.addCommandItem(cm, showMixer);
+        menu.addCommandItem(cm, showDevices);
+        menu.addCommandItem(cm, showEditor);
         break;
     case 5:
         menu.addCommandItem(cm, audioSettings);
         menu.addCommandItem(cm, toggleTestTone);
+        menu.addCommandItem(cm, scanPlugins);
         menu.addSeparator();
         menu.addCommandItem(cm, showShortcuts);
         break;

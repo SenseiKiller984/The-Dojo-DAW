@@ -153,6 +153,9 @@ void DojoApplication::initialise(const juce::String&)
     if (!options_.audioFiles.isEmpty())
         mainWindow_->getMainComponent().importAudioFiles(options_.audioFiles);
 
+    if (options_.demo)
+        mainWindow_->getMainComponent().openDemoProject();
+
     if (options_.play)
         controller_->play();
 

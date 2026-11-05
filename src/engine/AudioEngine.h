@@ -273,7 +273,6 @@ private:
     // Per-sub-block context read by the worker tasks (written before they are released).
     const std::vector<int>* currentLevel_ = nullptr;
     int currentNumSamples_ = 0;
-    int currentInputOffset_ = 0;
     double blockStartSeconds_ = 0.0;
     double secondsPerSample_ = 0.0;
 

@@ -18,8 +18,9 @@ namespace dojo::ui
     Top bar: brand, transport, position (bars|beats|ticks and clock), tempo, meter, grid snapping,
     the test tone, audio settings and the DSP load meter.
 
-    The tempo box is editable: drag up/down (Shift for fine steps) or double-click to type a value.
-    Record and loop are shown disabled until their phases land.
+    The tempo, speed and transpose boxes are editable: drag up/down (Shift for fine steps) or
+    double-click to type a value. Record arms recording onto the armed tracks (see Recorder); loop
+    toggles the loop range set in the arranger's ruler.
 */
 class TransportBar final : public juce::Component, private EditorState::Listener
 {
@@ -32,12 +33,17 @@ public:
 
     /** Opens the audio device settings (provided by MainComponent). */
     std::function<void()> onAudioSettingsRequested;
+    /** The record button was clicked (MainComponent starts / stops the Recorder). */
+    std::function<void()> onRecordClicked;
+
+    /** Lights the record button while recording. */
+    void setRecording(bool recording);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
-    class TempoField;
+    class ValueField;
 
     void editorStateChanged() override;
     void paintBrand(juce::Graphics& g) const;
@@ -54,7 +60,10 @@ private:
     IconButton stopButton_;
     IconButton recordButton_;
     IconButton loopButton_;
-    std::unique_ptr<TempoField> tempoField_;
+    std::unique_ptr<ValueField> tempoField_;
+    std::unique_ptr<ValueField> speedField_;
+    std::unique_ptr<ValueField> transposeField_;
+    juce::TextButton keepPitchButton_;
     juce::TextButton snapButton_;
     juce::ComboBox gridBox_;
     juce::TextButton testToneButton_;
@@ -70,6 +79,8 @@ private:
     double sampleRate_ = 0.0;
     double tempoShown_ = 0.0;
     bool playing_ = false;
+    bool recording_ = false;
+    bool loopShown_ = false;
     float dspLoad_ = 0.0f;
 };
 

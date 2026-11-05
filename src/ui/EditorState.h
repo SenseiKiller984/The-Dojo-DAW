@@ -1,9 +1,11 @@
 #pragma once
 
+#include <juce_data_structures/juce_data_structures.h>
 #include <juce_events/juce_events.h>
 
 #include <cstdint>
 #include <set>
+#include <vector>
 
 namespace dojo::ui
 {
@@ -38,7 +40,27 @@ public:
     void clearClipSelection();
 
     [[nodiscard]] std::uint32_t getSelectedTrack() const noexcept { return selectedTrack_; }
+    /** Selects a track (and deselects the master). */
     void selectTrack(std::uint32_t trackId);
+
+    /** The master bus is selected (its devices are shown in the Devices panel). */
+    [[nodiscard]] bool isMasterSelected() const noexcept { return masterSelected_; }
+    void selectMaster();
+
+    // --- Clipboard ---------------------------------------------------------------------------------
+    /** Copied clips (deep copies) with the index of the track each came from. */
+    struct ClipboardEntry
+    {
+        juce::ValueTree clip;
+        int trackIndex = 0;
+    };
+    [[nodiscard]] const std::vector<ClipboardEntry>& getClipboard() const noexcept { return clipboard_; }
+    void setClipboard(std::vector<ClipboardEntry> entries) { clipboard_ = std::move(entries); }
+
+    // --- Editor ------------------------------------------------------------------------------------
+    /** The clip open in the bottom editor (piano roll / step sequencer / clip inspector), 0 = none. */
+    [[nodiscard]] std::uint32_t getEditedClip() const noexcept { return editedClip_; }
+    void setEditedClip(std::uint32_t clipId);
 
     // --- Grid ------------------------------------------------------------------------------------
     [[nodiscard]] bool isSnapEnabled() const noexcept { return snapEnabled_; }
@@ -60,6 +82,9 @@ private:
 
     std::set<std::uint32_t> selectedClips_;
     std::uint32_t selectedTrack_ = 0;
+    bool masterSelected_ = false;
+    std::uint32_t editedClip_ = 0;
+    std::vector<ClipboardEntry> clipboard_;
     bool snapEnabled_ = true;
     Grid grid_ = Grid::beat;
     juce::ListenerList<Listener> listeners_;

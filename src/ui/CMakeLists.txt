@@ -1,6 +1,10 @@
 add_library(dojo_ui STATIC
     AppServices.h
     Commands.h
+    DemoProject.cpp
+    DemoProject.h
+    DeviceActions.cpp
+    DeviceActions.h
     EditActions.cpp
     EditActions.h
     EditorState.cpp
@@ -13,6 +17,12 @@ add_library(dojo_ui STATIC
     components/ArrangerView.h
     components/BrowserPanel.cpp
     components/BrowserPanel.h
+    components/ClipEditor.cpp
+    components/ClipEditor.h
+    components/DevicePanel.cpp
+    components/DevicePanel.h
+    components/ExportDialog.cpp
+    components/ExportDialog.h
     components/IconButton.cpp
     components/IconButton.h
     components/LevelMeter.cpp
@@ -23,6 +33,10 @@ add_library(dojo_ui STATIC
     components/StatusBar.h
     components/TransportBar.cpp
     components/TransportBar.h
+    devices/DeviceEditors.cpp
+    devices/DeviceEditors.h
+    devices/ParameterControl.cpp
+    devices/ParameterControl.h
     theme/DojoLookAndFeel.cpp
     theme/DojoLookAndFeel.h
     theme/DojoTheme.h)

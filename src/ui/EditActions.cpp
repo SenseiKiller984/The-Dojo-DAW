@@ -87,6 +87,71 @@ bool splitAt(session::Session& session, EditorState& editor, double seconds)
     return true;
 }
 
+bool copySelectedClips(session::Session& session, EditorState& editor)
+{
+    const auto clips = selectedClips(session, editor);
+    if (clips.empty())
+        return false;
+
+    std::vector<EditorState::ClipboardEntry> entries;
+    for (const auto& c : clips)
+        entries.push_back({c.createCopy(), session.indexOf(c.getParent())});
+    editor.setClipboard(std::move(entries));
+    return true;
+}
+
+bool cutSelectedClips(session::Session& session, EditorState& editor)
+{
+    if (!copySelectedClips(session, editor))
+        return false;
+    session.beginTransaction("Cut");
+    for (const auto& c : selectedClips(session, editor))
+        session.removeClip(c);
+    editor.clearClipSelection();
+    return true;
+}
+
+bool pasteClips(session::Session& session, EditorState& editor, double seconds)
+{
+    const auto& entries = editor.getClipboard();
+    if (entries.empty())
+        return false;
+
+    double earliest = 1.0e12;
+    int firstTrack = entries.front().trackIndex;
+    for (const auto& e : entries)
+        if (session::clip::getStart(e.clip) < earliest)
+        {
+            earliest = session::clip::getStart(e.clip);
+            firstTrack = e.trackIndex;
+        }
+
+    const auto selected = session.findTrack(editor.getSelectedTrack());
+    const int targetFirst = selected.isValid() ? session.indexOf(selected) : firstTrack;
+    const auto tracks = session.getAllTracks();
+
+    session.beginTransaction("Paste");
+    std::set<std::uint32_t> pasted;
+    for (const auto& e : entries)
+    {
+        const bool midi = session::clip::isMidi(e.clip);
+        const auto wanted = midi ? session::TrackKind::instrument : session::TrackKind::audio;
+        const int index = targetFirst + (e.trackIndex - firstTrack);
+        juce::ValueTree target = index >= 0 && index < static_cast<int>(tracks.size()) ? tracks[static_cast<std::size_t>(index)] : juce::ValueTree();
+        if (!target.isValid() || session::track::getKind(target) != wanted)
+            target = selected.isValid() && session::track::getKind(selected) == wanted ? selected : juce::ValueTree();
+        if (!target.isValid())
+            target = session.addTrack(wanted, {}, -1);
+
+        auto copy = session.pasteClip(e.clip, target, seconds + (session::clip::getStart(e.clip) - earliest));
+        if (copy.isValid())
+            pasted.insert(session::clip::getId(copy));
+    }
+
+    editor.setSelectedClips(std::move(pasted));
+    return true;
+}
+
 void selectAllClips(session::Session& session, EditorState& editor)
 {
     std::set<std::uint32_t> all;
@@ -118,6 +183,17 @@ juce::ValueTree addTrack(session::Session& session, EditorState& editor, session
                                                               : "Add Audio Track";
     session.beginTransaction(name);
     auto t = session.addTrack(kind, {}, index);
+
+    // A new instrument track listens to the MIDI keyboard straight away (armed) unless another
+    // instrument track is already armed.
+    if (kind == session::TrackKind::instrument)
+    {
+        bool anyArmed = false;
+        for (const auto& other : session.getAllTracks())
+            anyArmed = anyArmed || (other != t && session::track::getKind(other) == session::TrackKind::instrument && session::track::isArmed(other));
+        if (!anyArmed)
+            session::track::setArmed(t, true, &session.getUndoManager());
+    }
 
     // Keep the new track in the selected track's folder.
     if (selected.isValid())

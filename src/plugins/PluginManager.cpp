@@ -83,7 +83,8 @@ PluginManager::ScanReport PluginManager::scanFiles(const juce::String& formatNam
             currentFile_ = file;
         }
 
-        const auto output = tempDir.getNonexistentChildFile("dojo-scan", ".xml", false);
+        // Unique per scan: several scans (or Dojo instances) may run at once.
+        const auto output = tempDir.getChildFile("dojo-scan-" + juce::Uuid().toString() + ".xml");
         juce::ChildProcess child;
         const juce::StringArray command{scanner_.getFullPathName(), "--format", formatName, "--file", file, "--output",
                                         output.getFullPathName()};
