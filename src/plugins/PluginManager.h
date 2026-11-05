@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 
@@ -90,8 +91,9 @@ private:
     std::map<juce::String, juce::FileSearchPath> searchPaths_;
     std::map<juce::String, juce::String> blacklistReasons_;
 
-    mutable std::mutex scanMutex_;
+    mutable std::mutex scanMutex_; ///< guards searchPaths_, blacklistReasons_ and currentFile_
     juce::String currentFile_;
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true); ///< message thread only
     std::atomic<float> progress_{0.0f};
     bool rescanAll_ = false;
 };

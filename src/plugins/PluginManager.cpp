@@ -16,6 +16,7 @@ PluginManager::PluginManager(juce::File scannerExecutable, juce::File listFile)
 
 PluginManager::~PluginManager()
 {
+    *alive_ = false;
     stopThread(30'000);
 }
 
@@ -29,13 +30,17 @@ void PluginManager::addFormats(juce::AudioPluginFormatManager& manager)
 
 juce::FileSearchPath PluginManager::getSearchPath(const juce::String& formatName) const
 {
+    const std::lock_guard lock(scanMutex_);
     const auto it = searchPaths_.find(formatName);
     return it != searchPaths_.end() ? it->second : juce::FileSearchPath();
 }
 
 void PluginManager::setSearchPath(const juce::String& formatName, const juce::FileSearchPath& path)
 {
-    searchPaths_[formatName] = path;
+    {
+        const std::lock_guard lock(scanMutex_);
+        searchPaths_[formatName] = path;
+    }
     save();
 }
 
@@ -48,12 +53,16 @@ juce::String PluginManager::getCurrentScanFile() const
 void PluginManager::clearBlacklist()
 {
     known_.clearBlacklistedFiles();
-    blacklistReasons_.clear();
+    {
+        const std::lock_guard lock(scanMutex_);
+        blacklistReasons_.clear();
+    }
     save();
 }
 
 juce::String PluginManager::getBlacklistReason(const juce::String& file) const
 {
+    const std::lock_guard lock(scanMutex_);
     const auto it = blacklistReasons_.find(file);
     return it != blacklistReasons_.end() ? it->second : juce::String();
 }
@@ -137,7 +146,10 @@ PluginManager::ScanReport PluginManager::scanFiles(const juce::String& formatNam
             const auto reason = finished ? "crashed while being scanned (exit code " + juce::String(exitCode) + ")"
                                          : "did not finish scanning within " + juce::String(timeoutMs / 1000) + " s";
             known_.addToBlacklist(file);
-            blacklistReasons_[file] = reason;
+            {
+                const std::lock_guard lock(scanMutex_);
+                blacklistReasons_[file] = reason;
+            }
             report.crashed.add(file + ": " + reason);
         }
 
@@ -197,8 +209,11 @@ void PluginManager::run()
         }
     }
 
-    juce::MessageManager::callAsync([this, total]
+    // The manager may be gone by the time the message thread gets to this.
+    juce::MessageManager::callAsync([this, alive = alive_, total]
                                     {
+                                        if (!*alive)
+                                            return;
                                         save();
                                         if (onScanFinished)
                                             onScanFinished(total);
@@ -220,6 +235,7 @@ void PluginManager::save() const
     if (auto list = known_.createXml())
         root.addChildElement(list.release());
 
+    const std::lock_guard lock(scanMutex_);
     auto* paths = root.createNewChildElement("SEARCHPATHS");
     for (const auto& [format, path] : searchPaths_)
     {
