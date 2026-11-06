@@ -97,6 +97,9 @@ public:
     void itemDragExit(const SourceDetails& details) override;
     void itemDropped(const SourceDetails& details) override;
 
+    /** Where a clip is drawn, in this component's coordinates (empty if its track is not shown). */
+    [[nodiscard]] juce::Rectangle<int> getClipArea(const juce::ValueTree& clip) const;
+
 private:
     struct Row
     {

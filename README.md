@@ -20,6 +20,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Editing**
 - Audio clips: move (also across tracks), trim, fades, split, duplicate, cut/copy/paste; overlapping clips **crossfade** (equal power).
+- Stereo clips show **both channels** (left above right), mono clips one waveform.
 - **Time-stretch and pitch-shift** per clip (Signalsmith Stretch), plus per-track speed and pitch.
 - Global **speed** (varispeed, or *keep pitch*) and **transpose**.
 - Long files **stream from disk** instead of being loaded into memory.

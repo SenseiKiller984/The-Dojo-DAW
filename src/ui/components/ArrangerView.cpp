@@ -1,6 +1,7 @@
 #include "ui/components/ArrangerView.h"
 
 #include "ui/BrowserDrag.h"
+#include "ui/WaveformPainter.h"
 
 #include "ui/EditActions.h"
 #include "ui/theme/DojoTheme.h"
@@ -257,6 +258,15 @@ juce::Rectangle<float> ArrangerView::getClipBounds(const juce::ValueTree& clip, 
     const float x0 = timeToX(session::clip::getStart(clip));
     const float x1 = timeToX(session::clip::getEnd(clip));
     return {x0, bounds.getY() + 3.0f, juce::jmax(2.0f, x1 - x0), bounds.getHeight() - 6.0f};
+}
+
+juce::Rectangle<int> ArrangerView::getClipArea(const juce::ValueTree& clip) const
+{
+    const auto& all = rows();
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (all[i].kind == Row::Kind::track && all[i].track == clip.getParent())
+            return getClipBounds(clip, static_cast<int>(i)).toNearestInt();
+    return {};
 }
 
 juce::Rectangle<int> ArrangerView::getHeaderButton(int row, int indexFromRight) const
@@ -1136,37 +1146,28 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
     const double offset = session::clip::getOffset(c);
     const double stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
     const double bucketsPerSecond = asset->sampleRate / session::WaveformPeaks::kFramesPerBucket;
-    const float midY = area.getCentreY();
-    const float halfHeight = area.getHeight() * 0.5f;
 
-    g.setColour(colour.withAlpha(0.85f));
-
+    // Stereo files show their two channels (left above right), mono files one.
     const auto firstX = static_cast<int>(std::floor(visible.getX()));
     const auto lastX = static_cast<int>(std::ceil(visible.getRight()));
-
-    for (int x = firstX; x < lastX; ++x)
-    {
-        const double sourceT0 = offset + (xToTime(static_cast<float>(x)) - start) / stretch;
-        const double sourceT1 = offset + (xToTime(static_cast<float>(x + 1)) - start) / stretch;
-        const int b0 = juce::jlimit(0, numBuckets - 1, static_cast<int>(std::floor(sourceT0 * bucketsPerSecond)));
-        const int b1 = juce::jlimit(b0 + 1, numBuckets, static_cast<int>(std::ceil(sourceT1 * bucketsPerSecond)));
-
-        float lo = 0.0f;
-        float hi = 0.0f;
-        for (int ch = 0; ch < peaks.numChannels; ++ch)
-        {
-            const auto chIndex = static_cast<std::size_t>(ch);
-            for (int b = b0; b < b1; ++b)
-            {
-                lo = juce::jmin(lo, peaks.minimum[chIndex][static_cast<std::size_t>(b)]);
-                hi = juce::jmax(hi, peaks.maximum[chIndex][static_cast<std::size_t>(b)]);
-            }
-        }
-
-        const float top = midY - juce::jlimit(0.0f, 1.0f, hi) * halfHeight;
-        const float bottom = midY - juce::jlimit(-1.0f, 0.0f, lo) * halfHeight;
-        g.fillRect(static_cast<float>(x), top, 1.0f, juce::jmax(1.0f, bottom - top));
-    }
+    waveform::paintChannels(g, area, std::min(peaks.numChannels, 2), firstX, lastX, colour.withAlpha(0.85f),
+                            [&](int channel, int x)
+                            {
+                                const double sourceT0 = offset + (xToTime(static_cast<float>(x)) - start) / stretch;
+                                const double sourceT1 = offset + (xToTime(static_cast<float>(x + 1)) - start) / stretch;
+                                const int b0 = juce::jlimit(0, numBuckets - 1, static_cast<int>(std::floor(sourceT0 * bucketsPerSecond)));
+                                const int b1 = juce::jlimit(b0 + 1, numBuckets, static_cast<int>(std::ceil(sourceT1 * bucketsPerSecond)));
+                                const auto& minimum = peaks.minimum[static_cast<std::size_t>(channel)];
+                                const auto& maximum = peaks.maximum[static_cast<std::size_t>(channel)];
+                                float lo = 0.0f;
+                                float hi = 0.0f;
+                                for (int b = b0; b < b1; ++b)
+                                {
+                                    lo = juce::jmin(lo, minimum[static_cast<std::size_t>(b)]);
+                                    hi = juce::jmax(hi, maximum[static_cast<std::size_t>(b)]);
+                                }
+                                return std::pair{lo, hi};
+                            });
 }
 
 void ArrangerView::paintMidiNotes(juce::Graphics& g, const juce::ValueTree& c, juce::Rectangle<float> area, juce::Colour colour) const

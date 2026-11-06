@@ -27,7 +27,8 @@ add_executable(dojo_tests
     RenderGraphTests.cpp
     SessionTests.cpp
     RealtimeGuardTests.cpp
-    SpscQueueTests.cpp)
+    SpscQueueTests.cpp
+    WaveformTests.cpp)
 
 # The suite runs with the allocation trap so that RT-safety is asserted, not assumed
 # (except in ASan/TSan builds, whose runtimes own operator new/delete).

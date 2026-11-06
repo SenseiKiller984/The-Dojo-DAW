@@ -9,6 +9,7 @@
 #include "devices/TimeEffects.h"
 #include "devices/WavetableSynth.h"
 #include "ui/BrowserDrag.h"
+#include "ui/WaveformPainter.h"
 #include "ui/devices/ParameterControl.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -429,30 +430,30 @@ private:
 };
 
 //==================================================================================================
-/** Draws a sample's waveform (min/max per pixel column). */
+/** Draws a sample's waveform (min/max per pixel column; a stereo sample shows both channels). */
 void paintSampleWaveform(juce::Graphics& g, const devices::SampleData& sample, juce::Rectangle<float> area, juce::Colour colour)
 {
     const int frames = sample.getNumFrames();
-    if (frames <= 0 || area.getWidth() < 1.0f)
-        return;
-    const float* data = sample.audio.getReadPointer(0);
-    const float mid = area.getCentreY();
-    const float half = area.getHeight() * 0.5f;
-    g.setColour(colour);
     const int columns = static_cast<int>(area.getWidth());
-    for (int x = 0; x < columns; ++x)
-    {
-        const int begin = static_cast<int>(static_cast<juce::int64>(x) * frames / columns);
-        const int end = std::max(begin + 1, static_cast<int>(static_cast<juce::int64>(x + 1) * frames / columns));
-        float lo = 0.0f;
-        float hi = 0.0f;
-        for (int i = begin; i < std::min(end, frames); ++i)
-        {
-            lo = std::min(lo, data[i]);
-            hi = std::max(hi, data[i]);
-        }
-        g.fillRect(area.getX() + static_cast<float>(x), mid - hi * half, 1.0f, std::max(1.0f, (hi - lo) * half));
-    }
+    if (frames <= 0 || columns < 1)
+        return;
+    const auto firstX = static_cast<int>(area.getX());
+    waveform::paintChannels(g, area, std::min(sample.audio.getNumChannels(), 2), firstX, firstX + columns, colour,
+                            [&](int channel, int x)
+                            {
+                                const float* data = sample.audio.getReadPointer(channel);
+                                const auto column = static_cast<juce::int64>(x - firstX);
+                                const int begin = static_cast<int>(column * frames / columns);
+                                const int end = std::max(begin + 1, static_cast<int>((column + 1) * frames / columns));
+                                float lo = 0.0f;
+                                float hi = 0.0f;
+                                for (int i = begin; i < std::min(end, frames); ++i)
+                                {
+                                    lo = std::min(lo, data[i]);
+                                    hi = std::max(hi, data[i]);
+                                }
+                                return std::pair{lo, hi};
+                            });
 }
 
 /** Sampler: waveform with start/end (drop a file or Load...), ADSR and tuning. */
