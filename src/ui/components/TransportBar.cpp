@@ -178,7 +178,10 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
 
     returnButton_.onClick = [this]
     {
-        controller_.returnToStart();
+        if (onReturnToStart)
+            onReturnToStart();
+        else
+            controller_.returnToStart();
     };
     playButton_.onClick = [this]
     {
@@ -188,6 +191,8 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     {
         if (playing_)
             controller_.stop();
+        else if (onReturnToStart)
+            onReturnToStart();
         else
             controller_.returnToStart();
     };

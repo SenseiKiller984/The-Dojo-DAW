@@ -28,6 +28,7 @@ class PluginManager;
 
 namespace dojo::ui
 {
+class Preferences;
 class DojoLookAndFeel;
 struct AppServices;
 } // namespace dojo::ui
@@ -81,6 +82,7 @@ private:
     std::unique_ptr<juce::FileLogger> logger_;
     std::unique_ptr<ui::DojoLookAndFeel> lookAndFeel_;
     std::unique_ptr<juce::ApplicationProperties> settings_;
+    std::unique_ptr<ui::Preferences> preferences_;
     std::unique_ptr<engine::AudioEngine> engine_;
     std::unique_ptr<engine::AudioDeviceHost> deviceHost_;
     std::unique_ptr<engine::EngineController> controller_;

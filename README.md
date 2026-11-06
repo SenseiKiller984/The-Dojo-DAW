@@ -54,6 +54,11 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **VST3 and CLAP** on both Windows and Linux: parameters (automatable), state saved with the project, their own editor windows, latency reported to the delay compensation.
 - **Out-of-process scanning**: each plug-in is opened by a separate scanner process, so one that crashes or hangs is blacklisted instead of taking The Dojo down.
 
+**Preferences** (*Options > Preferences*, Ctrl+,)
+- **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip; a loop still loops, recording carries on).
+- **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop). Applied instantly, remembered.
+- **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
+
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 
 ## Using it
@@ -78,8 +83,9 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Ctrl+G | Toggle snap |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in, out, to fit |
 | Ctrl+N / Ctrl+O / Ctrl+S | New, open, save |
-| Ctrl+, | Audio settings (device, inputs, MIDI inputs) |
-| F1 | All shortcuts |
+| Ctrl+, | Preferences (playback options, themes, audio, shortcuts) |
+| Ctrl+Shift+A | Audio settings (device, inputs, MIDI inputs) |
+| F1 | Keyboard shortcuts (change them there) |
 
 Mouse:
 - Right-click clips, track headers, automation lanes or empty lanes for context menus.

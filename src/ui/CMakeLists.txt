@@ -15,6 +15,10 @@ add_library(dojo_ui STATIC
     MainComponent.h
     MainMenuModel.cpp
     MainMenuModel.h
+    Preferences.cpp
+    Preferences.h
+    PreferencesWindow.cpp
+    PreferencesWindow.h
     components/ArrangerView.cpp
     components/ArrangerView.h
     components/BrowserPanel.cpp
@@ -41,7 +45,9 @@ add_library(dojo_ui STATIC
     devices/ParameterControl.h
     theme/DojoLookAndFeel.cpp
     theme/DojoLookAndFeel.h
-    theme/DojoTheme.h)
+    theme/DojoTheme.h
+    theme/Themes.cpp
+    theme/Themes.h)
 add_library(dojo::ui ALIAS dojo_ui)
 
 target_link_libraries(dojo_ui

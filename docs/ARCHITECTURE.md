@@ -39,7 +39,9 @@ src/
   session/  the document: Session (juce::ValueTree + UndoManager), AudioAssetCache (decoding,
             peaks, disk streaming service), DeviceManager (live device instances), GraphCompiler
             (session -> RenderGraph), Recorder, Exporter, Project (file I/O)
-  ui/       look-and-feel, MainComponent (commands, menus, document actions), arranger, mixer,
+  ui/       look-and-feel and themes (theme/: a palette the active theme writes; switching rebuilds
+            the main component, keeping the view), Preferences + PreferencesWindow,
+            MainComponent (commands, menus, document actions), arranger, mixer,
             devices panel + device editors, clip editor (piano roll, step sequencer, inspector),
             browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)

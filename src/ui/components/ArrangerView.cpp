@@ -260,6 +260,21 @@ juce::Rectangle<float> ArrangerView::getClipBounds(const juce::ValueTree& clip, 
     return {x0, bounds.getY() + 3.0f, juce::jmax(2.0f, x1 - x0), bounds.getHeight() - 6.0f};
 }
 
+void ArrangerView::setViewState(const ViewState& state)
+{
+    pixelsPerSecond_ = state.pixelsPerSecond;
+    setScroll(state.scrollSeconds, state.scrollY);
+    updateScrollbars();
+    repaint();
+}
+
+void ArrangerView::scrollToTime(double seconds)
+{
+    setScroll(seconds, scrollY_);
+    updateScrollbars();
+    repaint();
+}
+
 juce::Rectangle<int> ArrangerView::getClipArea(const juce::ValueTree& clip) const
 {
     const auto& all = rows();
@@ -801,7 +816,7 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
     {
         g.setColour(on ? onColour : colour::control);
         g.fillRoundedRectangle(box.toFloat(), 3.0f);
-        g.setColour(on ? colour::windowBackground : colour::textMuted);
+        g.setColour(on ? textOn(onColour) : colour::textMuted);
         g.setFont(sansBold(10.0f));
         g.drawText(text, box, juce::Justification::centred, false);
     };
@@ -1048,7 +1063,7 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
         if (std::abs(session::clip::getPitch(c)) > 1.0e-6)
             name << "  " << (session::clip::getPitch(c) > 0 ? "+" : "") << juce::String(session::clip::getPitch(c), 1) << " st";
     }
-    g.setColour(colour::windowBackground);
+    g.setColour(textOn(colour));
     g.setFont(sansBold(10.5f));
     g.drawText(name, title.reduced(6.0f, 0.0f), juce::Justification::centredLeft, true);
 

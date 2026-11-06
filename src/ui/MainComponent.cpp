@@ -131,6 +131,7 @@ MainComponent::MainComponent(AppServices& services)
         commandManager_.commandStatusChanged();
     };
 
+    transport_.onReturnToStart = [this] { goToStart(); };
     transport_.onAudioSettingsRequested = [this]
     {
         showAudioSettings();
@@ -162,6 +163,13 @@ MainComponent::~MainComponent()
 
     if (settingsWindow_ != nullptr)
         delete settingsWindow_.getComponent();
+}
+
+void MainComponent::goToStart()
+{
+    controller_.returnToStart();
+    if (services_.preferences.getReturnViewToStart())
+        arranger_.scrollToTime(0.0);
 }
 
 void MainComponent::focusGained(FocusChangeType)
@@ -275,6 +283,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    zoomOut,
                                    zoomToFit,
                                    audioSettings,
+                                   preferences,
                                    toggleTestTone,
                                    showShortcuts,
                                    record,
@@ -404,16 +413,20 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress('0', cmd);
         break;
 
+    case preferences:
+        info.setInfo("Preferences...", "Playback options, themes, audio settings and keyboard shortcuts", categories::options, 0);
+        info.addDefaultKeypress(',', cmd);
+        break;
     case audioSettings:
         info.setInfo("Audio Settings...", "Choose the audio driver and device", categories::options, 0);
-        info.addDefaultKeypress(',', cmd);
+        info.addDefaultKeypress('a', cmd | shift);
         break;
     case toggleTestTone:
         info.setInfo("Test Tone", "Play a 440 Hz test tone through the master bus", categories::options, 0);
         info.setTicked(controller_.isTestToneEnabled());
         break;
     case showShortcuts:
-        info.setInfo("Keyboard Shortcuts", "List keyboard and mouse shortcuts", categories::options, 0);
+        info.setInfo("Keyboard Shortcuts...", "See and change the keyboard shortcuts", categories::options, 0);
         info.addDefaultKeypress(juce::KeyPress::F1Key, 0);
         break;
     case record:
@@ -546,7 +559,7 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         controller_.togglePlayback();
         break;
     case returnToStart:
-        controller_.returnToStart();
+        goToStart();
         break;
     case toggleSnap:
         editor_.setSnapEnabled(!editor_.isSnapEnabled());
@@ -561,6 +574,10 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         arranger_.zoomToFit();
         break;
 
+    case preferences:
+        if (services_.showPreferences)
+            services_.showPreferences(Preferences::Tab::general);
+        break;
     case audioSettings:
         showAudioSettings();
         break;
@@ -568,7 +585,10 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         controller_.setTestToneEnabled(!controller_.isTestToneEnabled());
         break;
     case showShortcuts:
-        showShortcutHelp();
+        if (services_.showPreferences)
+            services_.showPreferences(Preferences::Tab::keyboard);
+        else
+            showShortcutHelp();
         break;
     case record:
         toggleRecording();
@@ -815,6 +835,22 @@ void MainComponent::requestQuit(std::function<void()> quit)
 //==================================================================================================
 // Bottom panel, recording, devices
 
+MainComponent::ViewState MainComponent::getViewState() const
+{
+    return {arranger_.getViewState(), bottomTab_, bottomHeight_, editor_.getSelectedTrack(), editor_.getEditedClip()};
+}
+
+void MainComponent::setViewState(const ViewState& state)
+{
+    bottomHeight_ = state.bottomHeight;
+    editor_.selectTrack(state.selectedTrack);
+    if (state.editedClip != 0)
+        editor_.setEditedClip(state.editedClip);
+    showBottomTab(state.bottomTab);
+    resized();
+    arranger_.setViewState(state.arranger);
+}
+
 void MainComponent::showBottomTab(BottomTab tab)
 {
     bottomTab_ = tab;
@@ -911,7 +947,9 @@ void MainComponent::showShortcutHelp()
         "Ctrl+G\tToggle snap\n"
         "Ctrl+= / Ctrl+- / Ctrl+0\tZoom in / out / to fit\n"
         "Ctrl+S / Ctrl+O / Ctrl+N\tSave / open / new\n"
-        "Ctrl+,\tAudio settings\n\n"
+        "Ctrl+,\tPreferences (playback, themes, audio, shortcuts)\n"
+        "Ctrl+Shift+A\tAudio settings\n"
+        "F1\tKeyboard shortcuts (change them there)\n\n"
         "Mouse: drag clips to move (also across tracks); drag clip edges to trim; drag the\n"
         "small squares on a clip's top corners to fade; Alt or Shift while dragging bypasses\n"
         "snapping; Ctrl+wheel zooms; Shift+wheel scrolls sideways; double-click a track\n"

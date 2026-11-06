@@ -49,7 +49,7 @@ void configureToggle(juce::TextButton& button, const juce::String& text, juce::C
     button.setWantsKeyboardFocus(false);
     button.setTooltip(tip);
     button.setColour(juce::TextButton::buttonOnColourId, onColour);
-    button.setColour(juce::TextButton::textColourOnId, theme::colour::windowBackground);
+    button.setColour(juce::TextButton::textColourOnId, theme::textOn(onColour));
 }
 } // namespace
 

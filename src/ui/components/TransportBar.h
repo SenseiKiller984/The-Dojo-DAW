@@ -34,6 +34,9 @@ public:
     /** Opens the audio device settings (provided by MainComponent). */
     std::function<void()> onAudioSettingsRequested;
     /** The record button was clicked (MainComponent starts / stops the Recorder). */
+    /** Return to start (the return button, or Stop while stopped). Defaults to the controller's.
+        The main component adds "scroll the view back" when that preference is on. */
+    std::function<void()> onReturnToStart;
     std::function<void()> onRecordClicked;
 
     /** Lights the record button while recording. */

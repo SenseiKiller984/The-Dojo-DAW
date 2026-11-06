@@ -70,6 +70,14 @@ struct SetLoop
     double endSeconds = 0.0;
 };
 
+/** Stop playback when it reaches the end of the arrangement (the end of the last clip). Ignored
+    while a loop will wrap, while capturing (recording, real-time export) and in offline renders. */
+struct SetStopAtEnd
+{
+    static constexpr bool coalescable = true;
+    bool enabled = false;
+};
+
 /** Global varispeed: the timeline runs at `rate` x real time (0.25 .. 4). */
 struct SetSpeed
 {
@@ -103,7 +111,8 @@ struct StopCapture
 
 using EngineCommand =
     std::variant<command::SetPlaying, command::Locate, command::SetMasterGain, command::SetTestTone,
-                 command::SetLoop, command::SetSpeed, command::SwapGraph, command::StartCapture, command::StopCapture>;
+                 command::SetLoop, command::SetSpeed, command::SwapGraph, command::StartCapture, command::StopCapture,
+                 command::SetStopAtEnd>;
 
 static_assert(std::is_trivially_copyable_v<EngineCommand>,
               "EngineCommand must stay trivially copyable to travel through the lock-free command queue");

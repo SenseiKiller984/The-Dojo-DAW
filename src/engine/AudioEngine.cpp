@@ -308,9 +308,12 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
     {
         int subBlock = std::min(numSamples - offset, maxBlockSize_);
         bool wraps = false;
+        bool reachesEnd = false;
 
         const bool loopSuspended = ignoreLoop_ || (capture_ != nullptr && capture_->suspendLoop);
-        if (playing_ && loopEnabled_ && !loopSuspended && loopEnd_ > loopStart_ + 0.001 && positionSeconds_ < loopEnd_)
+        const bool loopWillWrap =
+            playing_ && loopEnabled_ && !loopSuspended && loopEnd_ > loopStart_ + 0.001 && positionSeconds_ < loopEnd_;
+        if (loopWillWrap)
         {
             const double secondsPerSample = speed_ / sampleRate_;
             const double samplesToLoopEnd = (loopEnd_ - positionSeconds_) / secondsPerSample;
@@ -318,6 +321,21 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
             {
                 subBlock = std::max(1, static_cast<int>(std::ceil(samplesToLoopEnd - 1.0e-9)));
                 wraps = true;
+            }
+        }
+
+        // Stop at the end of the arrangement: only when playback crosses it (starting beyond the
+        // end plays on), never while a loop wraps, while capturing or in an offline render.
+        const double end = graph_ != nullptr ? graph_->arrangementEnd : 0.0;
+        if (playing_ && stopAtEnd_ && !loopWillWrap && capture_ == nullptr && !offlineActive_.load(std::memory_order_relaxed) &&
+            end > 0.0 && positionSeconds_ < end)
+        {
+            const double secondsPerSample = speed_ / sampleRate_;
+            const double samplesToEnd = (end - positionSeconds_) / secondsPerSample;
+            if (samplesToEnd <= static_cast<double>(subBlock))
+            {
+                subBlock = std::max(1, static_cast<int>(std::ceil(samplesToEnd - 1.0e-9)));
+                reachesEnd = true;
             }
         }
 
@@ -349,6 +367,12 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
         if (wraps)
         {
             positionSeconds_ = loopStart_ + std::max(0.0, positionSeconds_ - loopEnd_);
+            panicAll();
+        }
+        else if (reachesEnd)
+        {
+            playing_ = false;
+            positionSeconds_ = end;
             panicAll();
         }
 
@@ -473,6 +497,11 @@ void AudioEngine::handle(const command::SetLoop& cmd) noexcept
 void AudioEngine::handle(const command::SetSpeed& cmd) noexcept
 {
     speed_ = std::clamp(cmd.rate, 0.25, 4.0);
+}
+
+void AudioEngine::handle(const command::SetStopAtEnd& cmd) noexcept
+{
+    stopAtEnd_ = cmd.enabled;
 }
 
 void AudioEngine::handle(const command::SwapGraph& cmd) noexcept

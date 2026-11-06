@@ -22,12 +22,18 @@ public:
     DojoLookAndFeel();
     ~DojoLookAndFeel() override;
 
+    /** Re-reads the active theme's palette (after theme::applyTheme). */
+    void refreshColours();
+
     juce::Typeface::Ptr getTypefaceForFont(const juce::Font& font) override;
 
     // Buttons
     void drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
                               bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
     juce::Font getTextButtonFont(juce::TextButton& button, int buttonHeight) override;
+    /** Text that stays readable on the button's fill in every theme (e.g. yellow accents). */
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button, bool shouldDrawButtonAsHighlighted,
+                        bool shouldDrawButtonAsDown) override;
 
     // Sliders (vertical faders)
     void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height, float sliderPos,

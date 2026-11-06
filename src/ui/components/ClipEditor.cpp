@@ -253,7 +253,7 @@ void PianoRoll::paint(juce::Graphics& g)
         g.drawHorizontalLine(juce::roundToInt(y + keyHeight_) - 1, 0.0f, static_cast<float>(kKeyboardWidth));
         if (pitch % 12 == 0)
         {
-            g.setColour(colour::windowBackground);
+            g.setColour(juce::Colour(0xff1b1d22)); // on a white key, in every theme
             g.setFont(mono(9.0f));
             g.drawText(juce::MidiMessage::getMidiNoteName(pitch, true, true, 3), key.reduced(3.0f, 0.0f), juce::Justification::centredRight, false);
         }

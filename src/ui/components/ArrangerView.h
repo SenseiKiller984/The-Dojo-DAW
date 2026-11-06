@@ -97,6 +97,21 @@ public:
     void itemDragExit(const SourceDetails& details) override;
     void itemDropped(const SourceDetails& details) override;
 
+    /** Zoom and scroll position (kept when the window is rebuilt, e.g. for a new theme). */
+    struct ViewState
+    {
+        double pixelsPerSecond = 40.0;
+        double scrollSeconds = 0.0;
+        int scrollY = 0;
+    };
+    [[nodiscard]] ViewState getViewState() const noexcept { return {pixelsPerSecond_, scrollSeconds_, scrollY_}; }
+    void setViewState(const ViewState& state);
+
+    /** Scrolls the view so that `seconds` is at its left edge (vertical position unchanged). */
+    void scrollToTime(double seconds);
+    /** The time at the left edge of the view. */
+    [[nodiscard]] double getScrollSeconds() const noexcept { return scrollSeconds_; }
+
     /** Where a clip is drawn, in this component's coordinates (empty if its track is not shown). */
     [[nodiscard]] juce::Rectangle<int> getClipArea(const juce::ValueTree& clip) const;
 

@@ -186,6 +186,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     graph->loopStart = session.getLoopStart();
     graph->loopEnd = session.getLoopEnd();
     graph->hasTransportSettings = true;
+    graph->arrangementEnd = session.getEndTime();
     graph->masterGain = dbToGain(session.getMasterVolumeDb());
     graph->tracks.resize(count);
 

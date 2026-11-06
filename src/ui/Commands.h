@@ -49,6 +49,7 @@ enum : juce::CommandID
     cutClips,
     copyClips,
     pasteClips,
+    preferences,
 };
 
 namespace categories

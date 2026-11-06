@@ -214,7 +214,7 @@ public:
             const bool on = eq_.getBand(b).enabled->get();
             g.setColour(kBandColours[static_cast<std::size_t>(b)].withAlpha(on ? 1.0f : 0.35f));
             g.fillEllipse(juce::Rectangle<float>(12.0f, 12.0f).withCentre(centre));
-            g.setColour(colour::windowBackground);
+            g.setColour(textOn(kBandColours[static_cast<std::size_t>(b)]));
             g.setFont(sansBold(9.0f));
             g.drawText(juce::String(b + 1), juce::Rectangle<float>(12.0f, 12.0f).withCentre(centre), juce::Justification::centred, false);
         }

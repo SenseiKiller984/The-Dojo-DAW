@@ -6,6 +6,8 @@
 #include "core/Version.h"
 #include "devices/DeviceRegistry.h"
 #include "engine/Preview.h"
+#include "ui/Preferences.h"
+#include "ui/theme/Themes.h"
 #include "engine/AudioEngine.h"
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
@@ -69,11 +71,18 @@ void DojoApplication::initialise(const juce::String&)
     settings_ = std::make_unique<juce::ApplicationProperties>();
     settings_->setStorageParameters(settingsOptions);
 
+    // The chosen theme, before any window or component exists.
+    preferences_ = std::make_unique<ui::Preferences>(*settings_->getUserSettings());
+    ui::theme::applyTheme(ui::theme::findTheme(preferences_->getThemeName()));
+    lookAndFeel_->refreshColours();
+
     // Engine, then the device that drives it. Opening the device starts the audio thread, which
     // enters The Dojo through AudioEngine::process().
     engine_ = std::make_unique<engine::AudioEngine>();
     deviceHost_ = std::make_unique<engine::AudioDeviceHost>(*engine_);
     controller_ = std::make_unique<engine::EngineController>(*engine_, *deviceHost_);
+    controller_->setStopAtEnd(preferences_->getStopAtEnd());
+    preferences_->addChangeListener(this); // engine options follow the preferences
 
     const auto savedDevice = settings_->getUserSettings()->getXmlValue(kAudioDeviceSettingKey);
     const auto deviceError = deviceHost_->openDevice(savedDevice.get(), options_.audioApi);
@@ -146,7 +155,7 @@ void DojoApplication::initialise(const juce::String&)
 
     commandManager_ = std::make_unique<juce::ApplicationCommandManager>();
     services_ = std::make_unique<ui::AppServices>(ui::AppServices{*project_, *controller_, *commandManager_, *plugins_,
-                                                                   *recorder_, *exporter_, *settings_, *preview_});
+                                                                   *recorder_, *exporter_, *settings_, *preview_, *preferences_, {}});
     mainWindow_ = std::make_unique<MainWindow>(*services_);
 
     if (options_.sessionFile != juce::File())
@@ -177,6 +186,8 @@ void DojoApplication::shutdown()
 {
     if (deviceHost_ != nullptr)
         deviceHost_->getDeviceManager().removeChangeListener(this);
+    if (preferences_ != nullptr)
+        preferences_->removeChangeListener(this);
 
     smokeTest_.reset();
     mainWindow_.reset(); // 1. UI goes first: nothing can post commands any more.
@@ -193,6 +204,7 @@ void DojoApplication::shutdown()
     controller_.reset();
     engine_.reset(); // 3. Now the real-time state (and the last graphs) can be destroyed.
 
+    preferences_.reset();
     settings_.reset();
 
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
@@ -212,8 +224,15 @@ void DojoApplication::systemRequestedQuit()
 
 void DojoApplication::anotherInstanceStarted(const juce::String&) {}
 
-void DojoApplication::changeListenerCallback(juce::ChangeBroadcaster*)
+void DojoApplication::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
+    if (source == preferences_.get())
+    {
+        if (controller_ != nullptr)
+            controller_->setStopAtEnd(preferences_->getStopAtEnd());
+        return;
+    }
+
     // The audio device configuration changed (e.g. in Audio Settings): remember it for next launch.
     if (deviceHost_ == nullptr || settings_ == nullptr)
         return;

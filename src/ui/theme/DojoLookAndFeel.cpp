@@ -80,6 +80,11 @@ DojoLookAndFeel::DojoLookAndFeel()
     , monoMedium_(loadEmbeddedTypeface(DojoBinaryData::JetBrainsMonoMedium_ttf,
                                        DojoBinaryData::JetBrainsMonoMedium_ttfSize))
 {
+    refreshColours();
+}
+
+void DojoLookAndFeel::refreshColours()
+{
     using namespace theme;
 
     setColourScheme({
@@ -166,6 +171,30 @@ juce::Typeface::Ptr DojoLookAndFeel::getTypefaceForFont(const juce::Font& font)
         return font.isBold() ? sansSemiBold_ : sansRegular_;
 
     return LookAndFeel_V4::getTypefaceForFont(font);
+}
+
+void DojoLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool shouldDrawButtonAsHighlighted,
+                                     bool shouldDrawButtonAsDown)
+{
+    const bool on = button.getToggleState();
+    const auto fill = button.findColour(on ? juce::TextButton::buttonOnColourId : juce::TextButton::buttonColourId);
+    const auto wanted = button.findColour(on ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId);
+    const auto colour = fill.isOpaque() || fill.getAlpha() > 160 ? theme::readableOn(fill, wanted) : wanted;
+
+    // As LookAndFeel_V4 draws it, with the colour chosen above.
+    const auto font = getTextButtonFont(button, button.getHeight());
+    g.setFont(font);
+    g.setColour(colour.withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.5f));
+    const int yIndent = std::min(4, button.proportionOfHeight(0.3f));
+    const int cornerSize = std::min(button.getHeight(), button.getWidth()) / 2;
+    const int fontHeight = juce::roundToInt(font.getHeight() * 0.6f);
+    const int leftIndent = std::min(fontHeight, 2 + cornerSize / (button.isConnectedOnLeft() ? 4 : 2));
+    const int rightIndent = std::min(fontHeight, 2 + cornerSize / (button.isConnectedOnRight() ? 4 : 2));
+    const int textWidth = button.getWidth() - leftIndent - rightIndent;
+    if (textWidth > 0)
+        g.drawFittedText(button.getButtonText(), leftIndent, yIndent, textWidth, button.getHeight() - yIndent * 2,
+                         juce::Justification::centred, 2);
+    juce::ignoreUnused(shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
 }
 
 juce::Font DojoLookAndFeel::getTextButtonFont(juce::TextButton&, int buttonHeight)

@@ -6,6 +6,7 @@
 #include "session/Exporter.h"
 #include "session/Project.h"
 #include "session/Recorder.h"
+#include "ui/Preferences.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -23,6 +24,9 @@ struct AppServices
     session::Exporter& exporter;
     juce::ApplicationProperties& settings;
     engine::PreviewService& preview;
+    Preferences& preferences;
+    /** Opens the Preferences window on a tab (set by the main window). */
+    std::function<void(Preferences::Tab)> showPreferences;
 };
 
 } // namespace dojo::ui

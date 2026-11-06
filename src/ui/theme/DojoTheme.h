@@ -2,13 +2,15 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 
 /**
     The Dojo design tokens.
 
     One palette and one set of metrics, used by every component, so the whole UI can be re-themed
-    from here. Fonts are embedded (see resources/) and mapped by DojoLookAndFeel, so `sans()` and
+    from here: the palette is the active theme's (theme::applyTheme in Themes.h). Fonts are embedded (see resources/) and mapped by DojoLookAndFeel, so `sans()` and
     `mono()` render identically on Windows and Linux.
 */
 namespace dojo::ui::theme
@@ -16,44 +18,78 @@ namespace dojo::ui::theme
 
 namespace colour
 {
+// The active theme's palette (see Themes.h: applyTheme() rewrites these). Defaults: "Dojo Night".
 // Surfaces — "sumi ink" blacks, from deepest to most raised.
-inline const juce::Colour windowBackground{0xff0b0c0f};
-inline const juce::Colour panel{0xff111318};
-inline const juce::Colour panelRaised{0xff171a20};
-inline const juce::Colour panelHeader{0xff1c1f26};
-inline const juce::Colour control{0xff242831};
-inline const juce::Colour controlHover{0xff2d323c};
-inline const juce::Colour outline{0xff262a33};
-inline const juce::Colour outlineStrong{0xff363b46};
+inline juce::Colour windowBackground{0xff0b0c0f};
+inline juce::Colour panel{0xff111318};
+inline juce::Colour panelRaised{0xff171a20};
+inline juce::Colour panelHeader{0xff1c1f26};
+inline juce::Colour control{0xff242831};
+inline juce::Colour controlHover{0xff2d323c};
+inline juce::Colour outline{0xff262a33};
+inline juce::Colour outlineStrong{0xff363b46};
 
 // Text — warm "rice paper" whites.
-inline const juce::Colour textPrimary{0xffece8e1};
-inline const juce::Colour textSecondary{0xffa4a9b4};
-inline const juce::Colour textMuted{0xff656b77};
+inline juce::Colour textPrimary{0xffece8e1};
+inline juce::Colour textSecondary{0xffa4a9b4};
+inline juce::Colour textMuted{0xff656b77};
 
 // Accents.
-inline const juce::Colour accent{0xffe0533d}; // vermilion, as on a hanko seal
-inline const juce::Colour accentBright{0xffff6b50};
-inline const juce::Colour gold{0xffd6a645}; // black-belt embroidery gold
-inline const juce::Colour play{0xff4cc38a};
-inline const juce::Colour record{0xffff3b3b};
+inline juce::Colour accent{0xffe0533d}; // vermilion, as on a hanko seal
+inline juce::Colour accentBright{0xffff6b50};
+inline juce::Colour gold{0xffd6a645}; // black-belt embroidery gold
+inline juce::Colour play{0xff4cc38a};
+inline juce::Colour record{0xffff3b3b};
 
 // Metering.
-inline const juce::Colour meterBackground{0xff08090b};
-inline const juce::Colour meterLow{0xff3fbf7f};
-inline const juce::Colour meterMid{0xffd9c24a};
-inline const juce::Colour meterHigh{0xffe58a3d};
-inline const juce::Colour meterClip{0xffff3b3b};
+inline juce::Colour meterBackground{0xff08090b};
+inline juce::Colour meterLow{0xff3fbf7f};
+inline juce::Colour meterMid{0xffd9c24a};
+inline juce::Colour meterHigh{0xffe58a3d};
+inline juce::Colour meterClip{0xffff3b3b};
 
 // Timeline.
-inline const juce::Colour laneEven{0xff101216};
-inline const juce::Colour laneOdd{0xff13151a};
-inline const juce::Colour gridBar{0xff2b2f38};
-inline const juce::Colour gridBeat{0xff1b1e24};
-inline const juce::Colour playhead{0xffff6b50};
+inline juce::Colour laneEven{0xff101216};
+inline juce::Colour laneOdd{0xff13151a};
+inline juce::Colour gridBar{0xff2b2f38};
+inline juce::Colour gridBeat{0xff1b1e24};
+inline juce::Colour playhead{0xffff6b50};
 } // namespace colour
 
-/** Default colours offered for tracks/channels (cycled as tracks are created). */
+/** WCAG contrast ratio of two colours (1 .. 21). */
+[[nodiscard]] inline double contrastRatio(juce::Colour a, juce::Colour b)
+{
+    const auto luminance = [](juce::Colour c)
+    {
+        const auto channel = [](juce::uint8 v)
+        {
+            const double s = v / 255.0;
+            return s <= 0.03928 ? s / 12.92 : std::pow((s + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(c.getRed()) + 0.7152 * channel(c.getGreen()) + 0.0722 * channel(c.getBlue());
+    };
+    const double la = luminance(a), lb = luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+/** `preferred` if it reads well enough on `background` (contrast >= 3), else near-black or
+    near-white, whichever reads better. For text on lit buttons and coloured surfaces. */
+[[nodiscard]] inline juce::Colour readableOn(juce::Colour background, juce::Colour preferred)
+{
+    if (contrastRatio(preferred, background) >= 3.0)
+        return preferred;
+    const juce::Colour dark{0xff121212}, light{0xfff4f2ee};
+    return contrastRatio(dark, background) >= contrastRatio(light, background) ? dark : light;
+}
+
+/** Readable text over `background`: near-black on light colours, near-white on dark ones. */
+[[nodiscard]] inline juce::Colour textOn(juce::Colour background)
+{
+    return background.getPerceivedBrightness() > 0.42f ? juce::Colour(0xff121212) : juce::Colour(0xfff4f2ee);
+}
+
+/** Default colours offered for tracks/channels (cycled as tracks are created). The same in every
+    theme: track colours belong to the project. */
 inline const std::array<juce::Colour, 8> trackPalette{
     juce::Colour{0xffe0533d}, // vermilion
     juce::Colour{0xffe58a3d}, // persimmon

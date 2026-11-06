@@ -207,6 +207,7 @@ private:
     void handle(const command::SetTestTone& cmd) noexcept;
     void handle(const command::SetLoop& cmd) noexcept;
     void handle(const command::SetSpeed& cmd) noexcept;
+    void handle(const command::SetStopAtEnd& cmd) noexcept;
     void handle(const command::SwapGraph& cmd) noexcept;
     void handle(const command::StartCapture& cmd) noexcept;
     void handle(const command::StopCapture& cmd) noexcept;
@@ -261,6 +262,7 @@ private:
     bool playing_ = false;
     bool ignoreLoop_ = false; ///< offline exports render straight through the loop range
     bool loopEnabled_ = false;
+    bool stopAtEnd_ = false;
     double loopStart_ = 0.0;
     double loopEnd_ = 0.0;
     double masterGainTarget_ = 1.0;

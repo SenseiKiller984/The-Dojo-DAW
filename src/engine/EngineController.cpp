@@ -71,6 +71,11 @@ void EngineController::setSpeed(double rate)
     send(command::SetSpeed{rate});
 }
 
+void EngineController::setStopAtEnd(bool enabled)
+{
+    send(command::SetStopAtEnd{enabled});
+}
+
 void EngineController::startCapture(CaptureSession* session)
 {
     command::StartCapture start;

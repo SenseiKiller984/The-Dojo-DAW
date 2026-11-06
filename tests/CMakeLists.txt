@@ -20,6 +20,7 @@ add_executable(dojo_tests
     EngineGraphTests.cpp
     InstrumentTests.cpp
     PluginTests.cpp
+    PreferencesTests.cpp
     PreviewTests.cpp
     RecordExportTests.cpp
     EngineCommandTests.cpp

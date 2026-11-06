@@ -49,6 +49,8 @@ public:
     void locateSeconds(double seconds);
     void setLoop(bool enabled, double startSeconds, double endSeconds);
     void setSpeed(double rate);
+    /** Stop when playback reaches the end of the last clip (see command::SetStopAtEnd). */
+    void setStopAtEnd(bool enabled);
 
     // --- Capture (recording / real-time bounce) ---------------------------------------------------
     /** Hands `session` to the audio thread (the caller keeps ownership). */

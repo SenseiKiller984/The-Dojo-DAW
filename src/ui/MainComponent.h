@@ -74,11 +74,28 @@ public:
     /** Shows one of the bottom panel's tabs. */
     void showBottomTab(BottomTab tab);
 
+    /** What the user was looking at: carried over when the window is rebuilt (new theme). */
+    struct ViewState
+    {
+        ArrangerView::ViewState arranger;
+        BottomTab bottomTab = BottomTab::mixer;
+        int bottomHeight = 330;
+        std::uint32_t selectedTrack = 0;
+        std::uint32_t editedClip = 0;
+    };
+    [[nodiscard]] ViewState getViewState() const;
+    /** Call once the component has its size. */
+    void setViewState(const ViewState& state);
+
     /** Number of UI frames processed so far (used by the start-up smoke test). */
     [[nodiscard]] std::uint64_t getFrameCount() const noexcept { return frameCount_; }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    /** The mouse and editing tips (Keyboard tab of the Preferences). */
+    void showShortcutHelp();
+    [[nodiscard]] ArrangerView& getArranger() noexcept { return arranger_; }
+
     /** Keyboard focus starts in the arranger (not in the first text field, e.g. a browser search). */
     void focusGained(FocusChangeType cause) override;
 
@@ -109,7 +126,8 @@ private:
     // Dialogs
     void showAudioSettings();
     void showMessage(const juce::String& title, const juce::String& message);
-    void showShortcutHelp();
+    /** Playhead to the start; with the preference on, the view follows. */
+    void goToStart();
 
     AppServices& services_;
     session::Project& project_;

@@ -540,3 +540,46 @@ TEST_CASE("Rendering a full graph with devices and workers never touches the hea
     CHECK(rt::getRealtimeViolationCount() == before);
     CHECK(test::peak(l) > 0.0);
 }
+
+TEST_CASE("Playback can stop at the end of the arrangement", "[engine][transport]")
+{
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 24'000, 0.25f), kRate);
+
+    Rig rig;
+    rig.audioTrackWith(tone, 0.25); // the last clip ends at 0.75 s
+    rig.publish();
+
+    // Off (the default): playback runs on past the end.
+    rig.play();
+    rig.render(1.5);
+    auto telemetry = rig.engine.collectTelemetry();
+    CHECK(telemetry.playing);
+    CHECK(telemetry.playheadSeconds > 1.4);
+
+    // On: it stops exactly at the end of the last clip.
+    REQUIRE(rig.engine.post(engine::command::SetPlaying{false}));
+    REQUIRE(rig.engine.post(engine::command::SetStopAtEnd{true}));
+    rig.play();
+    rig.render(1.5);
+    telemetry = rig.engine.collectTelemetry();
+    CHECK_FALSE(telemetry.playing);
+    CHECK_THAT(telemetry.playheadSeconds, WithinAbs(0.75, 1.0e-9));
+    CHECK(test::peak(rig.left, at(2.0), at(2.24)) > 0.2); // the clip played up to the end (this pass started at 1.5 s of output)
+
+    // Starting beyond the end plays on (it only stops when crossing the end).
+    rig.play(1.0);
+    rig.render(0.5);
+    telemetry = rig.engine.collectTelemetry();
+    CHECK(telemetry.playing);
+    CHECK(telemetry.playheadSeconds > 1.4);
+
+    // A loop that wraps before the end keeps looping.
+    REQUIRE(rig.engine.post(engine::command::SetPlaying{false}));
+    REQUIRE(rig.engine.post(engine::command::SetLoop{true, 0.0, 0.5}));
+    rig.play();
+    rig.render(2.0);
+    telemetry = rig.engine.collectTelemetry();
+    CHECK(telemetry.playing);
+    CHECK(telemetry.playheadSeconds < 0.5);
+}

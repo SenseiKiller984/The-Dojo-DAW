@@ -179,6 +179,7 @@ struct RenderGraph
     double loopStart = 0.0;
     double loopEnd = 0.0;
     bool hasTransportSettings = false; ///< apply speed/loop from this graph when it is swapped in
+    double arrangementEnd = 0.0;       ///< end of the last clip (for "stop at the end"); 0 = no clips
 
     double masterGain = 1.0;
     AutomationCurve masterVolumeAutomation;

@@ -78,11 +78,13 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, showEditor);
         break;
     case 5:
+        menu.addCommandItem(cm, preferences);
+        menu.addSeparator();
         menu.addCommandItem(cm, audioSettings);
+        menu.addCommandItem(cm, showShortcuts);
+        menu.addSeparator();
         menu.addCommandItem(cm, toggleTestTone);
         menu.addCommandItem(cm, scanPlugins);
-        menu.addSeparator();
-        menu.addCommandItem(cm, showShortcuts);
         break;
     default:
         break;
