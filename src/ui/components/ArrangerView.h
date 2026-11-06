@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace dojo::ui
@@ -112,6 +113,16 @@ public:
     /** The time at the left edge of the view. */
     [[nodiscard]] double getScrollSeconds() const noexcept { return scrollSeconds_; }
 
+    // --- Clip selection (what the mouse does; public for tests) -------------------------------------
+    /** A click on a clip: plain selects it, Ctrl toggles it, Shift selects every clip on its track
+        between the anchor (the last clip clicked without Shift) and it; Ctrl+Shift adds that range. */
+    void selectClipWithModifiers(const juce::ValueTree& clip, juce::ModifierKeys mods);
+    /** The rubber band: selects every clip that `area` (component coordinates, may extend beyond the
+        visible part) touches, plus `base` (the selection a Ctrl/Shift drag adds to). */
+    void selectClipsInArea(juce::Rectangle<int> area, const std::set<std::uint32_t>& base);
+    /** The rubber band being dragged, in component coordinates (empty when none). */
+    [[nodiscard]] juce::Rectangle<int> getMarqueeArea() const;
+
     /** Where a clip is drawn, in this component's coordinates (empty if its track is not shown). */
     [[nodiscard]] juce::Rectangle<int> getClipArea(const juce::ValueTree& clip) const;
 
@@ -146,6 +157,7 @@ private:
         fadeOut,
         reorderTrack,
         automationPoint,
+        marquee,
     };
 
     enum class ClipZone
@@ -232,6 +244,8 @@ private:
     // Interaction helpers
     void locateTo(double seconds);
     void beginClipDrag(const ClipHit& hit);
+    void dragMarquee(const juce::MouseEvent& e);
+    void paintMarquee(juce::Graphics& g) const;
     void dragClips(const juce::MouseEvent& e);
     void dragLoop(const juce::MouseEvent& e);
     void mouseDownOnHeader(const juce::MouseEvent& e, int row);
@@ -277,6 +291,18 @@ private:
     std::uint32_t renamingTrackId_ = 0;
 
     double pixelsPerSecond_ = 40.0;
+    // Rubber-band selection: corners in timeline coordinates (seconds, content y), so the band stays
+    // anchored while the view scrolls under it.
+    struct TimelinePoint
+    {
+        double seconds = 0.0;
+        int contentY = 0;
+    };
+    TimelinePoint marqueeAnchor_, marqueeEnd_;
+    bool marqueeActive_ = false;
+    std::set<std::uint32_t> marqueeBase_;
+    double pendingLocate_ = 0.0;      ///< a click (no drag) in empty space moves the playhead here
+    std::uint32_t selectionAnchor_ = 0; ///< Shift+click selects from this clip
     double scrollSeconds_ = 0.0;
     int scrollY_ = 0;
     double playheadSeconds_ = 0.0;

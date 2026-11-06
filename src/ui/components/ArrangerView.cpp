@@ -260,6 +260,120 @@ juce::Rectangle<float> ArrangerView::getClipBounds(const juce::ValueTree& clip, 
     return {x0, bounds.getY() + 3.0f, juce::jmax(2.0f, x1 - x0), bounds.getHeight() - 6.0f};
 }
 
+void ArrangerView::selectClipWithModifiers(const juce::ValueTree& clip, juce::ModifierKeys mods)
+{
+    const auto id = session::clip::getId(clip);
+
+    if (mods.isShiftDown())
+    {
+        // Explorer-style range: every clip on this track between the anchor and this one (by start
+        // time; an anchor on another track contributes its time). The anchor stays.
+        auto anchor = session_.findClip(selectionAnchor_);
+        if (!anchor.isValid())
+        {
+            anchor = clip;
+            selectionAnchor_ = id;
+        }
+        const double from = std::min(session::clip::getStart(anchor), session::clip::getStart(clip));
+        const double to = std::max(session::clip::getStart(anchor), session::clip::getStart(clip));
+        auto selection = mods.isCommandDown() ? editor_.getSelectedClips() : std::set<std::uint32_t>{};
+        for (const auto& c : clip.getParent())
+            if (session::Session::isClip(c) && session::clip::getStart(c) >= from - 1.0e-9 && session::clip::getStart(c) <= to + 1.0e-9)
+                selection.insert(session::clip::getId(c));
+        editor_.setSelectedClips(std::move(selection));
+        return;
+    }
+
+    if (mods.isCommandDown())
+        editor_.toggleClip(id);
+    else if (!editor_.isClipSelected(id)) // a selected clip keeps the selection: it may be dragged
+        editor_.selectClip(id, false);
+    selectionAnchor_ = id;
+}
+
+void ArrangerView::selectClipsInArea(juce::Rectangle<int> area, const std::set<std::uint32_t>& base)
+{
+    const double t0 = xToTime(static_cast<float>(area.getX()));
+    const double t1 = xToTime(static_cast<float>(area.getRight()));
+    const int y0 = area.getY() - theme::metrics::rulerHeight + scrollY_;
+    const int y1 = area.getBottom() - theme::metrics::rulerHeight + scrollY_;
+
+    auto selection = base;
+    for (const auto& row : rows())
+    {
+        if (row.kind != Row::Kind::track)
+            continue;
+        // Clips are drawn 3 px inside their row.
+        if (row.top + row.height - 3 <= y0 || row.top + 3 >= y1)
+            continue;
+        for (const auto& c : row.track)
+            if (session::Session::isClip(c) && session::clip::getEnd(c) > t0 && session::clip::getStart(c) < t1)
+                selection.insert(session::clip::getId(c));
+    }
+    if (selection != editor_.getSelectedClips())
+        editor_.setSelectedClips(std::move(selection));
+}
+
+juce::Rectangle<int> ArrangerView::getMarqueeArea() const
+{
+    if (!marqueeActive_)
+        return {};
+    const auto toScreen = [this](const TimelinePoint& p)
+    {
+        return juce::Point<int>(juce::roundToInt(timeToX(p.seconds)), p.contentY + theme::metrics::rulerHeight - scrollY_);
+    };
+    return juce::Rectangle<int>(toScreen(marqueeAnchor_), toScreen(marqueeEnd_));
+}
+
+void ArrangerView::dragMarquee(const juce::MouseEvent& e)
+{
+    if (!marqueeActive_)
+    {
+        if (e.position.getDistanceFrom(dragStart_) < 4.0f)
+            return;
+        marqueeActive_ = true;
+        beginDragAutoRepeat(40); // keeps scrolling while the mouse rests beyond an edge
+    }
+
+    // Scroll when the mouse goes past the lanes.
+    const auto lanes = getLaneArea();
+    float dx = 0.0f;
+    int dy = 0;
+    if (e.position.x > static_cast<float>(lanes.getRight()))
+        dx = e.position.x - static_cast<float>(lanes.getRight());
+    else if (e.position.x < static_cast<float>(lanes.getX()))
+        dx = e.position.x - static_cast<float>(lanes.getX());
+    if (e.position.y > static_cast<float>(lanes.getBottom()))
+        dy = juce::roundToInt(e.position.y) - lanes.getBottom();
+    else if (e.position.y < static_cast<float>(lanes.getY()))
+        dy = juce::roundToInt(e.position.y) - lanes.getY();
+    if (std::abs(dx) > 0.0f || dy != 0)
+    {
+        setScroll(scrollSeconds_ + static_cast<double>(dx) * 0.5 / pixelsPerSecond_, scrollY_ + dy / 2);
+        updateScrollbars();
+    }
+
+    const float x = juce::jlimit(static_cast<float>(lanes.getX()), static_cast<float>(lanes.getRight()), e.position.x);
+    const int y = juce::jlimit(lanes.getY(), lanes.getBottom(), juce::roundToInt(e.position.y));
+    marqueeEnd_ = {xToTime(x), y - theme::metrics::rulerHeight + scrollY_};
+    selectClipsInArea(getMarqueeArea(), marqueeBase_);
+    repaint();
+}
+
+void ArrangerView::paintMarquee(juce::Graphics& g) const
+{
+    const auto area = getMarqueeArea();
+    if (area.isEmpty())
+        return;
+    g.saveState();
+    g.reduceClipRegion(getLaneArea());
+    g.setColour(theme::colour::accent.withAlpha(0.12f));
+    g.fillRect(area);
+    g.setColour(theme::colour::accent.withAlpha(0.85f));
+    g.drawRect(area, 1);
+    g.restoreState();
+}
+
 void ArrangerView::setViewState(const ViewState& state)
 {
     pixelsPerSecond_ = state.pixelsPerSecond;
@@ -620,6 +734,7 @@ void ArrangerView::paint(juce::Graphics& g)
     g.fillAll(theme::colour::panel);
 
     paintLanes(g);
+    paintMarquee(g);
     paintRuler(g);
     paintHeaders(g);
     paintDropIndicator(g);
@@ -1365,13 +1480,7 @@ void ArrangerView::mouseDown(const juce::MouseEvent& e)
     if (hit.clip.isValid())
     {
         const auto clipId = session::clip::getId(hit.clip);
-
-        if (e.mods.isCommandDown())
-            editor_.toggleClip(clipId);
-        else if (e.mods.isShiftDown())
-            editor_.selectClip(clipId, true);
-        else if (!editor_.isClipSelected(clipId))
-            editor_.selectClip(clipId, false);
+        selectClipWithModifiers(hit.clip, e.mods);
 
         editor_.selectTrack(session::track::getId(rows()[static_cast<std::size_t>(hit.row)].track));
 
@@ -1393,8 +1502,20 @@ void ArrangerView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    editor_.clearClipSelection();
-    locateTo(snap(seconds, e.mods));
+    // A click moves the playhead (on release); a drag draws a rubber band that selects the clips it
+    // touches. Ctrl or Shift add to the selection instead of replacing it.
+    const bool additive = e.mods.isCommandDown() || e.mods.isShiftDown();
+    if (!additive)
+    {
+        editor_.clearClipSelection();
+        selectionAnchor_ = 0;
+    }
+    marqueeBase_ = additive ? editor_.getSelectedClips() : std::set<std::uint32_t>{};
+    marqueeAnchor_ = {seconds, juce::roundToInt(e.position.y) - theme::metrics::rulerHeight + scrollY_};
+    marqueeEnd_ = marqueeAnchor_;
+    marqueeActive_ = false;
+    pendingLocate_ = snap(seconds, e.mods);
+    dragMode_ = DragMode::marquee;
 }
 
 void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
@@ -1573,6 +1694,10 @@ void ArrangerView::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    case DragMode::marquee:
+        dragMarquee(e);
+        return;
+
     case DragMode::automationPoint:
     {
         if (!dragPoint_.isValid())
@@ -1640,6 +1765,7 @@ void ArrangerView::dragLoop(const juce::MouseEvent& e)
     case DragMode::fadeIn:
     case DragMode::fadeOut:
     case DragMode::reorderTrack:
+    case DragMode::marquee:
     case DragMode::automationPoint:
         break;
     }
@@ -1674,6 +1800,7 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
         case DragMode::loopStart:
         case DragMode::loopEnd:
         case DragMode::reorderTrack:
+        case DragMode::marquee:
         case DragMode::automationPoint: break;
         }
         session_.beginTransaction(name);
@@ -1763,6 +1890,7 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     case DragMode::loopStart:
     case DragMode::loopEnd:
     case DragMode::reorderTrack:
+    case DragMode::marquee:
     case DragMode::automationPoint:
         break;
     }
@@ -1793,6 +1921,14 @@ void ArrangerView::mouseUp(const juce::MouseEvent& e)
     if (dragMode_ == DragMode::loopStart || dragMode_ == DragMode::loopEnd || dragMode_ == DragMode::loopMove)
         if (!dragMoved_ && e.getNumberOfClicks() == 1)
             locateTo(xToTime(e.position.x));
+
+    if (dragMode_ == DragMode::marquee)
+    {
+        if (!marqueeActive_) // a click, not a drag
+            locateTo(pendingLocate_);
+        marqueeActive_ = false;
+        repaint();
+    }
 
     // A plain click on a clip that was part of a multi-selection selects just that clip.
     if (dragMode_ == DragMode::moveClips && !dragMoved_ && !e.mods.isAnyModifierKeyDown())

@@ -953,7 +953,10 @@ void MainComponent::showShortcutHelp()
         "Mouse: drag clips to move (also across tracks); drag clip edges to trim; drag the\n"
         "small squares on a clip's top corners to fade; Alt or Shift while dragging bypasses\n"
         "snapping; Ctrl+wheel zooms; Shift+wheel scrolls sideways; double-click a track\n"
-        "name to rename it; drag a track header to reorder; right-click for more.";
+        "name to rename it; drag a track header to reorder; right-click for more.\n\n"
+        "Selecting clips: drag in empty space to draw a selection box (Ctrl or Shift adds to\n"
+        "the selection); Ctrl+click adds or removes one clip; Shift+click selects every clip on\n"
+        "that track from the last clicked clip to this one (Ctrl+Shift+click adds that range).";
 
     messageBox_ = juce::AlertWindow::showScopedAsync(juce::MessageBoxOptions()
                                                          .withIconType(juce::MessageBoxIconType::InfoIcon)
