@@ -665,6 +665,8 @@ float ClapParameter::getValueForText(const juce::String& text) const
         if (params->text_to_value(owner_.getPlugin(), info_.id, text.toRawUTF8(), &plain))
             return static_cast<float>(toNormalised(plain));
     }
+    if (!text.containsAnyOf("0123456789"))
+        return getValue(); // not a number the host could read: keep the value
     return static_cast<float>(toNormalised(text.getDoubleValue()));
 }
 

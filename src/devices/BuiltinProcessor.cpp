@@ -6,6 +6,35 @@
 namespace dojo::devices
 {
 
+std::optional<double> parseParameterNumber(const juce::String& text, const juce::String& unit)
+{
+    const auto t = text.trim().toLowerCase();
+    int end = 0;
+    if (end < t.length() && (t[end] == '-' || t[end] == '+'))
+        ++end;
+    bool digits = false;
+    while (end < t.length() && (juce::CharacterFunctions::isDigit(t[end]) || t[end] == '.' || t[end] == ','))
+    {
+        digits = digits || juce::CharacterFunctions::isDigit(t[end]);
+        ++end;
+    }
+    if (!digits)
+        return std::nullopt;
+
+    double value = t.substring(0, end).replaceCharacter(',', '.').getDoubleValue();
+    const auto suffix = t.substring(end).trim();
+    if (suffix.startsWith("k"))
+        value *= 1000.0; // "2.5k", "2.5 kHz"
+    else if (unit.trim().toLowerCase() == "ms" && suffix.startsWith("s"))
+        value *= 1000.0; // "1.5 s" for a time in milliseconds
+    return value;
+}
+
+double parseParameterText(const juce::String& text, const juce::String& unit)
+{
+    return parseParameterNumber(text, unit).value_or(0.0);
+}
+
 juce::NormalisableRange<float> skewedRange(float minimum, float maximum, float centre, float interval)
 {
     juce::NormalisableRange<float> range(minimum, maximum, interval);
@@ -39,9 +68,16 @@ juce::AudioParameterFloat* BuiltinProcessor::addFloat(const juce::String& id, co
             text = juce::String(value, magnitude >= 100.0f ? 0 : magnitude >= 10.0f ? 1 : 2);
         return maximumLength > 0 ? text.substring(0, maximumLength) : text;
     };
+    // Typed values (the editors let you type a number): what the display shows parses back, with
+    // or without the unit ("2.50k", "2500 Hz", "-6 dB", "50 %"), and "1.5 s" works for ms values.
+    const auto parse = [label](const juce::String& text) { return static_cast<float>(parseParameterText(text, label)); };
     auto parameter = std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{id, 1}, name, range, defaultValue,
-        juce::AudioParameterFloatAttributes().withLabel(label).withAutomatable(automatable).withStringFromValueFunction(format));
+        juce::AudioParameterFloatAttributes()
+            .withLabel(label)
+            .withAutomatable(automatable)
+            .withStringFromValueFunction(format)
+            .withValueFromStringFunction(parse));
     auto* raw = parameter.get();
     addParameter(parameter.release());
     ranged_.push_back(raw);

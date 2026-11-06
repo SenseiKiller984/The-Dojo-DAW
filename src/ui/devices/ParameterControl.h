@@ -14,7 +14,8 @@ namespace dojo::ui
 
     Edits are sent as proper change gestures (setValueNotifyingHost between begin/endChangeGesture).
     The control follows the parameter by polling it (15 Hz), so automation, presets and plug-in
-    GUIs are reflected without any listener running on the audio thread. Values are normalised
+    GUIs are reflected without any listener running on the audio thread. Double-clicking a knob's
+    value opens a field to type an exact value (units optional: "2.5k", "120 Hz", "-6 dB"). Values are normalised
     (0..1); the text comes from the parameter itself.
 */
 class ParameterControl final : public juce::Component, private juce::Timer
@@ -25,8 +26,20 @@ public:
 
     void resized() override;
     void paint(juce::Graphics& g) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
     [[nodiscard]] juce::AudioProcessorParameter& getParameter() noexcept { return parameter_; }
+
+    /** Knobs: opens a text field over the value (what double-clicking the value does). Return
+        applies the typed value, Escape cancels, clicking elsewhere applies it. */
+    void showValueEditor();
+    /** The open value field, if any (tests). */
+    [[nodiscard]] juce::TextEditor* getValueEditor() const noexcept
+    {
+        return valueEditor_ != nullptr && valueEditor_->isVisible() ? valueEditor_.get() : nullptr;
+    }
+    /** Where the value is shown (double-click target). */
+    [[nodiscard]] juce::Rectangle<int> getValueArea() const noexcept { return valueArea_; }
 
     /** Preferred size for grids. */
     static constexpr int kWidth = 64;
@@ -42,6 +55,7 @@ private:
 
     void timerCallback() override;
     void setFromUser(float normalised);
+    void finishValueEditor(bool apply);
 
     juce::AudioProcessorParameter& parameter_;
     juce::String caption_;
@@ -49,6 +63,8 @@ private:
     juce::Slider knob_;
     juce::TextButton toggle_;
     juce::ComboBox choice_;
+    std::unique_ptr<juce::TextEditor> valueEditor_;
+    juce::Rectangle<int> valueArea_;
     bool dragging_ = false;
     float shown_ = -1.0f;
 };

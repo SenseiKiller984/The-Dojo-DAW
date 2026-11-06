@@ -1,5 +1,6 @@
 #include "ui/devices/ParameterControl.h"
 
+#include "devices/BuiltinProcessor.h"
 #include "ui/theme/DojoTheme.h"
 
 namespace dojo::ui
@@ -50,7 +51,7 @@ ParameterControl::ParameterControl(juce::AudioProcessorParameter& parameter, con
         knob_.setRange(0.0, 1.0, 0.0);
         knob_.setDoubleClickReturnValue(true, parameter_.getDefaultValue());
         knob_.setWantsKeyboardFocus(false);
-        knob_.setTooltip(parameter_.getName(64));
+        knob_.setTooltip(parameter_.getName(64) + "  (double-click the value below to type one)");
         knob_.onDragStart = [this]
         {
             dragging_ = true;
@@ -78,6 +79,12 @@ ParameterControl::ParameterControl(juce::AudioProcessorParameter& parameter, con
 
 ParameterControl::~ParameterControl()
 {
+    if (valueEditor_ != nullptr) // deleting a focused field must not apply it to a dying control
+    {
+        valueEditor_->onFocusLost = nullptr;
+        valueEditor_->onReturnKey = nullptr;
+        valueEditor_->onEscapeKey = nullptr;
+    }
     if (dragging_)
         parameter_.endChangeGesture();
 }
@@ -124,7 +131,7 @@ void ParameterControl::resized()
     {
     case Style::knob:
         area.removeFromTop(14);
-        area.removeFromBottom(14);
+        valueArea_ = area.removeFromBottom(14);
         knob_.setBounds(area.withSizeKeepingCentre(std::min(area.getWidth(), area.getHeight()), std::min(area.getWidth(), area.getHeight())));
         break;
     case Style::toggle:
@@ -135,6 +142,66 @@ void ParameterControl::resized()
         choice_.setBounds(area.withSizeKeepingCentre(area.getWidth() - 2, 24));
         break;
     }
+}
+
+void ParameterControl::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (style_ == Style::knob && valueArea_.contains(e.getPosition()))
+        showValueEditor();
+}
+
+void ParameterControl::showValueEditor()
+{
+    if (style_ != Style::knob)
+        return;
+
+    if (valueEditor_ == nullptr)
+    {
+        valueEditor_ = std::make_unique<juce::TextEditor>();
+        valueEditor_->setFont(theme::mono(10.0f));
+        valueEditor_->setJustification(juce::Justification::centred);
+        valueEditor_->setIndents(2, 1);
+        valueEditor_->setSelectAllWhenFocused(true);
+        valueEditor_->setColour(juce::TextEditor::backgroundColourId, theme::colour::meterBackground);
+        valueEditor_->setColour(juce::TextEditor::outlineColourId, theme::colour::accent);
+        valueEditor_->setColour(juce::TextEditor::focusedOutlineColourId, theme::colour::accent);
+        valueEditor_->setColour(juce::TextEditor::textColourId, theme::colour::textPrimary);
+        valueEditor_->setColour(juce::TextEditor::highlightColourId, theme::colour::accent.withAlpha(0.45f));
+        valueEditor_->setColour(juce::CaretComponent::caretColourId, theme::colour::textPrimary);
+        valueEditor_->onReturnKey = [this] { finishValueEditor(true); };
+        valueEditor_->onEscapeKey = [this] { finishValueEditor(false); };
+        valueEditor_->onFocusLost = [this] { finishValueEditor(true); };
+        addChildComponent(*valueEditor_);
+    }
+
+    valueEditor_->setText(parameter_.getText(parameter_.getValue(), 32).trim(), juce::dontSendNotification);
+    valueEditor_->setBounds(valueArea_.withTop(valueArea_.getY() - 3).reduced(2, 0));
+    valueEditor_->setVisible(true);
+    valueEditor_->selectAll();
+    if (isShowing())
+        valueEditor_->grabKeyboardFocus();
+}
+
+void ParameterControl::finishValueEditor(bool apply)
+{
+    if (valueEditor_ == nullptr || !valueEditor_->isVisible())
+        return; // already finished (hiding the field also makes it lose focus)
+
+    const auto text = valueEditor_->getText().trim();
+    valueEditor_->setVisible(false);
+
+    if (apply && text.isNotEmpty())
+    {
+        // Native parameters need a number in the text; hosted plug-ins parse their own strings.
+        const bool native = dynamic_cast<juce::RangedAudioParameter*>(&parameter_) != nullptr;
+        if (!native || devices::parseParameterNumber(text, parameter_.getLabel()).has_value())
+        {
+            const float normalised = juce::jlimit(0.0f, 1.0f, parameter_.getValueForText(text));
+            setFromUser(normalised);
+            knob_.setValue(normalised, juce::dontSendNotification);
+        }
+    }
+    repaint();
 }
 
 void ParameterControl::paint(juce::Graphics& g)

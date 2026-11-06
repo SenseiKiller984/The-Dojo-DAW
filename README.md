@@ -30,7 +30,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend); **quantise** with strength and optional note ends.
 - **Step sequencer** view of the same clip: rows are the Drum Rack's pads or Impulse's slots (or 16 notes), click or paint steps, right-click for velocity.
 
-**Native devices** (64-bit, real-time safe, with dedicated editors)
+**Native devices** (64-bit, real-time safe, with dedicated editors; drag a knob, or double-click the value under it to type an exact one: "120 Hz", "2.5k", "-6 dB")
 - **EQ**: 4 bands (low/high cut, shelves, peaks) with a live spectrum analyser and draggable band handles.
 - **Compressor** with soft knee, makeup, mix and an **external sidechain** (pick any track); **lookahead limiter**.
 - **Reverb** (feedback delay network) and tempo-synced **ping-pong delay**.

@@ -28,6 +28,7 @@ add_executable(dojo_tests
     SessionTests.cpp
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
+    ValueEntryTests.cpp
     WaveformTests.cpp)
 
 # The suite runs with the allocation trap so that RT-safety is asserted, not assumed

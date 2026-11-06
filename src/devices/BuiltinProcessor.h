@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <optional>
 #include <vector>
 
 namespace dojo::devices
@@ -84,6 +85,15 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BuiltinProcessor)
 };
+
+/**
+    The number in a typed parameter value: "120", "120 Hz", "-6 dB", "50 %", "2.5k" / "2.5 kHz"
+    (thousands, as values are displayed), and "1.5 s" when the unit is "ms". Decimal comma accepted.
+    Empty if the text has no number.
+*/
+[[nodiscard]] std::optional<double> parseParameterNumber(const juce::String& text, const juce::String& unit);
+/** parseParameterNumber(), or 0 without a number (juce's value-from-string must return something). */
+[[nodiscard]] double parseParameterText(const juce::String& text, const juce::String& unit);
 
 /** Range with a logarithmic-feeling skew centred at `centre` (e.g. frequencies). */
 juce::NormalisableRange<float> skewedRange(float minimum, float maximum, float centre, float interval = 0.0f);
