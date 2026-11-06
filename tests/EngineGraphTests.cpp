@@ -583,3 +583,51 @@ TEST_CASE("Playback can stop at the end of the arrangement", "[engine][transport
     CHECK(telemetry.playing);
     CHECK(telemetry.playheadSeconds < 0.5);
 }
+
+TEST_CASE("After stopping at the end, playing again starts from the beginning", "[engine][transport]")
+{
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 24'000, 0.25f), kRate);
+
+    Rig rig;
+    rig.audioTrackWith(tone, 0.25); // ends at 0.75 s
+    rig.publish();
+    REQUIRE(rig.engine.post(engine::command::SetStopAtEnd{true}));
+    rig.play();
+    rig.render(1.0);
+    auto telemetry = rig.engine.collectTelemetry();
+    REQUIRE_FALSE(telemetry.playing);
+    CHECK(telemetry.stoppedAtEnd);
+
+    // Play (without moving the playhead): from the beginning.
+    REQUIRE(rig.engine.post(engine::command::SetPlaying{true}));
+    rig.render(0.1);
+    telemetry = rig.engine.collectTelemetry();
+    CHECK(telemetry.playing);
+    CHECK_FALSE(telemetry.stoppedAtEnd);
+    CHECK(telemetry.playheadSeconds < 0.15);
+
+    // Moving the playhead after the stop: play from there.
+    rig.render(1.0);
+    REQUIRE(rig.engine.collectTelemetry().stoppedAtEnd);
+    REQUIRE(rig.engine.post(engine::command::Locate{static_cast<SampleCount>(0.5 * kRate)}));
+    REQUIRE(rig.engine.post(engine::command::SetPlaying{true}));
+    rig.render(0.1);
+    telemetry = rig.engine.collectTelemetry();
+    CHECK(telemetry.playheadSeconds > 0.55);
+    CHECK(telemetry.playheadSeconds < 0.65);
+
+    // A recording starts where the playhead is (it may extend the song past the end).
+    rig.render(0.5);
+    REQUIRE(rig.engine.collectTelemetry().stoppedAtEnd);
+    engine::CaptureSession capture;
+    REQUIRE(rig.engine.post(engine::command::StartCapture{&capture}));
+    REQUIRE(rig.engine.post(engine::command::SetPlaying{true}));
+    rig.render(0.1);
+    telemetry = rig.engine.collectTelemetry();
+    CHECK(telemetry.playing);
+    CHECK(telemetry.playheadSeconds > 0.8);
+    REQUIRE(rig.engine.post(engine::command::StopCapture{}));
+    REQUIRE(rig.engine.post(engine::command::SetPlaying{false}));
+    rig.render(0.05);
+}

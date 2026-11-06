@@ -1,5 +1,6 @@
 #include "ui/components/MixerPanel.h"
 
+#include "ui/MixerValues.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -17,19 +18,8 @@ constexpr float kFaderMinDb = static_cast<float>(session::kMinusInfinityDb);
 constexpr float kFaderMaxDb = static_cast<float>(session::kMaxVolumeDb);
 constexpr double kPeakReadoutHoldSeconds = 2.0;
 
-juce::String formatDecibels(double decibels)
-{
-    if (decibels <= session::kMinusInfinityDb + 0.001)
-        return "-inf";
-
-    return (decibels > 0.0 ? "+" : "") + juce::String(decibels, 1);
-}
-
-juce::String formatPan(double pan)
-{
-    const int percent = juce::roundToInt(std::abs(pan) * 100.0);
-    return percent == 0 ? juce::String("C") : (pan < 0.0 ? "L" : "R") + juce::String(percent);
-}
+using mixer::formatDecibels;
+using mixer::formatPan;
 
 void configureFader(juce::Slider& fader)
 {
@@ -360,6 +350,36 @@ void ChannelStrip::pushLevels(float peakLeft, float peakRight, double elapsedSec
     meter_.update(peakLeft, peakRight, elapsedSeconds);
 }
 
+void ChannelStrip::showVolumeEditor()
+{
+    valueEditor_.open(volumeArea_.withSizeKeepingCentre(volumeArea_.getWidth() - 4, 17), formatDecibels(fader_.getValue()),
+                      [this](const juce::String& text)
+                      {
+                          if (const auto decibels = mixer::parseVolume(text))
+                              fader_.setValue(*decibels, juce::sendNotificationSync); // one undo step
+                          repaint();
+                      });
+}
+
+void ChannelStrip::showPanEditor()
+{
+    valueEditor_.open(panArea_.withSizeKeepingCentre(panArea_.getWidth() - 4, 17), formatPan(pan_.getValue()),
+                      [this](const juce::String& text)
+                      {
+                          if (const auto pan = mixer::parsePan(text))
+                              pan_.setValue(*pan, juce::sendNotificationSync);
+                          repaint();
+                      });
+}
+
+void ChannelStrip::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (volumeArea_.contains(e.getPosition()))
+        showVolumeEditor();
+    else if (panArea_.contains(e.getPosition()))
+        showPanEditor();
+}
+
 void ChannelStrip::mouseDown(const juce::MouseEvent& e)
 {
     editor_.selectTrack(session::track::getId(track_));
@@ -435,6 +455,8 @@ void ChannelStrip::resized()
 
     area.removeFromTop(4);
     readoutArea_ = area.removeFromBottom(14);
+    volumeArea_ = readoutArea_.withWidth(readoutArea_.getWidth() / 2);
+    panArea_ = readoutArea_.withTrimmedLeft(volumeArea_.getWidth());
     area.removeFromBottom(2);
     meter_.setBounds(area.removeFromRight(14));
     area.removeFromRight(2);
@@ -466,9 +488,9 @@ void ChannelStrip::paint(juce::Graphics& g)
 
     g.setColour(colour::textMuted);
     g.setFont(mono(10.0f));
-    g.drawText(formatDecibels(session::track::getVolumeDb(track_)) + "  " +
-                   formatPan(session::track::getPan(track_)),
-               readoutArea_, juce::Justification::centred, false);
+    // Volume and pan, each double-clickable to type a value.
+    g.drawText(formatDecibels(session::track::getVolumeDb(track_)), volumeArea_.withTrimmedRight(5), juce::Justification::centredRight, false);
+    g.drawText(formatPan(session::track::getPan(track_)), panArea_.withTrimmedLeft(5), juce::Justification::centredLeft, false);
 }
 
 //==================================================================================================
@@ -558,11 +580,29 @@ void MasterStrip::resized()
     devices_.setBounds(area.removeFromTop(22));
     area.removeFromTop(4);
     readoutArea_ = area.removeFromBottom(40);
+    gainArea_ = readoutArea_.withWidth(readoutArea_.getWidth() / 2).reduced(2, 4);
     area.removeFromBottom(6);
 
     meter_.setBounds(area.removeFromRight(22));
     scaleArea_ = area.removeFromRight(26);
     fader_.setBounds(area);
+}
+
+void MasterStrip::showGainEditor()
+{
+    valueEditor_.open(gainArea_.withTrimmedBottom(12).withSizeKeepingCentre(gainArea_.getWidth(), 18), formatDecibels(fader_.getValue()),
+                      [this](const juce::String& text)
+                      {
+                          if (const auto decibels = mixer::parseVolume(text))
+                              fader_.setValue(*decibels, juce::sendNotificationSync);
+                          repaint();
+                      });
+}
+
+void MasterStrip::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (gainArea_.contains(e.getPosition()))
+        showGainEditor();
 }
 
 void MasterStrip::paint(juce::Graphics& g)
@@ -606,8 +646,8 @@ void MasterStrip::paint(juce::Graphics& g)
         g.drawText(text, box, juce::Justification::centred, false);
     };
 
-    paintReadout(readout.removeFromLeft(readout.getWidth() / 2).reduced(2, 4),
-                 formatDecibels(fader_.getValue()), "GAIN", colour::textPrimary);
+    readout.removeFromLeft(readout.getWidth() / 2);
+    paintReadout(gainArea_, formatDecibels(fader_.getValue()), "GAIN", colour::textPrimary);
     paintReadout(readout.reduced(2, 4), formatDecibels(heldPeakDb_), "PEAK",
                  heldPeakDb_ > 0.0f ? colour::meterClip : colour::textPrimary);
 
@@ -727,7 +767,7 @@ void MixerPanel::paint(juce::Graphics& g)
     g.drawText("MIXER", header.reduced(14, 0), juce::Justification::centredLeft, false);
     g.setColour(colour::textMuted);
     g.setFont(sans(11.0f));
-    g.drawText("Double-click to reset  |  M mute  S solo  " + juce::String::fromUTF8("\xc3\x98") +
+    g.drawText("Double-click to reset, double-click a value to type it  |  M mute  S solo  " + juce::String::fromUTF8("\xc3\x98") +
                    " phase  R arm  |  right-click a send for pre/post",
                header.reduced(14, 0), juce::Justification::centredRight, false);
     g.setColour(colour::outline);

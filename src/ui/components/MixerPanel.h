@@ -2,6 +2,7 @@
 
 #include "engine/EngineController.h"
 #include "session/Project.h"
+#include "ui/components/InlineValueEditor.h"
 #include "ui/components/LevelMeter.h"
 #include "ui/EditorState.h"
 
@@ -31,6 +32,13 @@ public:
 
     [[nodiscard]] const juce::ValueTree& getTrack() const noexcept { return track_; }
     void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
+
+    /** Double-clicking the volume or pan value under the fader opens a field to type it
+        ("-6", "-inf"; "C", "L20", "R35"). */
+    void showVolumeEditor();
+    void showPanEditor();
+    [[nodiscard]] juce::TextEditor* getValueEditor() const noexcept { return valueEditor_.getEditor(); }
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -74,6 +82,8 @@ private:
     LevelMeter meter_;
     juce::Rectangle<int> nameArea_;
     juce::Rectangle<int> readoutArea_;
+    juce::Rectangle<int> volumeArea_, panArea_; ///< the two halves of the readout
+    InlineValueEditor valueEditor_{*this};
     bool panDragging_ = false;
     bool faderDragging_ = false;
 };
@@ -86,6 +96,11 @@ public:
     ~MasterStrip() override;
 
     void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
+
+    /** Double-clicking the GAIN readout opens a field to type the master volume. */
+    void showGainEditor();
+    [[nodiscard]] juce::TextEditor* getValueEditor() const noexcept { return valueEditor_.getEditor(); }
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -102,6 +117,8 @@ private:
     LevelMeter meter_;
     juce::Rectangle<int> scaleArea_;
     juce::Rectangle<int> readoutArea_;
+    juce::Rectangle<int> gainArea_;
+    InlineValueEditor valueEditor_{*this};
     float heldPeakDb_ = LevelMeter::kMinDb;
     double peakHoldAge_ = 0.0;
     bool dragging_ = false;

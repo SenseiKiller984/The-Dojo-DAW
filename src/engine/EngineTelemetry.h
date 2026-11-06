@@ -37,6 +37,7 @@ struct EngineTelemetry
     std::atomic<SampleCount> playheadSamples{0};
     std::atomic<double> playheadSeconds{0.0};
     std::atomic<bool> playing{false};
+    std::atomic<bool> stoppedAtEnd{false}; ///< stopped by "stop at the end"; the next play starts at 0
 
     std::atomic<std::uint64_t> processedBlocks{0};
     std::atomic<std::uint64_t> clippedSamples{0}; ///< Master samples that exceeded 0 dBFS.
@@ -70,6 +71,7 @@ struct TelemetrySnapshot
     SampleCount playheadSamples = 0;
     double playheadSeconds = 0.0;
     bool playing = false;
+    bool stoppedAtEnd = false;
     std::uint64_t processedBlocks = 0;
     std::uint64_t clippedSamples = 0;
     bool captureActive = false;

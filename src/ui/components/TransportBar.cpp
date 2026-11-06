@@ -185,7 +185,10 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     };
     playButton_.onClick = [this]
     {
-        controller_.togglePlayback();
+        if (onTogglePlayback)
+            onTogglePlayback();
+        else
+            controller_.togglePlayback();
     };
     stopButton_.onClick = [this]
     {

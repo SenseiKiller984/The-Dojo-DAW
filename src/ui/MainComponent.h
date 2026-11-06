@@ -128,6 +128,9 @@ private:
     void showMessage(const juce::String& title, const juce::String& message);
     /** Playhead to the start; with the preference on, the view follows. */
     void goToStart();
+    /** Play / stop. Playing again after a stop at the end of the arrangement starts from the
+        beginning (the engine does that); the view follows when "return the view" is on. */
+    void togglePlayback();
 
     AppServices& services_;
     session::Project& project_;

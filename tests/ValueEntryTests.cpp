@@ -1,6 +1,10 @@
 #include "devices/BuiltinProcessor.h"
 #include "devices/DeviceRegistry.h"
 #include "devices/Utility.h"
+#include "session/Session.h"
+#include "ui/EditorState.h"
+#include "ui/MixerValues.h"
+#include "ui/components/MixerPanel.h"
 #include "ui/devices/ParameterControl.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -121,4 +125,90 @@ TEST_CASE("Double-clicking a knob's value lets you type an exact value", "[ui][v
     toggle.setSize(ui::ParameterControl::kWidth, ui::ParameterControl::kHeight);
     toggle.showValueEditor();
     CHECK(toggle.getValueEditor() == nullptr);
+}
+
+TEST_CASE("Mixer values: typed volumes and pans", "[ui][values][mixer]")
+{
+    using ui::mixer::parsePan;
+    using ui::mixer::parseVolume;
+    CHECK(parseVolume("-6") == -6.0);
+    CHECK(parseVolume("-6 dB") == -6.0);
+    CHECK(parseVolume("+3.5") == 3.5);
+    CHECK(parseVolume("0,5") == 0.5);
+    CHECK(parseVolume("100") == session::kMaxVolumeDb);
+    CHECK(parseVolume("-100") == session::kMinusInfinityDb);
+    CHECK(parseVolume("-inf") == session::kMinusInfinityDb);
+    CHECK(parseVolume("inf") == session::kMinusInfinityDb);
+    CHECK_FALSE(parseVolume("loud").has_value());
+    CHECK_FALSE(parseVolume("").has_value());
+
+    CHECK(parsePan("C") == 0.0);
+    CHECK(parsePan("center") == 0.0);
+    CHECK(parsePan("0") == 0.0);
+    CHECK_THAT(*parsePan("L20"), WithinAbs(-0.20, 1.0e-12));
+    CHECK_THAT(*parsePan("20L"), WithinAbs(-0.20, 1.0e-12));
+    CHECK_THAT(*parsePan("l 15 %"), WithinAbs(-0.15, 1.0e-12));
+    CHECK_THAT(*parsePan("R35"), WithinAbs(0.35, 1.0e-12));
+    CHECK_THAT(*parsePan("35"), WithinAbs(0.35, 1.0e-12));
+    CHECK_THAT(*parsePan("-30"), WithinAbs(-0.30, 1.0e-12));
+    CHECK(parsePan("L") == -1.0);
+    CHECK(parsePan("R") == 1.0);
+    CHECK(parsePan("150") == 1.0);
+    CHECK_FALSE(parsePan("x").has_value());
+    CHECK_FALSE(parsePan("").has_value());
+
+    // What the strips show types back in.
+    for (const double pan : {-1.0, -0.37, 0.0, 0.5, 1.0})
+        CHECK_THAT(*parsePan(ui::mixer::formatPan(pan)), WithinAbs(pan, 0.006));
+    for (const double db : {-60.0, -12.3, 0.0, 4.5})
+        CHECK_THAT(*parseVolume(ui::mixer::formatDecibels(db)), WithinAbs(db, 0.051));
+}
+
+TEST_CASE("Double-clicking a mixer strip's volume or pan lets you type it", "[ui][values][mixer]")
+{
+    juce::MessageManager::getInstance();
+    session::Session session;
+    ui::EditorState editor;
+    auto track = session.addTrack(session::TrackKind::audio, "Guitar");
+
+    ui::ChannelStrip strip(session, editor, track, [] { return juce::StringArray{"In 1", "In 2"}; }, [] {});
+    strip.setSize(104, 560);
+
+    strip.showVolumeEditor();
+    REQUIRE(strip.getValueEditor() != nullptr);
+    CHECK(strip.getValueEditor()->getText() == "0.0");
+    strip.getValueEditor()->setText("-6.5", juce::dontSendNotification);
+    strip.getValueEditor()->onReturnKey();
+    CHECK_THAT(session::track::getVolumeDb(track), WithinAbs(-6.5, 0.005));
+    CHECK(strip.getValueEditor() == nullptr);
+
+    // One undo step.
+    session.getUndoManager().undo();
+    CHECK_THAT(session::track::getVolumeDb(track), WithinAbs(0.0, 1.0e-9));
+
+    strip.showPanEditor();
+    REQUIRE(strip.getValueEditor() != nullptr);
+    CHECK(strip.getValueEditor()->getText() == "C");
+    strip.getValueEditor()->setText("L25", juce::dontSendNotification);
+    strip.getValueEditor()->onReturnKey();
+    CHECK_THAT(session::track::getPan(track), WithinAbs(-0.25, 1.0e-9));
+
+    // Escape cancels; nonsense changes nothing.
+    strip.showPanEditor();
+    strip.getValueEditor()->setText("R80", juce::dontSendNotification);
+    strip.getValueEditor()->onEscapeKey();
+    CHECK_THAT(session::track::getPan(track), WithinAbs(-0.25, 1.0e-9));
+    strip.showVolumeEditor();
+    strip.getValueEditor()->setText("loud", juce::dontSendNotification);
+    strip.getValueEditor()->onReturnKey();
+    CHECK_THAT(session::track::getVolumeDb(track), WithinAbs(0.0, 1.0e-9));
+
+    // The master's GAIN readout.
+    ui::MasterStrip master(session, editor, [] {});
+    master.setSize(130, 560);
+    master.showGainEditor();
+    REQUIRE(master.getValueEditor() != nullptr);
+    master.getValueEditor()->setText("-3", juce::dontSendNotification);
+    master.getValueEditor()->onReturnKey();
+    CHECK_THAT(session.getMasterVolumeDb(), WithinAbs(-3.0, 0.005));
 }

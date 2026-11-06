@@ -263,6 +263,7 @@ private:
     bool ignoreLoop_ = false; ///< offline exports render straight through the loop range
     bool loopEnabled_ = false;
     bool stopAtEnd_ = false;
+    bool stoppedAtEnd_ = false; ///< stopped by stopAtEnd_ and not moved since
     double loopStart_ = 0.0;
     double loopEnd_ = 0.0;
     double masterGainTarget_ = 1.0;

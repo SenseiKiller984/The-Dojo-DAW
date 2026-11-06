@@ -132,6 +132,7 @@ MainComponent::MainComponent(AppServices& services)
     };
 
     transport_.onReturnToStart = [this] { goToStart(); };
+    transport_.onTogglePlayback = [this] { togglePlayback(); };
     transport_.onAudioSettingsRequested = [this]
     {
         showAudioSettings();
@@ -163,6 +164,14 @@ MainComponent::~MainComponent()
 
     if (settingsWindow_ != nullptr)
         delete settingsWindow_.getComponent();
+}
+
+void MainComponent::togglePlayback()
+{
+    const auto& telemetry = controller_.getLastTelemetry();
+    if (!telemetry.playing && telemetry.stoppedAtEnd && services_.preferences.getReturnViewToStart())
+        arranger_.scrollToTime(0.0);
+    controller_.togglePlayback();
 }
 
 void MainComponent::goToStart()
@@ -556,7 +565,7 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
 
     case playStop:
-        controller_.togglePlayback();
+        togglePlayback();
         break;
     case returnToStart:
         goToStart();

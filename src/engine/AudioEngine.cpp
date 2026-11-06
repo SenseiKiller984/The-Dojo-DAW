@@ -136,6 +136,7 @@ TelemetrySnapshot AudioEngine::collectTelemetry() noexcept
     snapshot.playheadSamples = telemetry_.playheadSamples.load(std::memory_order_relaxed);
     snapshot.playheadSeconds = telemetry_.playheadSeconds.load(std::memory_order_relaxed);
     snapshot.playing = telemetry_.playing.load(std::memory_order_relaxed);
+    snapshot.stoppedAtEnd = telemetry_.stoppedAtEnd.load(std::memory_order_relaxed);
     snapshot.processedBlocks = telemetry_.processedBlocks.load(std::memory_order_relaxed);
     snapshot.clippedSamples = telemetry_.clippedSamples.load(std::memory_order_relaxed);
     snapshot.captureActive = telemetry_.captureActive.load(std::memory_order_acquire);
@@ -216,6 +217,7 @@ void AudioEngine::setOfflineTransport(double positionSeconds, bool playing, bool
         return;
     positionSeconds_ = std::max(0.0, positionSeconds);
     playing_ = playing;
+    stoppedAtEnd_ = false;
     ignoreLoop_ = ignoreLoop;
     panicAll();
     telemetry_.playheadSeconds.store(positionSeconds_, std::memory_order_relaxed);
@@ -373,6 +375,7 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
         {
             playing_ = false;
             positionSeconds_ = end;
+            stoppedAtEnd_ = true; // the next play starts from the beginning
             panicAll();
         }
 
@@ -383,6 +386,7 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
     telemetry_.playheadSamples.store(static_cast<SampleCount>(std::llround(positionSeconds_ * sampleRate_)),
                                      std::memory_order_relaxed);
     telemetry_.playing.store(playing_, std::memory_order_relaxed);
+    telemetry_.stoppedAtEnd.store(stoppedAtEnd_, std::memory_order_relaxed);
     telemetry_.processedBlocks.fetch_add(1, std::memory_order_relaxed);
     epoch_.fetch_add(1, std::memory_order_acq_rel);
 }
@@ -466,6 +470,12 @@ void AudioEngine::handle(const command::SetPlaying& cmd) noexcept
 {
     if (playing_ && !cmd.shouldPlay)
         panicAll();
+    // After stopping at the end of the arrangement, playing again starts from the beginning (but a
+    // recording starts where the playhead is: it may extend the song).
+    if (cmd.shouldPlay && !playing_ && stoppedAtEnd_ && capture_ == nullptr)
+        positionSeconds_ = 0.0;
+    if (cmd.shouldPlay)
+        stoppedAtEnd_ = false;
     playing_ = cmd.shouldPlay;
 }
 
@@ -473,6 +483,7 @@ void AudioEngine::handle(const command::Locate& cmd) noexcept
 {
     const double rate = sampleRate_ > 0.0 ? sampleRate_ : 48000.0;
     positionSeconds_ = std::max(0.0, static_cast<double>(cmd.positionSamples) / rate);
+    stoppedAtEnd_ = false; // the user put the playhead somewhere: play from there
     panicAll();
 }
 
@@ -502,6 +513,8 @@ void AudioEngine::handle(const command::SetSpeed& cmd) noexcept
 void AudioEngine::handle(const command::SetStopAtEnd& cmd) noexcept
 {
     stopAtEnd_ = cmd.enabled;
+    if (!cmd.enabled)
+        stoppedAtEnd_ = false;
 }
 
 void AudioEngine::handle(const command::SwapGraph& cmd) noexcept

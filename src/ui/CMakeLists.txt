@@ -15,6 +15,8 @@ add_library(dojo_ui STATIC
     MainComponent.h
     MainMenuModel.cpp
     MainMenuModel.h
+    MixerValues.cpp
+    MixerValues.h
     Preferences.cpp
     Preferences.h
     PreferencesWindow.cpp
@@ -33,6 +35,8 @@ add_library(dojo_ui STATIC
     components/IconButton.h
     components/LevelMeter.cpp
     components/LevelMeter.h
+    components/InlineValueEditor.cpp
+    components/InlineValueEditor.h
     components/MixerPanel.cpp
     components/MixerPanel.h
     components/StatusBar.cpp

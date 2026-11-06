@@ -222,3 +222,80 @@ TEST_CASE("Stop twice (or Home) brings the view back to the start when that pref
         commands.setFirstCommandTarget(nullptr);
     }
 }
+
+TEST_CASE("Play after a stop at the end starts at bar 1, and the view follows when asked", "[ui][preferences]")
+{
+    juce::MessageManager::getInstance();
+    test::TempFolder temp;
+
+    engine::AudioEngine engine(0);
+    engine.prepare(48'000.0, 256, 2);
+    engine::AudioDeviceHost host(engine);
+    engine::EngineController controller(engine, host);
+    session::Project project([&](std::unique_ptr<engine::RenderGraph> graph) { controller.publishGraph(std::move(graph)); },
+                             [](const juce::ValueTree& d, double, int, juce::String&)
+                             { return devices::createBuiltinDevice(session::device::getType(d)); });
+    project.getCompiler().setRenderFormat(48'000.0, 256);
+    plugins::PluginManager plugins(juce::File(), temp.dir.getChildFile("plugins.xml"));
+    session::Recorder recorder(project, controller);
+    session::Exporter exporter(project, controller);
+    juce::ApplicationProperties settings;
+    juce::PropertiesFile::Options options;
+    options.applicationName = "test";
+    options.filenameSuffix = ".settings";
+    options.folderName = temp.dir.getFullPathName();
+    settings.setStorageParameters(options);
+    engine::PreviewService preview(engine, project.getAssets().getFormatManager());
+    ui::Preferences preferences(*settings.getUserSettings());
+    juce::ApplicationCommandManager commands;
+    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}};
+
+    auto track = project.getSession().addTrack(session::TrackKind::instrument, "Keys");
+    project.getSession().addMidiClip(track, 0.0, 0.5); // the arrangement ends at 0.5 s
+    REQUIRE(test::pumpMessagesUntil([&] { return controller.getLatestGraphSerial() > 0; }));
+    controller.setStopAtEnd(true);
+
+    const auto render = [&](double seconds)
+    {
+        std::vector<float> l(256), r(256);
+        float* channels[2] = {l.data(), r.data()};
+        for (int done = 0; done < static_cast<int>(seconds * 48'000.0); done += 256)
+            engine.process(nullptr, 0, channels, 2, 256);
+        controller.pump();
+        return controller.pollTelemetry();
+    };
+
+    {
+        ui::MainComponent main(services);
+        main.setSize(1400, 900);
+        commands.registerAllCommandsForTarget(&main);
+        commands.setFirstCommandTarget(&main);
+        auto& arranger = main.getArranger();
+        render(0.01);
+
+        // "Return the view" off: playback restarts at bar 1, the view stays.
+        REQUIRE(commands.invokeDirectly(ui::commands::playStop, false));
+        auto telemetry = render(1.0);
+        REQUIRE_FALSE(telemetry.playing);
+        REQUIRE(telemetry.stoppedAtEnd);
+        arranger.scrollToTime(300.0);
+        REQUIRE(commands.invokeDirectly(ui::commands::playStop, false));
+        telemetry = render(0.05);
+        CHECK(telemetry.playing);
+        CHECK(telemetry.playheadSeconds < 0.1);
+        CHECK(arranger.getScrollSeconds() > 299.0);
+
+        // On: the view comes back to the start too.
+        preferences.setReturnViewToStart(true);
+        telemetry = render(1.0);
+        REQUIRE(telemetry.stoppedAtEnd);
+        arranger.scrollToTime(300.0);
+        REQUIRE(commands.invokeDirectly(ui::commands::playStop, false));
+        CHECK(arranger.getScrollSeconds() == 0.0);
+        telemetry = render(0.05);
+        CHECK(telemetry.playheadSeconds < 0.1);
+
+        commands.setFirstCommandTarget(nullptr);
+    }
+    engine.release();
+}

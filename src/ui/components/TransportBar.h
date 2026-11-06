@@ -37,6 +37,9 @@ public:
     /** Return to start (the return button, or Stop while stopped). Defaults to the controller's.
         The main component adds "scroll the view back" when that preference is on. */
     std::function<void()> onReturnToStart;
+    /** Play / stop (the play button). Defaults to the controller's; the main component adds "after a
+        stop at the end, the view returns to the start" when that preference is on. */
+    std::function<void()> onTogglePlayback;
     std::function<void()> onRecordClicked;
 
     /** Lights the record button while recording. */
