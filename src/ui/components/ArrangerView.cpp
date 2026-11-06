@@ -1,5 +1,7 @@
 #include "ui/components/ArrangerView.h"
 
+#include "ui/BrowserDrag.h"
+
 #include "ui/EditActions.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -2330,7 +2332,7 @@ void ArrangerView::filesDropped(const juce::StringArray& files, int x, int y)
 bool ArrangerView::isInterestedInDragSource(const SourceDetails& details)
 {
     const auto description = details.description.toString();
-    return description == kBrowserDragDescription || description.startsWith(kDeviceDragPrefix);
+    return browserDrag::isFileDrag(details.description) || description.startsWith(kDeviceDragPrefix);
 }
 
 void ArrangerView::itemDragEnter(const SourceDetails& details)
@@ -2362,13 +2364,7 @@ void ArrangerView::itemDropped(const SourceDetails& details)
         return;
     }
 
-    juce::StringArray files;
-    if (auto* tree = dynamic_cast<juce::FileTreeComponent*>(details.sourceComponent.get()))
-        for (int i = 0; i < tree->getNumSelectedFiles(); ++i)
-            if (const auto f = tree->getSelectedFile(i); f.existsAsFile())
-                files.add(f.getFullPathName());
-
-    dropFiles(files);
+    dropFiles(browserDrag::getFiles(details.description));
 }
 
 } // namespace dojo::ui

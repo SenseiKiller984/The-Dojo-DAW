@@ -5,6 +5,7 @@
 #include "core/rt/RealtimeGuard.h"
 #include "core/Version.h"
 #include "devices/DeviceRegistry.h"
+#include "engine/Preview.h"
 #include "engine/AudioEngine.h"
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
@@ -138,13 +139,14 @@ void DojoApplication::initialise(const juce::String&)
 
     recorder_ = std::make_unique<session::Recorder>(*project_, *controller_);
     exporter_ = std::make_unique<session::Exporter>(*project_, *controller_);
+    preview_ = std::make_unique<engine::PreviewService>(*engine_, project_->getAssets().getFormatManager());
 
     if (options_.testTone)
         controller_->setTestToneEnabled(true);
 
     commandManager_ = std::make_unique<juce::ApplicationCommandManager>();
     services_ = std::make_unique<ui::AppServices>(ui::AppServices{*project_, *controller_, *commandManager_, *plugins_,
-                                                                   *recorder_, *exporter_, *settings_});
+                                                                   *recorder_, *exporter_, *settings_, *preview_});
     mainWindow_ = std::make_unique<MainWindow>(*services_);
 
     if (options_.sessionFile != juce::File())
@@ -182,6 +184,7 @@ void DojoApplication::shutdown()
     commandManager_.reset();
     exporter_.reset();
     recorder_.reset();
+    preview_.reset();
     if (engine_ != nullptr)
         engine_->onPrepare = nullptr;
     deviceHost_.reset(); // 2. Stops the driver: no audio callback can be in flight after this.

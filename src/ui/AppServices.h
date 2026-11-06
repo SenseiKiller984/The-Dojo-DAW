@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/EngineController.h"
+#include "engine/Preview.h"
 #include "plugins/PluginManager.h"
 #include "session/Exporter.h"
 #include "session/Project.h"
@@ -21,6 +22,7 @@ struct AppServices
     session::Recorder& recorder;
     session::Exporter& exporter;
     juce::ApplicationProperties& settings;
+    engine::PreviewService& preview;
 };
 
 } // namespace dojo::ui

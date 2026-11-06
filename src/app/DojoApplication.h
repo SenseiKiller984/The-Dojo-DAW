@@ -11,6 +11,7 @@ namespace dojo::engine
 class AudioEngine;
 class AudioDeviceHost;
 class EngineController;
+class PreviewService;
 } // namespace dojo::engine
 
 namespace dojo::session
@@ -87,6 +88,7 @@ private:
     std::unique_ptr<session::Project> project_;
     std::unique_ptr<session::Recorder> recorder_;
     std::unique_ptr<session::Exporter> exporter_;
+    std::unique_ptr<engine::PreviewService> preview_;
     std::unique_ptr<juce::ApplicationCommandManager> commandManager_;
     std::unique_ptr<ui::AppServices> services_;
     std::unique_ptr<MainWindow> mainWindow_;

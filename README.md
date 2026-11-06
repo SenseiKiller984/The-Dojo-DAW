@@ -2,7 +2,7 @@
 
 A cross-platform digital audio workstation for **Windows and Linux**, with identical features on both. It is built in C++20 on JUCE, with a 64-bit floating-point mix engine and strictly real-time-safe audio code.
 
-![The Dojo playing its demo project: a folder with a Drum Rack beat and a sidechained bass, Sampler chords with a volume automation lane, a reverb return, and the Drum Rack's editor](docs/images/main-window.png)
+![The Dojo playing its demo project: a folder with a Drum Rack beat and a sidechained bass, Sampler chords with a volume automation lane, a reverb return and the Drum Rack's editor; the browser shows the devices and a sample folder, with a kick being previewed](docs/images/main-window.png)
 
 ## What you can do
 
@@ -27,15 +27,23 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **MIDI sequencing**
 - **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend); **quantise** with strength and optional note ends.
-- **Step sequencer** view of the same clip: rows are the Drum Rack's pads (or 16 notes), click or paint steps, right-click for velocity.
+- **Step sequencer** view of the same clip: rows are the Drum Rack's pads or Impulse's slots (or 16 notes), click or paint steps, right-click for velocity.
 
 **Native devices** (64-bit, real-time safe, with dedicated editors)
 - **EQ**: 4 bands (low/high cut, shelves, peaks) with a live spectrum analyser and draggable band handles.
 - **Compressor** with soft knee, makeup, mix and an **external sidechain** (pick any track); **lookahead limiter**.
 - **Reverb** (feedback delay network) and tempo-synced **ping-pong delay**.
+- **Echo**: two-line tape-style delay (stereo, ping-pong or mid/side; synced or free, linked or not) with resonant filter, time and filter modulation, drive, noise, wobble, ducking, reverb before/after/inside the feedback loop, width.
+- **Utility**: gain ±35 dB, width 0–200 % and Mono, Bass Mono (below a crossover), phase invert left/right, channel mode (left, right, swap), balance, mute, DC filter.
+- **Amp & Cabinet**: seven amp models (Clean to Heavy, and Bass) with 4x-oversampled gain stages, bass/middle/treble/presence, five cabinets and three microphone positions.
 - **Pitch Shift** for live input and instruments.
+
+**Instruments**
+- **Wavetable**: two morphing wavetable oscillators (eight band-limited tables), unison up to 8, sub and noise, multimode filter, three envelopes, two LFOs and an 8-slot modulation matrix.
+- **Operator**: 4-operator FM with 11 algorithms, per-operator waveform, ratio or fixed frequency, envelope and velocity, feedback, filter with envelope, pitch envelope and LFO.
 - **Sampler**: polyphonic, ADSR, root note, tuning, start/end and loop; drop a file on it.
-- **Drum Rack**: 16 pads (drag-and-drop samples), per-pad volume, pan, pitch, choke groups and **outputs** — one click creates a return track for each pad output (multi-out).
+- **Drum Rack**: 16 pads (drag samples onto any pad from the browser or the file manager), per-pad volume, pan, pitch, choke groups and **outputs** — one click creates a return track for each pad output (multi-out).
+- **Impulse**: 8 sample slots (drag onto any slot) with start, transpose, drive, transient, decay, filter, pan, volume and velocity per slot; slots 7 and 8 can choke each other (hi-hats).
 
 **Automation and export**
 - **Spline automation lanes** for volume, pan, sends and every device or plug-in parameter (A on the track header, or right-click > Add Automation Lane).
@@ -52,7 +60,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
 2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop.
 3. The bottom panel has three tabs: **Mixer** (F3), **Devices** of the selected track (F4) and the **Editor** (F5) for the clip you double-clicked.
-4. Drag devices and plug-ins from the browser's DEVICES / PLUG-INS tabs onto a track or the Devices panel. Scan for plug-ins in the PLUG-INS tab.
+4. The browser lists devices and plug-ins at the top (with search; drag one onto a track or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
 5. Export with **Ctrl+R**; save with **Ctrl+S**.
 
 | Keys | Action |
@@ -151,8 +159,10 @@ resources/    embedded fonts
 scripts/      setup and build helpers (bash + PowerShell)
 src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), musical time
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
-              clip playback / time-stretch / disk streaming, capture, device host, MP3 encoder
-src/devices   native devices: EQ, compressor, limiter, reverb, delay, pitch shift, Sampler, Drum Rack
+              clip playback / time-stretch / disk streaming, capture, file preview, device host,
+              MP3 encoder
+src/devices   native devices: EQ, compressor, limiter, reverb, delay, Echo, Utility, Amp & Cabinet,
+              pitch shift; instruments: Wavetable, Operator, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/session   the document (tracks, clips, MIDI, devices, sends, automation) with undo, audio
@@ -172,7 +182,7 @@ third_party/  vendored LAME
 4. ✅ **Arranger depth**: busses, folders and routing, crossfades, time-stretch and pitch, multi-core graph, disk streaming
 5. ✅ **MIDI sequencing**: piano roll, quantise, CC lanes, step sequencer
 6. ✅ **Native DSP**: compressor, limiter, reverb, parametric EQ, delay, speed and pitch
-7. ✅ **Instruments**: Drum Rack, Sampler
+7. ✅ **Instruments**: Drum Rack, Sampler, Impulse, Wavetable, Operator
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems
 9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning
 

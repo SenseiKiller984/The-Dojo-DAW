@@ -1,5 +1,6 @@
 #include "ui/components/ClipEditor.h"
 
+#include "devices/Impulse.h"
 #include "devices/Instruments.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -683,7 +684,10 @@ bool StepSequencer::usesDrumRack() const
     if (!clip_.isValid())
         return false;
     const auto devices = session::Session::getDevices(clip_.getParent());
-    return !devices.empty() && session::device::getType(devices.front()) == devices::DrumRack::kTypeId;
+    if (devices.empty())
+        return false;
+    const auto type = session::device::getType(devices.front());
+    return type == devices::DrumRack::kTypeId || type == devices::Impulse::kTypeId;
 }
 
 int StepSequencer::rowPitch(int row) const
@@ -699,9 +703,14 @@ juce::String StepSequencer::rowName(int row) const
     {
         const auto devices = session::Session::getDevices(clip_.getParent());
         if (auto node = project_.getDevices().findNode(session::device::getId(devices.front())))
+        {
             if (auto* rack = dynamic_cast<devices::DrumRack*>(&node->getProcessor()))
                 if (const auto sample = rack->getPadSample(row))
                     name << "  " << sample->file.getFileNameWithoutExtension();
+            if (auto* impulse = dynamic_cast<devices::Impulse*>(&node->getProcessor()); impulse != nullptr && row < devices::Impulse::kSlots)
+                if (const auto sample = impulse->getSlotSample(row))
+                    name << "  " << sample->file.getFileNameWithoutExtension();
+        }
     }
     return name;
 }

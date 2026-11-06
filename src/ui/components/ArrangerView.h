@@ -51,7 +51,6 @@ class ArrangerView final : public juce::Component,
 {
 public:
     /** Drag-and-drop description prefixes used by the browser. */
-    static constexpr const char* kBrowserDragDescription = "DojoBrowserFiles";
     static constexpr const char* kDeviceDragPrefix = "DojoDevice:";
 
     ArrangerView(session::Project& project, engine::EngineController& controller, EditorState& editor);

@@ -64,7 +64,7 @@ MainComponent::MainComponent(AppServices& services)
     , controller_(services.controller)
     , commandManager_(services.commands)
     , transport_(services.controller, services.project.getSession(), editor_)
-    , browser_(services.project.getAssets().getWildcard(), services.plugins)
+    , browser_(services.project.getAssets().getWildcard(), services.plugins, services.preview, *services.settings.getUserSettings())
     , arranger_(services.project, services.controller, editor_)
     , mixer_(services.project, services.controller, editor_)
     , devicePanel_(services.project, services.plugins, editor_)
@@ -72,6 +72,7 @@ MainComponent::MainComponent(AppServices& services)
     , vblank_(this, [this](double timestampSeconds) { onDisplayRefresh(timestampSeconds); })
 {
     setOpaque(true);
+    setWantsKeyboardFocus(true);
 
     addAndMakeVisible(transport_);
     addAndMakeVisible(browser_);
@@ -161,6 +162,11 @@ MainComponent::~MainComponent()
 
     if (settingsWindow_ != nullptr)
         delete settingsWindow_.getComponent();
+}
+
+void MainComponent::focusGained(FocusChangeType)
+{
+    arranger_.grabKeyboardFocus();
 }
 
 void MainComponent::paint(juce::Graphics& g)

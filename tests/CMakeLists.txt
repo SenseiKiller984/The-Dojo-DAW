@@ -8,13 +8,19 @@ list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 
 add_executable(dojo_tests
+    DeviceTestSupport.h
     TestAudio.h
     TestListener.cpp
     TestSupport.h
     AudioEngineTests.cpp
+    BrowserTests.cpp
     DeviceTests.cpp
+    EditorDropTests.cpp
+    EffectTests.cpp
     EngineGraphTests.cpp
+    InstrumentTests.cpp
     PluginTests.cpp
+    PreviewTests.cpp
     RecordExportTests.cpp
     EngineCommandTests.cpp
     MusicalTimeTests.cpp
@@ -31,7 +37,7 @@ endif()
 target_compile_definitions(dojo_tests PRIVATE
     DOJO_EXPECT_ALLOCATION_TRAP=$<BOOL:${DOJO_ALLOCATION_TRAP_COMPATIBLE}>)
 
-target_link_libraries(dojo_tests PRIVATE dojo::session dojo::plugins Catch2::Catch2WithMain)
+target_link_libraries(dojo_tests PRIVATE dojo::ui dojo::session dojo::plugins Catch2::Catch2WithMain)
 
 # A real CLAP binary (two plug-ins) for the hosting tests, and the out-of-process scanner.
 add_library(dojo_test_clap MODULE clap/DojoTestPlugins.cpp)

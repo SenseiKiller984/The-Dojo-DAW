@@ -68,6 +68,20 @@ std::optional<DeviceChoice> fromDragDescription(const juce::String& description,
     return std::nullopt;
 }
 
+bool isInstrumentDevice(const juce::ValueTree& device)
+{
+    const auto type = session::device::getType(device);
+    if (const auto* info = devices::findBuiltinDevice(type))
+        return info->isInstrument;
+    if (type == plugins::PluginManager::kDeviceType)
+        if (const auto xml = juce::parseXML(device.getProperty(session::ids::description).toString()))
+        {
+            juce::PluginDescription description;
+            return description.loadFromXml(*xml) && description.isInstrument;
+        }
+    return false;
+}
+
 juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice)
 {
     const bool isMaster = owner.hasType(session::ids::master);
@@ -95,10 +109,20 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
         session.beginTransaction("Add " + choice.name);
     }
 
-    // Instruments lead the chain.
+    // Instruments lead the chain; a new instrument replaces the track's instrument (as one undo step).
     int index = -1;
     if (choice.instrument)
+    {
         index = 0;
+        const auto devices = session::Session::getDevices(owner);
+        if (!isMaster && !devices.empty() && isInstrumentDevice(devices.front()))
+        {
+            // A track still named after its instrument follows the new one.
+            if (session::track::getName(owner) == session::device::getName(devices.front()))
+                session::track::setName(owner, choice.name, &session.getUndoManager());
+            session.removeDevice(devices.front());
+        }
+    }
 
     auto device = session.addDevice(owner, choice.type, choice.name, index);
     if (choice.descriptionXml.isNotEmpty())

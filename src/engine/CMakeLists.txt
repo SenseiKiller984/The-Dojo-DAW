@@ -8,6 +8,8 @@ add_library(dojo_engine STATIC
     EngineController.cpp
     EngineController.h
     EngineTelemetry.h
+    Preview.cpp
+    Preview.h
     ProcessorNode.cpp
     ProcessorNode.h
     RealtimeHandoff.cpp

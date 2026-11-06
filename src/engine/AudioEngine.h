@@ -5,6 +5,7 @@
 #include "core/rt/ThreadOwnershipChecker.h"
 #include "engine/EngineCommands.h"
 #include "engine/EngineTelemetry.h"
+#include "engine/Preview.h"
 #include "engine/RealtimeHandoff.h"
 #include "engine/RenderGraph.h"
 #include "engine/WorkerPool.h"
@@ -111,6 +112,8 @@ public:
     void releaseRetiredGraphs() noexcept;
 
     [[nodiscard]] LiveMidiQueue& getLiveMidiQueue() noexcept { return liveMidi_; }
+    /** File previews (browser): added to the device output after the mix, live callbacks only. */
+    [[nodiscard]] PreviewPlayer& getPreviewPlayer() noexcept { return preview_; }
 
     /** Monotonic count of finished processing cycles (live or offline). For deferred releases. */
     [[nodiscard]] std::uint64_t getProcessEpoch() const noexcept { return epoch_.load(std::memory_order_acquire); }
@@ -263,6 +266,7 @@ private:
     double masterGainTarget_ = 1.0;
     juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> masterGain_;
     dsp::TestToneGenerator testTone_;
+    PreviewPlayer preview_;
     double smoothedLoad_ = 0.0;
     RenderGraph* graph_ = nullptr; // owned; replaced only via command::SwapGraph
     CaptureSession* capture_ = nullptr;

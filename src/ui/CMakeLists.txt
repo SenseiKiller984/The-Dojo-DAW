@@ -1,5 +1,6 @@
 add_library(dojo_ui STATIC
     AppServices.h
+    BrowserDrag.h
     Commands.h
     DemoProject.cpp
     DemoProject.h

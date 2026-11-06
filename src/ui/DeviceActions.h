@@ -34,11 +34,14 @@ juce::String toDragDescription(const DeviceChoice& choice);
 /** The choice a drag description refers to (plug-ins are looked up in the known list). */
 std::optional<DeviceChoice> fromDragDescription(const juce::String& description, plugins::PluginManager& plugins);
 
+/** True for instruments (native or hosted), which lead a track's chain. */
+[[nodiscard]] bool isInstrumentDevice(const juce::ValueTree& device);
+
 /**
     Adds a device to `owner` (a track or the MASTER node) as one undo step and returns the DEVICE.
-    Instruments go first in the chain; an instrument dropped onto a track that is not an instrument
-    track (or onto nothing) gets a new instrument track. An effect dropped onto nothing gets a new
-    audio track. The (new) track is selected.
+    Instruments go first in the chain and replace the track's current instrument; an instrument
+    dropped onto a track that is not an instrument track (or onto nothing) gets a new instrument
+    track. An effect dropped onto nothing gets a new audio track. The (new) track is selected.
 */
 juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice);
 

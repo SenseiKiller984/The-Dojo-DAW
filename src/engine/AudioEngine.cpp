@@ -267,6 +267,7 @@ void AudioEngine::process(const float* const* inputs, int numInputs, float* cons
     }
 
     renderBlock(inputs, numInputs, outputs, numOutputs, numSamples);
+    preview_.addTo(outputs, numOutputs, numSamples); // after the mix: never metered, recorded or exported
     publishLoad(Clock::now() - callbackStart, numSamples);
     liveCallbackActive_.store(false);
 }

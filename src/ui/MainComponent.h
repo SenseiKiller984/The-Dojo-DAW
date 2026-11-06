@@ -79,6 +79,8 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    /** Keyboard focus starts in the arranger (not in the first text field, e.g. a browser search). */
+    void focusGained(FocusChangeType cause) override;
 
     // juce::ApplicationCommandTarget
     juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }

@@ -28,9 +28,12 @@ src/
             path), Automation (monotone splines), RealtimeHandoff (ReleasePool, LiveMidiQueue,
             CaptureStream, DiskWriterThread), EngineController (the UI's facade),
             io/ (AudioDeviceHost: driver + MIDI binding, LameMp3Format),
+            Preview (browser file preview: decoder thread + PreviewPlayer on the audio thread),
             dsp/ (clip renderer, ClipStretcher, StreamedAudio, test tone)
-  devices/  native devices as juce::AudioProcessors: EQ, Compressor, Limiter, Reverb, Delay,
-            PitchShifter, Sampler, DrumRack; SampleSlot (RT-safe sample hand-over); registry
+  devices/  native devices as juce::AudioProcessors: EQ, Compressor, Limiter, Reverb, Delay, Echo,
+            Utility, AmpCabinet, PitchShifter; instruments WavetableSynth, Operator, Sampler,
+            DrumRack, Impulse; dsp/ (biquads, SynthCore: envelopes, ZDF filters, LFOs,
+            band-limited mipmapped wavetables); SampleSlot (RT-safe sample hand-over); registry
   plugins/  ClapPluginFormat (CLAP host), PluginManager (formats, known list, out-of-process scan)
   scanner/  dojo-plugin-scanner: opens one plug-in file and reports what it contains
   session/  the document: Session (juce::ValueTree + UndoManager), AudioAssetCache (decoding,
@@ -38,7 +41,8 @@ src/
             (session -> RenderGraph), Recorder, Exporter, Project (file I/O)
   ui/       look-and-feel, MainComponent (commands, menus, document actions), arranger, mixer,
             devices panel + device editors, clip editor (piano roll, step sequencer, inspector),
-            browser, transport, export dialog, EditorState (selection, grid, clipboard)
+            browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
+            paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
   app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
 resources/  embedded fonts (OFL)
 tests/      Catch2 suite (plus a real CLAP binary built for the hosting tests)
@@ -75,7 +79,8 @@ flowchart LR
 | Disk writing | `DiskWriterThread` | Recorder / real-time exports. Drains lock-free capture streams to WAV/FLAC/MP3 files. |
 | Offline export | `Exporter` thread | Session. Owns the engine while live processing is paused, renders faster than real time. |
 | Plug-in scanning | `PluginManager` thread + one `dojo-plugin-scanner` child process per file | A plug-in that crashes or hangs while being scanned only kills the child and gets blacklisted. |
-| Browser scanning | `juce::TimeSliceThread` | UI. Lists folders for the file browser. |
+| Browser search | `BrowserPanel::SearchThread` | UI. Searches the added folders recursively; results are posted back to the message thread. |
+| Preview decoding | `PreviewService` thread | Engine. Decodes and resamples a previewed file into a buffer allocated up front, publishing how far it got (`framesReady`, release/acquire) so playback starts before decoding ends. The audio thread adds the sound to the device output after the mix (never metered, recorded or exported); sounds are handed over and retired like `SampleSlot`. |
 
 ## 4. Real-time rules and how they are enforced
 
@@ -142,6 +147,7 @@ for each dependency level (in parallel across the worker pool):
     -> device chain (sidechains from earlier levels) -> pre-fader copy (for pre-fader sends)
     -> smoothed volume / pan (automation), mute/solo, phase -> meter -> delay compensation
 master: sum of tracks routed to it -> master devices -> master gain (automation) -> meter -> out
+device out += browser preview (live callbacks only)
 ```
 
 - **Routing.** A track feeds its output bus, else its folder, else the master. Busses pull their inputs (so parallel tracks never write to shared buffers). The compiler refuses any edge (output, send, aux return, sidechain) that would close a loop.
@@ -178,8 +184,8 @@ DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
 ```
 initialise: logger -> look-and-feel -> settings -> AudioEngine -> AudioDeviceHost (opens the saved or
             default device, enables MIDI inputs; audio starts) -> EngineController -> PluginManager
-            -> Project (devices, compiler) -> Recorder, Exporter -> MainWindow
-shutdown:   MainWindow -> Exporter, Recorder -> AudioDeviceHost (device stopped; no callback in
+            -> Project (devices, compiler) -> Recorder, Exporter, PreviewService -> MainWindow
+shutdown:   MainWindow -> Exporter, Recorder, PreviewService -> AudioDeviceHost (device stopped; no callback in
             flight) -> Project -> PluginManager -> EngineController -> AudioEngine (frees the last
             graphs and their devices) -> settings -> look-and-feel -> logger
 ```

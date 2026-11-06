@@ -1,9 +1,14 @@
 #include "ui/devices/DeviceEditors.h"
 
 #include "devices/Dynamics.h"
+#include "devices/Echo.h"
 #include "devices/Equaliser.h"
+#include "devices/Impulse.h"
 #include "devices/Instruments.h"
+#include "devices/Operator.h"
 #include "devices/TimeEffects.h"
+#include "devices/WavetableSynth.h"
+#include "ui/BrowserDrag.h"
 #include "ui/devices/ParameterControl.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -451,7 +456,10 @@ void paintSampleWaveform(juce::Graphics& g, const devices::SampleData& sample, j
 }
 
 /** Sampler: waveform with start/end (drop a file or Load...), ADSR and tuning. */
-class SamplerEditor final : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer
+class SamplerEditor final : public juce::Component,
+                            public juce::FileDragAndDropTarget,
+                            public juce::DragAndDropTarget,
+                            private juce::Timer
 {
 public:
     explicit SamplerEditor(devices::Sampler& sampler)
@@ -554,6 +562,26 @@ public:
         load(juce::File(files[0]));
     }
 
+    // Files dragged from the browser.
+    bool isInterestedInDragSource(const SourceDetails& details) override { return browserDrag::isFileDrag(details.description); }
+    void itemDragEnter(const SourceDetails&) override
+    {
+        dropping_ = true;
+        repaint();
+    }
+    void itemDragExit(const SourceDetails&) override
+    {
+        dropping_ = false;
+        repaint();
+    }
+    void itemDropped(const SourceDetails& details) override
+    {
+        dropping_ = false;
+        if (const auto files = browserDrag::getFiles(details.description); !files.isEmpty())
+            load(juce::File(files[0]));
+        repaint();
+    }
+
 private:
     void timerCallback() override { repaint(waveform_); }
 
@@ -589,7 +617,10 @@ private:
 
 //==================================================================================================
 /** Drum Rack: a 4x4 pad grid and the selected pad's settings. */
-class DrumRackEditor final : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer
+class DrumRackEditor final : public juce::Component,
+                             public juce::FileDragAndDropTarget,
+                             public juce::DragAndDropTarget,
+                             private juce::Timer
 {
 public:
     DrumRackEditor(devices::DrumRack& rack, const DeviceEditorContext& context)
@@ -696,19 +727,39 @@ public:
         dropPad_ = -1;
         repaint();
     }
-    void filesDropped(const juce::StringArray& files, int x, int y) override
+    void filesDropped(const juce::StringArray& files, int x, int y) override { dropFiles(files, {x, y}); }
+
+    // Files dragged from the browser: onto any pad.
+    bool isInterestedInDragSource(const SourceDetails& details) override { return browserDrag::isFileDrag(details.description); }
+    void itemDragMove(const SourceDetails& details) override
+    {
+        dropPad_ = padAt(details.localPosition);
+        repaint();
+    }
+    void itemDragExit(const SourceDetails&) override
     {
         dropPad_ = -1;
-        int pad = padAt({x, y});
+        repaint();
+    }
+    void itemDropped(const SourceDetails& details) override { dropFiles(browserDrag::getFiles(details.description), details.localPosition); }
+
+    /** Loads `files` onto the pad at `position` (the selected pad if none); several files fill
+        consecutive pads. The pad that received the first file is selected. */
+    void dropFiles(const juce::StringArray& files, juce::Point<int> position)
+    {
+        dropPad_ = -1;
+        int pad = padAt(position);
         if (pad < 0)
             pad = selectedPad_;
-        // Several files fill consecutive pads.
+        const int first = pad;
         for (const auto& path : files)
         {
             if (pad >= devices::DrumRack::kPads)
                 break;
             load(pad++, juce::File(path));
         }
+        if (!files.isEmpty())
+            selectPad(first);
         repaint();
     }
 
@@ -831,6 +882,703 @@ private:
     std::array<float, devices::DrumRack::kPads> activity_{};
     std::unique_ptr<juce::FileChooser> chooser_;
 };
+//==================================================================================================
+/** A choice parameter set from the UI as one gesture. */
+void setChoiceFromUser(juce::AudioParameterChoice* parameter, int index)
+{
+    if (parameter == nullptr || index < 0)
+        return;
+    parameter->beginChangeGesture();
+    parameter->setValueNotifyingHost(parameter->convertTo0to1(static_cast<float>(index)));
+    parameter->endChangeGesture();
+}
+
+//==================================================================================================
+/** Pages of parameter grids, picked with tabs; a page may show a display beside its grid. */
+class PagedEditor final : public juce::Component
+{
+public:
+    struct Page
+    {
+        juce::String title;
+        std::vector<std::pair<juce::String, juce::String>> parameters; ///< id, caption
+        std::function<std::unique_ptr<juce::Component>()> makeDisplay;
+        int displayWidth = 0;
+    };
+
+    static constexpr int kTabHeight = 22;
+    static constexpr int kRows = 2;
+
+    PagedEditor(juce::AudioProcessor& processor, std::vector<Page> pages)
+        : processor_(processor)
+        , pages_(std::move(pages))
+    {
+        for (std::size_t i = 0; i < pages_.size(); ++i)
+        {
+            auto tab = std::make_unique<juce::TextButton>(pages_[i].title);
+            tab->setRadioGroupId(4242);
+            tab->setClickingTogglesState(true);
+            tab->setWantsKeyboardFocus(false);
+            tab->setColour(juce::TextButton::buttonOnColourId, theme::colour::controlHover);
+            tab->onClick = [this, i] { showPage(i); };
+            addAndMakeVisible(*tab);
+            tabs_.push_back(std::move(tab));
+        }
+        addAndMakeVisible(grid_);
+        showPage(0);
+    }
+
+    /** Width that fits the widest page in two rows (and every tab). */
+    static int preferredWidth(const std::vector<Page>& pages)
+    {
+        int width = 0;
+        int tabs = 0;
+        for (const auto& page : pages)
+        {
+            const int columns = (static_cast<int>(page.parameters.size()) + kRows - 1) / kRows;
+            width = std::max(width, columns * ParameterControl::kWidth + page.displayWidth + 28); // card margins
+            tabs += tabWidth(page.title);
+        }
+        return std::max(width, tabs + 8);
+    }
+
+    void showPage(std::size_t index)
+    {
+        page_ = std::min(index, pages_.size() - 1);
+        for (std::size_t i = 0; i < tabs_.size(); ++i)
+            tabs_[i]->setToggleState(i == page_, juce::dontSendNotification);
+
+        grid_.clear();
+        for (const auto& [id, caption] : pages_[page_].parameters)
+            if (auto* parameter = findParameter(processor_, id))
+                grid_.add(*parameter, caption);
+
+        display_.reset();
+        if (pages_[page_].makeDisplay)
+        {
+            display_ = pages_[page_].makeDisplay();
+            addAndMakeVisible(*display_);
+        }
+        resized();
+    }
+
+    [[nodiscard]] std::size_t getPage() const noexcept { return page_; }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        auto tabs = area.removeFromTop(kTabHeight);
+        for (std::size_t i = 0; i < tabs_.size(); ++i)
+            tabs_[i]->setBounds(tabs.removeFromLeft(tabWidth(pages_[i].title)).reduced(1, 0));
+        area.removeFromTop(4);
+        if (display_ != nullptr)
+            display_->setBounds(area.removeFromLeft(pages_[page_].displayWidth).reduced(2));
+        grid_.setBounds(area);
+    }
+
+private:
+    static int tabWidth(const juce::String& title) { return 18 + 7 * title.length(); }
+
+    juce::AudioProcessor& processor_;
+    std::vector<Page> pages_;
+    std::vector<std::unique_ptr<juce::TextButton>> tabs_;
+    ParameterGrid grid_;
+    std::unique_ptr<juce::Component> display_;
+    std::size_t page_ = 0;
+};
+
+//==================================================================================================
+/** One Wavetable oscillator's current frame (follows Position and its modulation). */
+class WavetableDisplay final : public juce::Component, private juce::Timer
+{
+public:
+    WavetableDisplay(devices::WavetableSynth& synth, int oscillator)
+        : synth_(synth)
+        , oscillator_(oscillator)
+    {
+        startTimerHz(20);
+        timerCallback();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        const auto area = getLocalBounds().toFloat();
+        g.setColour(colour::meterBackground);
+        g.fillRoundedRectangle(area, 3.0f);
+
+        const auto& tables = devices::WavetableSynth::getTables();
+        const auto& p = synth_.oscillators_[static_cast<std::size_t>(oscillator_)];
+        const auto& table = tables[static_cast<std::size_t>(std::clamp(p.table->getIndex(), 0, static_cast<int>(tables.size()) - 1))];
+        const auto wave = area.reduced(6.0f, 16.0f);
+
+        // A few neighbouring frames behind the current one, for depth.
+        for (int ghost = 3; ghost >= 0; --ghost)
+        {
+            const double position = std::clamp(shown_ + (ghost - 1.5) * 0.08 * (ghost == 0 ? 0.0 : 1.0), 0.0, 1.0);
+            juce::Path path;
+            const int points = std::max(2, static_cast<int>(wave.getWidth()));
+            for (int x = 0; x < points; ++x)
+            {
+                const double phase = static_cast<double>(x) / (points - 1);
+                const float y = wave.getCentreY() - table.read(phase, ghost == 0 ? shown_ : position, 0) * wave.getHeight() * 0.48f;
+                if (x == 0)
+                    path.startNewSubPath(wave.getX(), y);
+                else
+                    path.lineTo(wave.getX() + static_cast<float>(x), y);
+            }
+            g.setColour(ghost == 0 ? colour::accentBright : colour::accent.withAlpha(0.15f));
+            g.strokePath(path, juce::PathStrokeType(ghost == 0 ? 1.8f : 1.0f));
+        }
+
+        g.setColour(colour::textSecondary);
+        g.setFont(sans(10.5f));
+        g.drawText(juce::String(table.getName()) + "  " + juce::String(juce::roundToInt(shown_ * 100.0)) + " %",
+                   area.reduced(6.0f, 2.0f), juce::Justification::topLeft, true);
+    }
+
+private:
+    void timerCallback() override
+    {
+        const auto& p = synth_.oscillators_[static_cast<std::size_t>(oscillator_)];
+        const double position = synth_.getActiveVoiceCount() > 0 ? synth_.getDisplayPosition(oscillator_) : p.position->get() / 100.0;
+        const int table = p.table->getIndex();
+        if (std::abs(position - shown_) > 1.0e-4 || table != shownTable_)
+        {
+            shown_ = position;
+            shownTable_ = table;
+            repaint();
+        }
+    }
+
+    devices::WavetableSynth& synth_;
+    int oscillator_;
+    double shown_ = -1.0;
+    int shownTable_ = -1;
+};
+
+//==================================================================================================
+/** The Wavetable modulation matrix: source, target and amount for each slot. */
+class MatrixView final : public juce::Component, private juce::Timer
+{
+public:
+    explicit MatrixView(devices::WavetableSynth& synth)
+        : synth_(synth)
+    {
+        for (std::size_t s = 0; s < rows_.size(); ++s)
+        {
+            auto& row = rows_[s];
+            auto& slot = synth_.matrix_[s];
+            int id = 1;
+            for (const auto& name : devices::WavetableSynth::getSourceNames())
+                row.source.addItem(name, id++);
+            id = 1;
+            for (const auto& name : devices::WavetableSynth::getDestinationNames())
+                row.destination.addItem(name, id++);
+            row.source.onChange = [&row, &slot] { setChoiceFromUser(slot.source, row.source.getSelectedId() - 1); };
+            row.destination.onChange = [&row, &slot] { setChoiceFromUser(slot.destination, row.destination.getSelectedId() - 1); };
+            row.amount.setSliderStyle(juce::Slider::LinearBar);
+            row.amount.setRange(-100.0, 100.0, 0.1);
+            row.amount.setTextValueSuffix(" %");
+            row.amount.setDoubleClickReturnValue(true, 0.0);
+            row.amount.onDragStart = [&row, &slot]
+            {
+                row.dragging = true;
+                slot.amount->beginChangeGesture();
+            };
+            row.amount.onDragEnd = [&row, &slot]
+            {
+                row.dragging = false;
+                slot.amount->endChangeGesture();
+            };
+            row.amount.onValueChange = [&row, &slot]
+            {
+                const float value = static_cast<float>(row.amount.getValue());
+                if (std::abs(value - slot.amount->get()) < 1.0e-4f)
+                    return;
+                if (!row.dragging)
+                    slot.amount->beginChangeGesture();
+                *slot.amount = value;
+                if (!row.dragging)
+                    slot.amount->endChangeGesture();
+            };
+            for (auto* c : std::initializer_list<juce::Component*>{&row.source, &row.destination, &row.amount})
+            {
+                c->setWantsKeyboardFocus(false);
+                addAndMakeVisible(c);
+            }
+        }
+        timerCallback();
+        startTimerHz(10);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        const int rowHeight = std::max(16, area.getHeight() / static_cast<int>(rows_.size()));
+        for (auto& row : rows_)
+        {
+            auto line = area.removeFromTop(rowHeight).reduced(0, 1);
+            row.source.setBounds(line.removeFromLeft(line.getWidth() * 30 / 100));
+            line.removeFromLeft(3);
+            row.destination.setBounds(line.removeFromLeft(line.getWidth() * 50 / 100));
+            line.removeFromLeft(3);
+            row.amount.setBounds(line);
+        }
+    }
+
+private:
+    struct Row
+    {
+        juce::ComboBox source, destination;
+        juce::Slider amount;
+        bool dragging = false;
+    };
+
+    void timerCallback() override
+    {
+        for (std::size_t s = 0; s < rows_.size(); ++s)
+        {
+            auto& row = rows_[s];
+            const auto& slot = synth_.matrix_[s];
+            row.source.setSelectedId(slot.source->getIndex() + 1, juce::dontSendNotification);
+            row.destination.setSelectedId(slot.destination->getIndex() + 1, juce::dontSendNotification);
+            if (!row.dragging)
+                row.amount.setValue(slot.amount->get(), juce::dontSendNotification);
+        }
+    }
+
+    devices::WavetableSynth& synth_;
+    std::array<Row, devices::WavetableSynth::kMatrixSlots> rows_;
+};
+
+//==================================================================================================
+/** Operator's current algorithm: modulators above what they modulate, carriers at the bottom. */
+class AlgorithmDisplay final : public juce::Component, private juce::Timer
+{
+public:
+    explicit AlgorithmDisplay(devices::Operator& fm)
+        : fm_(fm)
+    {
+        startTimerHz(10);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        const auto area = getLocalBounds().toFloat();
+        g.setColour(colour::meterBackground);
+        g.fillRoundedRectangle(area, 3.0f);
+
+        const int index = std::clamp(fm_.algorithm_->getIndex(), 0, devices::Operator::kAlgorithms - 1);
+        const auto& algorithm = devices::Operator::getAlgorithms()[static_cast<std::size_t>(index)];
+
+        // Depth of each operator: carriers 0, a modulator one above the deepest thing it modulates.
+        std::array<int, devices::Operator::kOperators> depth{};
+        for (int pass = 0; pass < 4; ++pass)
+            for (int target = 0; target < devices::Operator::kOperators; ++target)
+                for (int source = 0; source < devices::Operator::kOperators; ++source)
+                    if (((algorithm.modulators[static_cast<std::size_t>(target)] >> source) & 1) != 0)
+                        depth[static_cast<std::size_t>(source)] = std::max(depth[static_cast<std::size_t>(source)],
+                                                                           depth[static_cast<std::size_t>(target)] + 1);
+        const int maxDepth = *std::max_element(depth.begin(), depth.end());
+
+        const auto content = area.reduced(10.0f, 22.0f).withTrimmedBottom(10.0f);
+        const float rowHeight = content.getHeight() / static_cast<float>(maxDepth + 1);
+        std::array<juce::Rectangle<float>, devices::Operator::kOperators> boxes;
+        for (int level = 0; level <= maxDepth; ++level)
+        {
+            std::vector<int> members;
+            for (int o = 0; o < devices::Operator::kOperators; ++o)
+                if (depth[static_cast<std::size_t>(o)] == level)
+                    members.push_back(o);
+            const float columnWidth = content.getWidth() / static_cast<float>(std::max<std::size_t>(1, members.size()));
+            for (std::size_t m = 0; m < members.size(); ++m)
+            {
+                const float cx = content.getX() + columnWidth * (static_cast<float>(m) + 0.5f);
+                const float cy = content.getBottom() - rowHeight * (static_cast<float>(level) + 0.5f);
+                boxes[static_cast<std::size_t>(members[m])] = juce::Rectangle<float>(26.0f, 18.0f).withCentre({cx, cy});
+            }
+        }
+
+        g.setColour(colour::textSecondary);
+        for (int target = 0; target < devices::Operator::kOperators; ++target)
+            for (int source = 0; source < devices::Operator::kOperators; ++source)
+                if (((algorithm.modulators[static_cast<std::size_t>(target)] >> source) & 1) != 0)
+                {
+                    const auto from = boxes[static_cast<std::size_t>(source)];
+                    const auto to = boxes[static_cast<std::size_t>(target)];
+                    g.drawLine(from.getCentreX(), from.getBottom(), to.getCentreX(), to.getY(), 1.5f);
+                }
+
+        const float outY = area.getBottom() - 8.0f;
+        for (int o = 0; o < devices::Operator::kOperators; ++o)
+        {
+            const auto box = boxes[static_cast<std::size_t>(o)];
+            const bool carrier = ((algorithm.carriers >> o) & 1) != 0;
+            if (carrier)
+            {
+                g.setColour(colour::accent);
+                g.drawLine(box.getCentreX(), box.getBottom(), box.getCentreX(), outY, 1.5f);
+            }
+            if (o == devices::Operator::kOperators - 1 && fm_.feedback_->get() > 0.0f)
+            {
+                g.setColour(colour::gold);
+                g.drawEllipse(box.getRight() - 2.0f, box.getY() - 8.0f, 12.0f, 12.0f, 1.2f);
+            }
+            g.setColour(carrier ? colour::accent.withAlpha(0.35f) : colour::control);
+            g.fillRoundedRectangle(box, 3.0f);
+            g.setColour(colour::textPrimary);
+            g.setFont(sansBold(11.0f));
+            g.drawText(juce::String::charToString(static_cast<juce::juce_wchar>('A' + o)), box, juce::Justification::centred, false);
+        }
+        g.setColour(colour::accent);
+        g.fillRect(content.getX(), outY, content.getWidth(), 1.5f);
+
+        g.setColour(colour::textSecondary);
+        g.setFont(sans(10.5f));
+        g.drawText("Algorithm " + juce::String(index + 1) + ":  " + algorithm.description, area.reduced(6.0f, 3.0f),
+                   juce::Justification::topLeft, true);
+    }
+
+private:
+    void timerCallback() override
+    {
+        const int algorithm = fm_.algorithm_->getIndex();
+        const bool feedback = fm_.feedback_->get() > 0.0f;
+        if (algorithm != shownAlgorithm_ || feedback != shownFeedback_)
+        {
+            shownAlgorithm_ = algorithm;
+            shownFeedback_ = feedback;
+            repaint();
+        }
+    }
+
+    devices::Operator& fm_;
+    int shownAlgorithm_ = -1;
+    bool shownFeedback_ = false;
+};
+
+//==================================================================================================
+/** Impulse: eight sample slots (drop files from the browser or the file manager) and the selected
+    slot's settings. */
+class ImpulseEditor final : public juce::Component,
+                            public juce::FileDragAndDropTarget,
+                            public juce::DragAndDropTarget,
+                            private juce::Timer
+{
+public:
+    explicit ImpulseEditor(devices::Impulse& impulse)
+        : impulse_(impulse)
+    {
+        loadButton_.setButtonText("Load...");
+        loadButton_.onClick = [this] { chooseFile(selected_); };
+        addAndMakeVisible(loadButton_);
+        globals_.add(*impulse_.link_, "Link 7/8");
+        globals_.add(*impulse_.transpose_, "Transpose");
+        globals_.add(*impulse_.volume_, "Volume");
+        addAndMakeVisible(globals_);
+        addAndMakeVisible(slotGrid_);
+        selectSlot(0);
+        startTimerHz(30);
+    }
+
+    static constexpr int kSlotAreaWidth = 300;
+    static int preferredWidth() { return kSlotAreaWidth + 8 * ParameterControl::kWidth + 40; }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        slots_ = area.removeFromLeft(kSlotAreaWidth).reduced(2);
+        area.removeFromLeft(6);
+        globals_.setBounds(area.removeFromRight(2 * ParameterControl::kWidth).withTrimmedTop(24));
+        area.removeFromRight(8);
+        auto header = area.removeFromTop(24);
+        loadButton_.setBounds(header.removeFromRight(70).reduced(2, 1));
+        title_ = header;
+        slotGrid_.setBounds(area);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        for (int slot = 0; slot < devices::Impulse::kSlots; ++slot)
+        {
+            const auto box = slotBounds(slot).toFloat().reduced(2.0f);
+            const auto sample = impulse_.getSlotSample(slot);
+            g.setColour(slot == selected_ ? colour::controlHover : colour::control);
+            g.fillRoundedRectangle(box, 4.0f);
+            const float light = activity_[static_cast<std::size_t>(slot)];
+            if (light > 0.01f)
+            {
+                g.setColour(colour::accent.withAlpha(juce::jlimit(0.0f, 0.8f, light)));
+                g.fillRoundedRectangle(box, 4.0f);
+            }
+            if (slot == dropSlot_)
+            {
+                g.setColour(colour::gold);
+                g.drawRoundedRectangle(box, 4.0f, 2.0f);
+            }
+            g.setColour(colour::textMuted);
+            g.setFont(mono(9.0f));
+            g.drawText(juce::String(slot + 1) + "  " + devices::Impulse::getSlotNoteName(slot), box.reduced(5.0f, 3.0f),
+                       juce::Justification::topLeft, false);
+            g.setColour(sample != nullptr ? colour::textPrimary : colour::textMuted);
+            g.setFont(sans(10.5f));
+            g.drawFittedText(sample != nullptr ? sample->file.getFileNameWithoutExtension() : juce::String("drop a sample"),
+                             box.reduced(5.0f, 3.0f).toNearestInt(), juce::Justification::bottomLeft, 2);
+        }
+
+        g.setColour(colour::textPrimary);
+        g.setFont(sansBold(12.0f));
+        const auto sample = impulse_.getSlotSample(selected_);
+        g.drawText("Slot " + juce::String(selected_ + 1) + (sample != nullptr ? "  " + sample->file.getFileName() : juce::String()),
+                   title_, juce::Justification::centredLeft, true);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int slot = slotAt(e.getPosition());
+        if (slot < 0)
+            return;
+        selectSlot(slot);
+        if (e.mods.isPopupMenu())
+        {
+            juce::Component::SafePointer<ImpulseEditor> safe(this);
+            juce::PopupMenu menu;
+            menu.addItem("Load Sample...", [safe, slot] { if (safe != nullptr) safe->chooseFile(slot); });
+            menu.addItem("Clear Slot", impulse_.getSlotSample(slot) != nullptr, false, [safe, slot]
+                         {
+                             if (safe != nullptr)
+                             {
+                                 safe->impulse_.setSlotSample(slot, nullptr);
+                                 safe->repaint();
+                             }
+                         });
+            menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+            return;
+        }
+        impulse_.triggerSlot(slot, 0.9f);
+    }
+
+    // Files from the file manager...
+    bool isInterestedInFileDrag(const juce::StringArray& files) override { return !files.isEmpty(); }
+    void fileDragMove(const juce::StringArray&, int x, int y) override
+    {
+        dropSlot_ = slotAt({x, y});
+        repaint();
+    }
+    void fileDragExit(const juce::StringArray&) override
+    {
+        dropSlot_ = -1;
+        repaint();
+    }
+    void filesDropped(const juce::StringArray& files, int x, int y) override { dropFiles(files, {x, y}); }
+
+    // ...and from the browser: onto any slot.
+    bool isInterestedInDragSource(const SourceDetails& details) override { return browserDrag::isFileDrag(details.description); }
+    void itemDragMove(const SourceDetails& details) override
+    {
+        dropSlot_ = slotAt(details.localPosition);
+        repaint();
+    }
+    void itemDragExit(const SourceDetails&) override
+    {
+        dropSlot_ = -1;
+        repaint();
+    }
+    void itemDropped(const SourceDetails& details) override { dropFiles(browserDrag::getFiles(details.description), details.localPosition); }
+
+    void dropFiles(const juce::StringArray& files, juce::Point<int> position)
+    {
+        dropSlot_ = -1;
+        int slot = slotAt(position);
+        if (slot < 0)
+            slot = selected_;
+        const int first = slot;
+        for (const auto& path : files)
+        {
+            if (slot >= devices::Impulse::kSlots)
+                break;
+            load(slot++, juce::File(path));
+        }
+        if (!files.isEmpty())
+            selectSlot(first);
+        repaint();
+    }
+
+    [[nodiscard]] juce::Rectangle<int> slotBounds(int slot) const
+    {
+        const int column = slot % 4;
+        const int row = slot / 4;
+        const int w = slots_.getWidth() / 4;
+        const int h = slots_.getHeight() / 2;
+        return {slots_.getX() + column * w, slots_.getY() + row * h, w, h};
+    }
+
+    [[nodiscard]] int slotAt(juce::Point<int> p) const
+    {
+        for (int slot = 0; slot < devices::Impulse::kSlots; ++slot)
+            if (slotBounds(slot).contains(p))
+                return slot;
+        return -1;
+    }
+
+    [[nodiscard]] int getSelectedSlot() const noexcept { return selected_; }
+
+private:
+    void selectSlot(int slot)
+    {
+        selected_ = slot;
+        slotGrid_.clear();
+        const auto& p = impulse_.getSlot(slot);
+        slotGrid_.add(*p.start, "Start");
+        slotGrid_.add(*p.transpose, "Transpose");
+        slotGrid_.add(*p.drive, "Drive");
+        slotGrid_.add(*p.transient, "Transient");
+        slotGrid_.add(*p.decay, "Decay");
+        slotGrid_.add(*p.volume, "Volume");
+        slotGrid_.add(*p.filter, "Filter");
+        slotGrid_.add(*p.cutoff, "Cutoff");
+        slotGrid_.add(*p.resonance, "Resonance");
+        slotGrid_.add(*p.pan, "Pan");
+        slotGrid_.add(*p.velocity, "Velocity");
+        slotGrid_.resized();
+        repaint();
+    }
+
+    void load(int slot, const juce::File& file)
+    {
+        juce::String error;
+        if (!impulse_.loadSlotSample(slot, file, error))
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Could not load the sample", error);
+    }
+
+    void chooseFile(int slot)
+    {
+        chooser_ = std::make_unique<juce::FileChooser>("Load Slot Sample", juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+                                                       "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+        juce::Component::SafePointer<ImpulseEditor> safe(this);
+        chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [safe, slot](const juce::FileChooser& chooser)
+                              {
+                                  if (safe != nullptr && chooser.getResult().existsAsFile())
+                                  {
+                                      safe->load(slot, chooser.getResult());
+                                      safe->repaint();
+                                  }
+                              });
+    }
+
+    void timerCallback() override
+    {
+        bool changed = false;
+        for (int slot = 0; slot < devices::Impulse::kSlots; ++slot)
+        {
+            auto& shown = activity_[static_cast<std::size_t>(slot)];
+            const float next = std::max(impulse_.takeSlotActivity(slot), shown * 0.8f);
+            changed = changed || std::abs(next - shown) > 0.005f;
+            shown = next;
+        }
+        if (changed)
+            repaint(slots_);
+    }
+
+    devices::Impulse& impulse_;
+    juce::TextButton loadButton_;
+    ParameterGrid slotGrid_;
+    ParameterGrid globals_;
+    juce::Rectangle<int> slots_;
+    juce::Rectangle<int> title_;
+    int selected_ = 0;
+    int dropSlot_ = -1;
+    std::array<float, devices::Impulse::kSlots> activity_{};
+    std::unique_ptr<juce::FileChooser> chooser_;
+};
+
+//==================================================================================================
+// Page layouts of the new devices.
+
+std::vector<PagedEditor::Page> wavetablePages(devices::WavetableSynth& synth)
+{
+    std::vector<PagedEditor::Page> pages;
+    for (int o = 0; o < 2; ++o)
+    {
+        const juce::String id = "o" + juce::String(o + 1);
+        pages.push_back({"Osc " + juce::String(o + 1),
+                         {{id + "on", "On"}, {id + "table", "Table"}, {id + "pos", "Position"}, {id + "level", "Level"},
+                          {id + "oct", "Octave"}, {id + "semi", "Semi"}, {id + "fine", "Fine"}},
+                         [&synth, o] { return std::make_unique<WavetableDisplay>(synth, o); },
+                         180});
+    }
+    pages.push_back({"Voice",
+                     {{"unison", "Unison"}, {"unidetune", "Detune"}, {"unispread", "Spread"}, {"glide", "Glide"},
+                      {"sub", "Sub"}, {"noise", "Noise"}, {"velamp", "Velocity"}, {"volume", "Volume"}},
+                     {},
+                     0});
+    pages.push_back({"Filter", {{"ftype", "Type"}, {"cutoff", "Cutoff"}, {"res", "Resonance"}, {"drive", "Drive"}, {"keytrack", "Key Track"}}, {}, 0});
+    pages.push_back({"Amp Env", {{"a1", "Attack"}, {"d1", "Decay"}, {"s1", "Sustain"}, {"r1", "Release"}}, {}, 0});
+    pages.push_back({"Env 2/3",
+                     {{"a2", "Attack 2"}, {"d2", "Decay 2"}, {"s2", "Sustain 2"}, {"r2", "Release 2"},
+                      {"a3", "Attack 3"}, {"d3", "Decay 3"}, {"s3", "Sustain 3"}, {"r3", "Release 3"}},
+                     {},
+                     0});
+    pages.push_back({"LFOs", {{"l1shape", "LFO 1"}, {"l1rate", "Rate 1"}, {"l2shape", "LFO 2"}, {"l2rate", "Rate 2"}}, {}, 0});
+    pages.push_back({"Matrix", {}, [&synth] { return std::make_unique<MatrixView>(synth); }, 460});
+    return pages;
+}
+
+std::vector<PagedEditor::Page> operatorPages(devices::Operator& fm)
+{
+    std::vector<PagedEditor::Page> pages;
+    pages.push_back({"Algorithm",
+                     {{"algo", "Algorithm"}, {"feedback", "Feedback"}, {"transpose", "Transpose"}, {"glide", "Glide"}, {"volume", "Volume"}},
+                     [&fm] { return std::make_unique<AlgorithmDisplay>(fm); },
+                     200});
+    for (int o = 0; o < devices::Operator::kOperators; ++o)
+    {
+        const juce::String letter = juce::String::charToString(static_cast<juce::juce_wchar>('A' + o));
+        const juce::String id = letter.toLowerCase();
+        pages.push_back({"Osc " + letter,
+                         {{id + "wave", "Wave"}, {id + "coarse", "Coarse"}, {id + "fine", "Fine"}, {id + "fixed", "Fixed"},
+                          {id + "freq", "Fixed Hz"}, {id + "level", "Level"}, {id + "a", "Attack"}, {id + "d", "Decay"},
+                          {id + "s", "Sustain"}, {id + "r", "Release"}, {id + "vel", "Velocity"}},
+                         {},
+                         0});
+    }
+    pages.push_back({"Filter",
+                     {{"fon", "On"}, {"ftype", "Type"}, {"cutoff", "Cutoff"}, {"res", "Resonance"}, {"fenv", "Env Amt"},
+                      {"fa", "Attack"}, {"fd", "Decay"}, {"fs", "Sustain"}, {"fr", "Release"}},
+                     {},
+                     0});
+    pages.push_back({"Pitch/LFO",
+                     {{"penv", "Pitch Env"}, {"pdecay", "Decay"}, {"lshape", "LFO"}, {"lrate", "Rate"}, {"ldest", "Target"}, {"lamount", "Amount"}},
+                     {},
+                     0});
+    return pages;
+}
+
+std::vector<PagedEditor::Page> echoPages()
+{
+    return {
+        {"Echo",
+         {{"mode", "Mode"}, {"sync", "Sync"}, {"divl", "Left"}, {"divr", "Right"}, {"timel", "Left ms"}, {"timer", "Right ms"},
+          {"link", "Link"}, {"feedback", "Feedback"}, {"invert", "Invert"}, {"input", "Input"}, {"width", "Width"}, {"mix", "Dry/Wet"}},
+         {},
+         0},
+        {"Filter & Mod",
+         {{"filter", "Filter"}, {"hp", "High Pass"}, {"lp", "Low Pass"}, {"res", "Resonance"}, {"modrate", "Mod Rate"},
+          {"moddepth", "Mod Time"}, {"modfilter", "Mod Filter"}},
+         {},
+         0},
+        {"Character",
+         {{"drive", "Drive"}, {"noise", "Noise"}, {"wobble", "Wobble"}, {"duck", "Duck"}, {"reverb", "Reverb"},
+          {"reverbdecay", "Decay"}, {"reverbloc", "Place"}},
+         {},
+         0},
+    };
+}
+
 } // namespace
 
 std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node, const DeviceEditorContext& context, int& preferredWidth)
@@ -861,6 +1609,29 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
     {
         preferredWidth = 640;
         return std::make_unique<DrumRackEditor>(*rack, context);
+    }
+    if (auto* impulse = dynamic_cast<devices::Impulse*>(&processor))
+    {
+        preferredWidth = ImpulseEditor::preferredWidth();
+        return std::make_unique<ImpulseEditor>(*impulse);
+    }
+    if (auto* synth = dynamic_cast<devices::WavetableSynth*>(&processor))
+    {
+        auto pages = wavetablePages(*synth);
+        preferredWidth = PagedEditor::preferredWidth(pages);
+        return std::make_unique<PagedEditor>(processor, std::move(pages));
+    }
+    if (auto* fm = dynamic_cast<devices::Operator*>(&processor))
+    {
+        auto pages = operatorPages(*fm);
+        preferredWidth = PagedEditor::preferredWidth(pages);
+        return std::make_unique<PagedEditor>(processor, std::move(pages));
+    }
+    if (dynamic_cast<devices::Echo*>(&processor) != nullptr)
+    {
+        auto pages = echoPages();
+        preferredWidth = PagedEditor::preferredWidth(pages);
+        return std::make_unique<PagedEditor>(processor, std::move(pages));
     }
 
     const bool native = dynamic_cast<devices::BuiltinProcessor*>(&processor) != nullptr;
