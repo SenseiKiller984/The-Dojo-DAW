@@ -71,7 +71,7 @@ protected:
                                         const juce::String& label = {}, bool automatable = true);
     juce::AudioParameterBool* addBool(const juce::String& id, const juce::String& name, bool defaultValue);
     juce::AudioParameterChoice* addChoice(const juce::String& id, const juce::String& name,
-                                          const juce::StringArray& choices, int defaultIndex);
+                                          const juce::StringArray& choices, int defaultIndex, bool automatable = true);
 
     double sampleRate_ = 48000.0;
     int maxBlock_ = 512;

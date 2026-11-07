@@ -33,7 +33,15 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Native devices** (64-bit, real-time safe, with dedicated editors; drag a knob, or double-click the value under it to type an exact one: "120 Hz", "2.5k", "-6 dB")
 - **EQ**: 4 bands (low/high cut, shelves, peaks) with a live spectrum analyser and draggable band handles.
-- **Compressor** with soft knee, makeup, mix and an **external sidechain** (pick any track); **lookahead limiter**.
+- **Compressor** with soft knee, makeup, mix and an **external sidechain** (pick any track).
+- **Limiter** (lookahead brickwall):
+  - **Maximize**: Threshold replaces Input Gain. Material at the threshold comes out at the ceiling, so lowering the threshold reduces the dynamic range and makes the track louder.
+  - **Auto Release**: a fast path recovers within ~20 ms after short peaks. A slow path only engages under sustained limiting, so dense material does not pump.
+  - **Stereo** or **L/R**: Stereo gives both channels the same gain reduction. L/R limits each channel on its own peaks, and **Link** blends between the two (100 % = Stereo).
+  - Modes:
+    - **Standard**: transparent.
+    - **Soft Clip**: lets peaks up to 6 dB over the ceiling reach a saturation curve, which rounds them off below it for warmth and crunch.
+    - **True Peak**: an 8x-oversampling detector keeps the peaks between samples under the ceiling too, for streaming and CD delivery. It adds 8 samples of latency, compensated automatically.
 - **Reverb** (feedback delay network) and tempo-synced **ping-pong delay**.
 - **Echo**: two-line tape-style delay (stereo, ping-pong or mid/side; synced or free, linked or not) with resonant filter, time and filter modulation, drive, noise, wobble, ducking, reverb before/after/inside the feedback loop, width.
 - **Utility**: gain ±35 dB, width 0–200 % and Mono, Bass Mono (below a crossover), phase invert left/right, channel mode (left, right, swap), balance, mute, DC filter.

@@ -67,6 +67,9 @@ public:
 
     /** Called on the message thread (coalesced) after any device parameter changed. */
     std::function<void()> onParameterChanged;
+    /** Called on the message thread (coalesced) after a device reported a new latency (e.g. a
+        limiter's lookahead), so the delay compensation can be recomputed. */
+    std::function<void()> onLatencyChanged;
     /** Called when an instance has been created (e.g. to refresh device panels). */
     std::function<void(std::uint32_t deviceId)> onNodeCreated;
 
@@ -88,6 +91,8 @@ private:
     {
         if (details.parameterInfoChanged || details.programChanged || details.nonParameterStateChanged)
             parameterChanged_ = true;
+        if (details.latencyChanged)
+            latencyChanged_ = true;
     }
     void timerCallback() override;
 
@@ -100,6 +105,7 @@ private:
     juce::AudioPlayHead* playHead_ = nullptr;
     bool nonRealtime_ = false;
     std::atomic<bool> parameterChanged_{false};
+    std::atomic<bool> latencyChanged_{false};
 };
 
 } // namespace dojo::session

@@ -9,6 +9,7 @@ Project::Project(GraphCompiler::Publisher publishGraph, DeviceManager::Creator c
 {
     session_.getState().addListener(this);
     devices_.onParameterChanged = [this] { setDirty(true); };
+    devices_.onLatencyChanged = [this] { compiler_.rebuildSoon(); }; // re-align the delay compensation
 }
 
 Project::~Project()

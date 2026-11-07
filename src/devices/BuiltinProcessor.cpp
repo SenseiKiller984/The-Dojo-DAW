@@ -94,9 +94,10 @@ juce::AudioParameterBool* BuiltinProcessor::addBool(const juce::String& id, cons
 }
 
 juce::AudioParameterChoice* BuiltinProcessor::addChoice(const juce::String& id, const juce::String& name,
-                                                        const juce::StringArray& choices, int defaultIndex)
+                                                        const juce::StringArray& choices, int defaultIndex, bool automatable)
 {
-    auto parameter = std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{id, 1}, name, choices, defaultIndex);
+    auto parameter = std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{id, 1}, name, choices, defaultIndex,
+                                                                  juce::AudioParameterChoiceAttributes().withAutomatable(automatable));
     auto* raw = parameter.get();
     addParameter(parameter.release());
     ranged_.push_back(raw);

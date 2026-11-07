@@ -403,29 +403,98 @@ private:
     juce::Rectangle<int> curve_;
 };
 
-/** Limiter: knobs and gain-reduction meter. */
-class LimiterEditor final : public juce::Component
+/**
+    Limiter: two rows of controls and the gain-reduction meter.
+
+        Maximize   Threshold  Input      Ceiling   Mode
+        Auto Rel.  Release    Lookahead  Link      Channels
+
+    Controls that do nothing in the current setting are dimmed and disabled: Input while Maximize
+    is on, Threshold while it is off, Release under Auto release, Link in Stereo.
+*/
+class LimiterEditor final : public juce::Component, private juce::Timer
 {
 public:
+    static constexpr int kColumns = 5;
+    static constexpr int kMeterWidth = 30;
+    /** Toggles, three knobs, and drop-downs wide enough for "True Peak". */
+    static constexpr std::array<int, kColumns> kColumnWidths{84, ParameterControl::kWidth + 4, ParameterControl::kWidth + 4,
+                                                             ParameterControl::kWidth + 4, 100};
+    static constexpr int kPreferredWidth = kColumnWidths[0] + kColumnWidths[1] + kColumnWidths[2] + kColumnWidths[3]
+                                           + kColumnWidths[4] + kMeterWidth + 16;
+
     explicit LimiterEditor(devices::Limiter& limiter)
-        : meter_([&limiter] { return limiter.takeGainReductionDb(); })
+        : limiter_(limiter)
+        , meter_([&limiter] { return limiter.takeGainReductionDb(); })
     {
-        for (const char* id : {"input", "ceiling", "release", "lookahead"})
-            if (auto* parameter = findParameter(limiter, id))
-                grid_.add(*parameter);
-        addAndMakeVisible(grid_);
+        const std::array<std::pair<juce::AudioProcessorParameter*, const char*>, 2 * kColumns> layout{{
+            {limiter.maximize_, "Maximize"},
+            {limiter.threshold_, "Threshold"},
+            {limiter.input_, "Input"},
+            {limiter.ceiling_, "Ceiling"},
+            {limiter.mode_, "Mode"},
+            {limiter.autoRelease_, "Auto Rel."},
+            {limiter.release_, "Release"},
+            {limiter.lookahead_, "Lookahead"},
+            {limiter.link_, "Link"},
+            {limiter.channels_, "Channels"},
+        }};
+        for (const auto& [parameter, caption] : layout)
+        {
+            controls_.push_back(std::make_unique<ParameterControl>(*parameter, caption));
+            addAndMakeVisible(*controls_.back());
+        }
         addAndMakeVisible(meter_);
+        updateActiveControls();
+        startTimerHz(10);
     }
 
     void resized() override
     {
         auto area = getLocalBounds();
-        meter_.setBounds(area.removeFromRight(30).reduced(2, 4));
-        grid_.setBounds(area);
+        meter_.setBounds(area.removeFromRight(kMeterWidth).reduced(2, 4));
+        // The columns share out any extra width; the two rows sit in the middle.
+        const int natural = kPreferredWidth - kMeterWidth - 16;
+        const double scale = std::max(0.5, static_cast<double>(area.getWidth()) / natural);
+        const int height = std::min(ParameterControl::kHeight + 8, area.getHeight() / 2);
+        const int top = area.getY() + std::max(0, (area.getHeight() - 2 * height) / 2);
+        for (int row = 0; row < 2; ++row)
+        {
+            double x = area.getX();
+            for (int column = 0; column < kColumns; ++column)
+            {
+                const double width = kColumnWidths[static_cast<std::size_t>(column)] * scale;
+                controls_[static_cast<std::size_t>(row * kColumns + column)]->setBounds(
+                    juce::roundToInt(x), top + row * height, juce::roundToInt(x + width) - juce::roundToInt(x), height);
+                x += width;
+            }
+        }
     }
 
 private:
-    ParameterGrid grid_;
+    void timerCallback() override { updateActiveControls(); }
+
+    void updateActiveControls()
+    {
+        const bool maximize = limiter_.maximize_->get();
+        setActive(*limiter_.input_, !maximize);
+        setActive(*limiter_.threshold_, maximize);
+        setActive(*limiter_.release_, !limiter_.autoRelease_->get());
+        setActive(*limiter_.link_, limiter_.channels_->getIndex() == 1);
+    }
+
+    void setActive(juce::AudioProcessorParameter& parameter, bool active)
+    {
+        for (auto& control : controls_)
+            if (&control->getParameter() == &parameter && control->isEnabled() != active)
+            {
+                control->setEnabled(active);
+                control->setAlpha(active ? 1.0f : 0.35f);
+            }
+    }
+
+    devices::Limiter& limiter_;
+    std::vector<std::unique_ptr<ParameterControl>> controls_;
     ReductionMeter meter_;
 };
 
@@ -1598,7 +1667,7 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
     }
     if (auto* limiter = dynamic_cast<devices::Limiter*>(&processor))
     {
-        preferredWidth = 2 * ParameterControl::kWidth + 40;
+        preferredWidth = LimiterEditor::kPreferredWidth;
         return std::make_unique<LimiterEditor>(*limiter);
     }
     if (auto* sampler = dynamic_cast<devices::Sampler*>(&processor))

@@ -1,6 +1,7 @@
 #include "devices/Dynamics.h"
 
 #include "devices/dsp/Biquad.h"
+#include "devices/dsp/SynthCore.h"
 
 #include <algorithm>
 #include <cmath>
@@ -102,127 +103,275 @@ Limiter::Limiter()
                            .withOutput("Output", juce::AudioChannelSet::stereo(), true),
                        false)
 {
+    // The first four are the original parameters (kept first, in order, for older projects).
     input_ = addFloat("input", "Input Gain", {0.0f, 24.0f, 0.1f}, 0.0f, "dB");
     ceiling_ = addFloat("ceiling", "Ceiling", {-24.0f, 0.0f, 0.1f}, -0.3f, "dB");
     release_ = addFloat("release", "Release", skewedRange(1.0f, 1000.0f, 80.0f), 80.0f, "ms");
     lookahead_ = addFloat("lookahead", "Lookahead", {0.1f, static_cast<float>(kMaxLookaheadMs), 0.1f}, 5.0f, "ms",
                           false); // changes the latency, so it is not automatable
+    maximize_ = addBool("maximize", "Maximize", false);
+    threshold_ = addFloat("threshold", "Threshold", {-30.0f, 0.0f, 0.1f}, 0.0f, "dB");
+    autoRelease_ = addBool("autorelease", "Auto Release", false);
+    mode_ = addChoice("mode", "Mode", {"Standard", "Soft Clip", "True Peak"}, 0, false); // True Peak adds latency
+    channels_ = addChoice("channels", "Channels", {"Stereo", "L/R"}, 0);
+    link_ = addFloat("link", "Link", {0.0f, 100.0f, 1.0f}, 0.0f, "%");
     lookahead_->addListener(this);
+    mode_->addListener(this);
+
+    // True Peak: an 8x interpolator (finer than the 4x of ITU-R BS.1770 meters, so the peaks it
+    // misses are smaller). For each of the seven points between two samples, kTruePeakTaps taps of
+    // a Kaiser-windowed sinc, normalised to unity gain at DC. Tap 0 is the oldest sample; the points
+    // lie between taps kTruePeakTaps - 1 - kTruePeakDelay and kTruePeakTaps - kTruePeakDelay.
+    // Up to 20 kHz (at 48 kHz) it reads tones within 0.1 dB.
+    const auto besselI0 = [](double x)
+    {
+        double sum = 1.0, term = 1.0;
+        for (int k = 1; k < 40; ++k)
+        {
+            term *= (x / (2.0 * k)) * (x / (2.0 * k));
+            sum += term;
+        }
+        return sum;
+    };
+    constexpr double beta = 6.0;
+    for (std::size_t point = 0; point < interpolator_.size(); ++point)
+    {
+        auto& taps = interpolator_[point];
+        double sum = 0.0;
+        for (std::size_t tap = 0; tap < taps.size(); ++tap)
+        {
+            // Distance (in samples) from the tap to the point; never a whole number.
+            const double distance = static_cast<double>(kTruePeakTaps - 1 - kTruePeakDelay)
+                                    + static_cast<double>(point + 1) / kTruePeakOversampling - static_cast<double>(tap);
+            const double sinc = std::sin(dsp::kPi * distance) / (dsp::kPi * distance);
+            const double x = distance / kTruePeakDelay; // |x| < 1
+            const double window = besselI0(beta * std::sqrt(1.0 - x * x)) / besselI0(beta);
+            taps[tap] = sinc * window;
+            sum += taps[tap];
+        }
+        for (auto& coefficient : taps)
+            coefficient /= sum;
+    }
 }
 
 Limiter::~Limiter()
 {
     lookahead_->removeListener(this);
+    mode_->removeListener(this);
+}
+
+double Limiter::softClip(double x, double ceiling) noexcept
+{
+    const double u = std::abs(x) / ceiling;
+    if (u <= kSoftClipKnee)
+        return x;
+    const double shaped = kSoftClipKnee + (1.0 - kSoftClipKnee) * std::tanh((u - kSoftClipKnee) / (1.0 - kSoftClipKnee));
+    return std::copysign(shaped * ceiling, x);
 }
 
 int Limiter::lookaheadSamples() const noexcept
 {
-    return std::clamp(static_cast<int>(std::lround(lookahead_->get() / 1000.0 * sampleRate_)), 1, capacity_ - 2);
+    return std::clamp(static_cast<int>(std::lround(lookahead_->get() / 1000.0 * sampleRate_)), 1,
+                      std::max(1, capacity_ - kTruePeakTaps - 4));
 }
 
 void Limiter::parameterValueChanged(int, float)
 {
-    // Only the lookahead is listened to. Reporting the new latency lets the engine re-align.
-    setLatencySamples(lookaheadSamples());
+    // Only the lookahead and the mode are listened to. Reporting the new latency lets the engine re-align.
+    setLatencySamples(lookaheadSamples() + detectorDelay());
+}
+
+void Limiter::GainComputer::prepare(int capacity)
+{
+    required.assign(static_cast<std::size_t>(capacity), 1.0);
+    index.assign(static_cast<std::size_t>(capacity), 0);
+    averageRing.assign(static_cast<std::size_t>(capacity), 1.0);
+}
+
+void Limiter::GainComputer::reset(int lookahead) noexcept
+{
+    head = tail = 0;
+    std::fill(averageRing.begin(), averageRing.end(), 1.0);
+    averageIndex = 0;
+    averageSum = static_cast<double>(lookahead);
+    gain = fast = slow = 1.0;
+}
+
+double Limiter::GainComputer::process(double needed, long long n, int lookahead, double release, bool autoRelease,
+                                      double fastRelease, double slowAttack, double slowRelease) noexcept
+{
+    const int cap = static_cast<int>(required.size());
+
+    // Sliding minimum of the required gain over the last lookahead + 1 samples (a monotonic deque).
+    while (tail != head)
+    {
+        const int back = (tail - 1 + cap) % cap;
+        if (required[static_cast<std::size_t>(back)] < needed)
+            break;
+        tail = back;
+    }
+    required[static_cast<std::size_t>(tail)] = needed;
+    index[static_cast<std::size_t>(tail)] = n;
+    tail = (tail + 1) % cap;
+    while (n - index[static_cast<std::size_t>(head)] > lookahead)
+        head = (head + 1) % cap;
+    const double held = required[static_cast<std::size_t>(head)];
+
+    // Average the held gain over the lookahead: the ramp reaches the held value as the peak arrives.
+    averageSum += held - averageRing[static_cast<std::size_t>(averageIndex)];
+    averageRing[static_cast<std::size_t>(averageIndex)] = held;
+    averageIndex = (averageIndex + 1) % lookahead;
+    const double smoothed = std::min(1.0, averageSum / lookahead);
+
+    if (autoRelease)
+    {
+        // Two release paths: a fast one that recovers quickly from short peaks, and a slow one that
+        // follows it (with an attack of its own) and so only goes down under sustained limiting.
+        // The gain is the lower of the two: quick after transients, smooth (no pumping) on dense material.
+        fast = smoothed < fast ? smoothed : smoothed + (fast - smoothed) * fastRelease;
+        slow = fast + (slow - fast) * (fast < slow ? slowAttack : slowRelease);
+        gain = std::min(fast, slow);
+    }
+    else
+    {
+        gain = smoothed < gain ? smoothed : smoothed + (gain - smoothed) * release;
+        fast = slow = gain;
+    }
+    return gain;
 }
 
 void Limiter::prepareDsp(double sampleRate, int)
 {
-    capacity_ = static_cast<int>(std::ceil(kMaxLookaheadMs / 1000.0 * sampleRate)) + 4;
+    capacity_ = static_cast<int>(std::ceil(kMaxLookaheadMs / 1000.0 * sampleRate)) + kTruePeakTaps + 8;
     for (auto& d : delay_)
         d.assign(static_cast<std::size_t>(capacity_), 0.0);
-    required_.assign(static_cast<std::size_t>(capacity_), 1.0);
-    dequeIndex_.assign(static_cast<std::size_t>(capacity_), 0);
-    averageRing_.assign(static_cast<std::size_t>(capacity_), 1.0);
-    resetState(lookaheadSamples());
-    setLatencySamples(lookahead_samples_);
+    for (auto& computer : computers_)
+        computer.prepare(capacity_);
+    resetState(lookaheadSamples(), detectorDelay());
+    setLatencySamples(lookaheadSamples_ + detectorDelay_);
 }
 
-void Limiter::resetState(int lookahead) noexcept
+void Limiter::resetState(int lookahead, int delay) noexcept
 {
-    lookahead_samples_ = lookahead;
+    lookaheadSamples_ = lookahead;
+    detectorDelay_ = delay;
     for (auto& d : delay_)
         std::fill(d.begin(), d.end(), 0.0);
-    std::fill(averageRing_.begin(), averageRing_.end(), 1.0);
     delayIndex_ = 0;
-    dequeHead_ = dequeTail_ = 0;
     sampleCounter_ = 0;
-    averageIndex_ = 0;
-    averageSum_ = static_cast<double>(lookahead);
-    gain_ = 1.0;
+    for (auto& computer : computers_)
+        computer.reset(lookahead);
+    for (auto& h : history_)
+        h.fill(0.0);
+    historyIndex_ = 0;
+    previousInterSamplePeak_ = {};
+}
+
+double Limiter::interSamplePeak(int channel) const noexcept
+{
+    // history_ is a ring with the newest sample at historyIndex_, so the oldest follows it.
+    const auto& h = history_[static_cast<std::size_t>(channel)];
+    double peak = 0.0;
+    for (const auto& taps : interpolator_)
+    {
+        double value = 0.0;
+        for (int tap = 0; tap < kTruePeakTaps; ++tap)
+            value += h[static_cast<std::size_t>((historyIndex_ + 1 + tap) % kTruePeakTaps)] * taps[static_cast<std::size_t>(tap)];
+        peak = std::max(peak, std::abs(value));
+    }
+    return peak;
 }
 
 void Limiter::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) noexcept
 {
-    if (const int wanted = lookaheadSamples(); wanted != lookahead_samples_)
-        resetState(wanted);
+    if (const int wanted = lookaheadSamples(), delay = detectorDelay(); wanted != lookaheadSamples_ || delay != detectorDelay_)
+        resetState(wanted, delay);
 
     const int numSamples = buffer.getNumSamples();
-    double* left = buffer.getWritePointer(0);
-    double* right = buffer.getWritePointer(1);
-    const int L = lookahead_samples_;
-    const int cap = capacity_;
+    const int numChannels = std::min(2, buffer.getNumChannels());
+    if (numChannels == 0)
+        return;
 
-    const double inputGain = dsp::dbToGain(input_->get());
-    const double ceiling = dsp::dbToGain(ceiling_->get());
+    const int L = lookaheadSamples_;
+    const int totalDelay = L + detectorDelay_; // the gain computer ramps over L samples after the detector
+    const int cap = capacity_;
+    const bool truePeak = detectorDelay_ > 0;
+    const bool soft = mode_->getIndex() == static_cast<int>(Mode::softClip);
+
+    const double ceilingDb = ceiling_->get();
+    const double ceiling = dsp::dbToGain(ceilingDb);
+    // Maximize: material at the threshold comes out at the ceiling.
+    const double drive = dsp::dbToGain(maximize_->get() ? ceilingDb - threshold_->get() : input_->get());
+    // Soft Clip lets peaks through up to kSoftClipHeadroomDb over the ceiling; the clipper rounds them
+    // off. True Peak keeps a hair of margin for what the interpolator cannot see (content right at
+    // the top of the spectrum) and for the gain moving between samples.
+    const double target = soft       ? ceiling * dsp::dbToGain(kSoftClipHeadroomDb)
+                          : truePeak ? ceiling * dsp::dbToGain(-kTruePeakMarginDb)
+                                     : ceiling;
+    const double link = channels_->getIndex() == 1 ? link_->get() / 100.0 : 1.0;
+    const bool autoRelease = autoRelease_->get();
     const double release = dsp::onePoleCoefficient(release_->get() / 1000.0, sampleRate_);
+    const double fastRelease = dsp::onePoleCoefficient(kAutoFastReleaseMs / 1000.0, sampleRate_);
+    const double slowAttack = dsp::onePoleCoefficient(kAutoSlowAttackMs / 1000.0, sampleRate_);
+    const double slowRelease = dsp::onePoleCoefficient(kAutoSlowReleaseMs / 1000.0, sampleRate_);
+
+    std::array<double*, 2> data{buffer.getWritePointer(0), buffer.getWritePointer(numChannels - 1)};
     double minGain = 1.0;
 
     for (int i = 0; i < numSamples; ++i)
     {
-        const double l = left[i] * inputGain;
-        const double r = right[i] * inputGain;
-        const double peak = std::max(std::abs(l), std::abs(r));
-        const double needed = peak > ceiling ? ceiling / peak : 1.0;
+        std::array<double, 2> in{};
+        std::array<double, 2> needed{1.0, 1.0};
+        if (truePeak)
+            historyIndex_ = (historyIndex_ + 1) % kTruePeakTaps;
 
-        // Sliding minimum over the last L + 1 samples.
+        for (int c = 0; c < numChannels; ++c)
+        {
+            const auto ch = static_cast<std::size_t>(c);
+            in[ch] = data[ch][i] * drive;
+            double peak = std::abs(in[ch]);
+            if (truePeak)
+            {
+                // The detector looks at the sample kTruePeakDelay back and at the interpolated points
+                // on both sides of it.
+                auto& h = history_[ch];
+                h[static_cast<std::size_t>(historyIndex_)] = in[ch];
+                const double between = interSamplePeak(c);
+                const double sample = std::abs(h[static_cast<std::size_t>((historyIndex_ + kTruePeakTaps - kTruePeakDelay) % kTruePeakTaps)]);
+                peak = std::max({sample, between, previousInterSamplePeak_[ch]});
+                previousInterSamplePeak_[ch] = between;
+            }
+            needed[ch] = peak > target ? target / peak : 1.0;
+        }
+
+        if (numChannels == 2 && link > 0.0)
+        {
+            // Stereo (or Link 100 %): both channels get the louder one's gain. In between, blend the
+            // two in dB; each channel is still reduced at least as much as it needs.
+            const double linked = std::min(needed[0], needed[1]);
+            for (auto& value : needed)
+                value = link >= 1.0 ? linked
+                                    : std::min(value, std::exp((1.0 - link) * std::log(std::max(value, 1.0e-12))
+                                                               + link * std::log(std::max(linked, 1.0e-12))));
+        }
+
         const long long n = sampleCounter_++;
-        while (dequeTail_ != dequeHead_)
+        const auto readIndex = static_cast<std::size_t>((delayIndex_ - totalDelay + cap) % cap);
+        for (int c = 0; c < numChannels; ++c)
         {
-            const int back = (dequeTail_ - 1 + cap) % cap;
-            if (required_[static_cast<std::size_t>(back)] < needed)
-                break;
-            dequeTail_ = back;
+            const auto ch = static_cast<std::size_t>(c);
+            const double gain = computers_[ch].process(needed[ch], n, L, release, autoRelease, fastRelease, slowAttack, slowRelease);
+            minGain = std::min(minGain, gain);
+
+            auto& line = delay_[ch];
+            const double delayed = line[readIndex];
+            line[static_cast<std::size_t>(delayIndex_)] = in[ch];
+
+            // The final clamp guards against rounding at the ceiling.
+            const double out = delayed * gain;
+            data[ch][i] = soft ? softClip(out, ceiling) : std::clamp(out, -ceiling, ceiling);
         }
-        required_[static_cast<std::size_t>(dequeTail_)] = needed;
-        dequeIndex_[static_cast<std::size_t>(dequeTail_)] = static_cast<int>(n % 1000000000LL);
-        dequeTail_ = (dequeTail_ + 1) % cap;
-
-        // Drop entries older than the window (indices wrap at 1e9; windows are tiny in comparison).
-        while (true)
-        {
-            const long long headIndex = dequeIndex_[static_cast<std::size_t>(dequeHead_)];
-            long long age = (n % 1000000000LL) - headIndex;
-            if (age < 0)
-                age += 1000000000LL;
-            if (age <= L)
-                break;
-            dequeHead_ = (dequeHead_ + 1) % cap;
-        }
-        const double held = required_[static_cast<std::size_t>(dequeHead_)];
-
-        // Average the held gain over L samples: the ramp reaches the held value as the peak arrives.
-        averageSum_ += held - averageRing_[static_cast<std::size_t>(averageIndex_)];
-        averageRing_[static_cast<std::size_t>(averageIndex_)] = held;
-        averageIndex_ = (averageIndex_ + 1) % L;
-        const double smoothed = std::min(1.0, averageSum_ / L);
-
-        gain_ = smoothed < gain_ ? smoothed : smoothed + (gain_ - smoothed) * release;
-        minGain = std::min(minGain, gain_);
-
-        // Delay the audio by L.
-        auto& dl = delay_[0];
-        auto& dr = delay_[1];
-        const int readIndex = (delayIndex_ - L + cap) % cap;
-        const double delayedL = dl[static_cast<std::size_t>(readIndex)];
-        const double delayedR = dr[static_cast<std::size_t>(readIndex)];
-        dl[static_cast<std::size_t>(delayIndex_)] = l;
-        dr[static_cast<std::size_t>(delayIndex_)] = r;
         delayIndex_ = (delayIndex_ + 1) % cap;
-
-        // Final safety clamp guards against rounding at the ceiling.
-        left[i] = std::clamp(delayedL * gain_, -ceiling, ceiling);
-        right[i] = std::clamp(delayedR * gain_, -ceiling, ceiling);
     }
 
     const auto reduction = static_cast<float>(-dsp::gainToDb(minGain));

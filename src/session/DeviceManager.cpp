@@ -201,6 +201,8 @@ void DeviceManager::timerCallback()
 {
     if (parameterChanged_.exchange(false) && onParameterChanged)
         onParameterChanged();
+    if (latencyChanged_.exchange(false) && onLatencyChanged)
+        onLatencyChanged();
 }
 
 } // namespace dojo::session

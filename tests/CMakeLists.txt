@@ -19,6 +19,7 @@ add_executable(dojo_tests
     EffectTests.cpp
     EngineGraphTests.cpp
     InstrumentTests.cpp
+    LimiterTests.cpp
     PluginTests.cpp
     PreferencesTests.cpp
     PreviewTests.cpp
