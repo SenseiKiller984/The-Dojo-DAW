@@ -83,7 +83,7 @@ juce::String Recorder::start()
         if (!track::isArmed(t) || !Session::isEffectivelyActive(t))
             continue;
 
-        if (track::getKind(t) == TrackKind::instrument)
+        if (holdsMidi(track::getKind(t)))
         {
             midiTracks.push_back(track::getId(t));
             continue;

@@ -139,10 +139,18 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     // Inactive tracks (and everything inside an inactive folder) are left out entirely: they are not
     // rendered and their devices are not run.
+    // VCA Masters and Master Faders only control other tracks: they are not rendered themselves.
     std::vector<juce::ValueTree> allTracks;
+    std::vector<juce::ValueTree> masterFaders;
     for (const auto& t : session.getAllTracks())
-        if (Session::isEffectivelyActive(t))
+    {
+        if (!Session::isEffectivelyActive(t))
+            continue;
+        if (isRendered(track::getKind(t)))
             allTracks.push_back(t);
+        else if (track::getKind(t) == TrackKind::masterFader)
+            masterFaders.push_back(t);
+    }
 
     // --- Slots: forget tracks that no longer exist, keep the rest stable ----------------------------
     std::set<std::uint32_t> liveIds;
@@ -224,6 +232,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     for (std::size_t i = 0; i < count; ++i)
     {
+        if (track::getKind(trees[i]) == TrackKind::midi)
+        {
+            destination[i] = -2; // MIDI only: no audio output
+            continue;
+        }
         const auto dest = session.getDestination(trees[i]);
         int target = dest.isValid() ? indexOf(track::getId(dest)) : -1;
         if (dest.isValid() && target < 0)
@@ -252,6 +265,22 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         if (source >= 0 && track::getKind(trees[static_cast<std::size_t>(source)]) == TrackKind::instrument &&
             routing.tryAdd(source, static_cast<int>(i)))
             auxSource[i] = source;
+    }
+
+    // MIDI tracks into instrument tracks.
+    std::vector<std::vector<int>> midiSources(count);
+    std::vector<int> midiTargetOf(count, -1);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        if (track::getKind(trees[i]) != TrackKind::midi)
+            continue;
+        const int target = indexOf(track::getMidiTarget(trees[i]));
+        if (target >= 0 && track::getKind(trees[static_cast<std::size_t>(target)]) == TrackKind::instrument &&
+            routing.tryAdd(static_cast<int>(i), target))
+        {
+            midiSources[static_cast<std::size_t>(target)].push_back(static_cast<int>(i));
+            midiTargetOf[i] = target;
+        }
     }
 
     for (std::size_t i = 0; i < count; ++i)
@@ -291,6 +320,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             deps.push_back(source);
         if (auxSource[i] >= 0)
             deps.push_back(auxSource[i]);
+        deps.insert(deps.end(), midiSources[i].begin(), midiSources[i].end());
         for (const int source : sidechainOf[i])
             if (source >= 0)
                 deps.push_back(source);
@@ -318,10 +348,39 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     for (std::size_t i = 0; i < count; ++i)
         graph->levels[static_cast<std::size_t>(level[i])].push_back(static_cast<int>(i));
 
+    // --- VCA Masters: gains, mutes and solos they pass down to their members ----------------------
+    struct VcaEffect
+    {
+        std::vector<engine::RenderTrack::VcaGain> gains;
+        bool muted = false;
+        bool soloed = false;
+    };
+    std::vector<VcaEffect> vcaOf(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        std::set<std::uint32_t> visited; // (nested VCAs; a loop just stops)
+        for (auto v = session.findTrack(track::getVca(trees[i])); v.isValid() && track::getKind(v) == TrackKind::vca
+                                                                 && visited.insert(track::getId(v)).second;
+             v = session.findTrack(track::getVca(v)))
+        {
+            if (!Session::isEffectivelyActive(v))
+                continue;
+            engine::RenderTrack::VcaGain gain;
+            gain.gain = dbToGain(track::getVolumeDb(v));
+            for (const auto& lane : Session::getAutomationLanes(v))
+                if (automation::getTarget(lane) == automation::volumeTarget())
+                    gain.automation = automation::toCurve(lane);
+            vcaOf[i].gains.push_back(std::move(gain));
+            vcaOf[i].muted = vcaOf[i].muted || track::isMuted(v);
+            vcaOf[i].soloed = vcaOf[i].soloed || track::isSoloed(v);
+        }
+    }
+    const auto isSoloed = [&](std::size_t i) { return track::isSoloed(trees[i]) || vcaOf[i].soloed; };
+
     // --- Mute / solo across the routing tree ------------------------------------------------------
     bool anySoloed = false;
-    for (const auto& t : trees)
-        anySoloed = anySoloed || track::isSoloed(t);
+    for (std::size_t i = 0; i < count; ++i)
+        anySoloed = anySoloed || isSoloed(i);
 
     std::vector<bool> soloedUpstream(count, false);   // this track or something feeding it is soloed
     std::vector<bool> soloedDownstream(count, false); // this track or something it feeds is soloed
@@ -331,7 +390,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         for (const auto& lvl : graph->levels)
             for (const int i : lvl)
             {
-                bool up = track::isSoloed(trees[static_cast<std::size_t>(i)]);
+                bool up = isSoloed(static_cast<std::size_t>(i));
                 for (const int dep : dependsOn[static_cast<std::size_t>(i)])
                     up = up || soloedUpstream[static_cast<std::size_t>(dep)];
                 soloedUpstream[static_cast<std::size_t>(i)] = up;
@@ -341,9 +400,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             for (const int i : *lvl)
             {
                 const auto ui = static_cast<std::size_t>(i);
-                bool down = track::isSoloed(trees[ui]);
+                bool down = isSoloed(ui);
                 if (destination[ui] >= 0)
                     down = down || soloedDownstream[static_cast<std::size_t>(destination[ui])];
+                if (midiTargetOf[ui] >= 0)
+                    down = down || soloedDownstream[static_cast<std::size_t>(midiTargetOf[ui])];
                 for (std::size_t b = 0; b < count; ++b)
                     for (const auto& [source, s] : incomingSends[b])
                         if (source == i)
@@ -364,7 +425,9 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         rt.mono = rt.kind != TrackKind::instrument && track::getFormat(t) == TrackFormat::mono;
         rt.volume = dbToGain(track::getVolumeDb(t));
         rt.pan = track::getPan(t);
-        rt.audible = !track::isMuted(t) && (!anySoloed || soloedUpstream[i] || soloedDownstream[i]);
+        rt.audible = !track::isMuted(t) && !vcaOf[i].muted && (!anySoloed || soloedUpstream[i] || soloedDownstream[i]);
+        rt.vcaGains = vcaOf[i].gains;
+        rt.midiSources = midiSources[i];
         rt.phaseInverted = track::isPhaseInverted(t);
         rt.outputIndex = destination[i];
 
@@ -468,7 +531,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             rt.monitor = track::getMonitor(t);
             rt.armed = track::isArmed(t);
         }
-        else if (rt.kind == TrackKind::instrument)
+        else if (holdsMidi(rt.kind))
         {
             const int transpose = juce::roundToInt(globalTranspose + trackPitch);
 
@@ -546,6 +609,13 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         }
     }
 
+    // Live MIDI reaches an instrument through an armed MIDI track playing it, not directly as well
+    // (every note would sound twice).
+    for (auto& rt : graph->tracks)
+        for (const int source : rt.midiSources)
+            if (graph->tracks[static_cast<std::size_t>(source)].receivesLiveMidi)
+                rt.receivesLiveMidi = false;
+
     // Pre-fader flags were possibly set on tracks built earlier; make sure they stick for later ones.
     for (std::size_t b = 0; b < count; ++b)
         for (const auto& [source, s] : incomingSends[b])
@@ -602,6 +672,67 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         }
     }
 
+    // --- Master Faders: the main output's, and those on busses (one per path; the first wins) ---------
+    std::set<std::uint32_t> pathsTaken;
+    for (const auto& fader : masterFaders)
+    {
+        const auto busId = track::getControlledBus(fader);
+        const int busIndex = busId != 0 ? indexOf(busId) : -1;
+        if ((busId != 0 && (busIndex < 0 || track::getKind(trees[static_cast<std::size_t>(busIndex)]) != TrackKind::bus))
+            || !pathsTaken.insert(busId).second)
+            continue;
+
+        engine::AutomationCurve volumeCurve;
+        std::vector<engine::RenderDevice> chain;
+        std::vector<engine::ParameterLane> lanes;
+        if (devices != nullptr)
+        {
+            std::vector<std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>> nodes;
+            for (const auto& d : Session::getDevices(fader))
+                if (auto node = devices->getNode(d))
+                {
+                    engine::RenderDevice device;
+                    device.node = node.get();
+                    chain.push_back(device);
+                    graph->keepAlive.push_back(node);
+                    nodes.emplace_back(d, std::move(node));
+                }
+            for (const auto& lane : Session::getAutomationLanes(fader))
+            {
+                std::uint32_t id = 0;
+                int parameterIndex = 0;
+                if (!automation::parseParameterTarget(automation::getTarget(lane), id, parameterIndex))
+                    continue;
+                for (const auto& [deviceTree, node] : nodes)
+                    if (device::getId(deviceTree) == id && parameterIndex < node->getProcessor().getParameters().size())
+                        lanes.push_back({node->getProcessor().getParameters()[parameterIndex], automation::toCurve(lane)});
+            }
+        }
+        for (const auto& lane : Session::getAutomationLanes(fader))
+            if (automation::getTarget(lane) == automation::volumeTarget())
+                volumeCurve = automation::toCurve(lane);
+
+        if (busIndex < 0)
+        {
+            graph->hasMasterFader = true;
+            graph->masterFaderVolume = dbToGain(track::getVolumeDb(fader));
+            graph->masterFaderAudible = !track::isMuted(fader);
+            graph->masterFaderAutomation = std::move(volumeCurve);
+            graph->masterFaderDevices = std::move(chain);
+            graph->masterFaderParameterLanes = std::move(lanes);
+        }
+        else
+        {
+            auto& bus = graph->tracks[static_cast<std::size_t>(busIndex)];
+            bus.hasPostFader = true;
+            bus.postVolume = dbToGain(track::getVolumeDb(fader));
+            bus.postAudible = !track::isMuted(fader);
+            bus.postVolumeAutomation = std::move(volumeCurve);
+            bus.postDevices = std::move(chain);
+            bus.parameterLanes.insert(bus.parameterLanes.end(), lanes.begin(), lanes.end());
+        }
+    }
+
     // --- Plug-in delay compensation ---------------------------------------------------------------
     // arrival[i]: latency of track i's output relative to the timeline (before its compensation).
     // Iterated to a fixed point so that every path meeting at a bus arrives at the same time.
@@ -628,7 +759,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                     if (!instrumentChain.empty())
                         input = std::max(input, std::max(0, instrumentChain.front().node->getLatencySamples()));
                 }
-                arrival[i] = input + chainLatency(graph->tracks[i].devices);
+                arrival[i] = input + chainLatency(graph->tracks[i].devices) + chainLatency(graph->tracks[i].postDevices);
             }
         }
 
@@ -668,7 +799,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             }
         }
 
-        graph->totalLatency = masterTarget + chainLatency(graph->masterDevices);
+        graph->totalLatency = masterTarget + chainLatency(graph->masterDevices) + chainLatency(graph->masterFaderDevices);
         masterInputLatency_ = masterTarget;
         if (!changed)
             break;

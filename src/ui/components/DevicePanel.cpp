@@ -312,7 +312,7 @@ void DevicePanel::rebuild()
             cards_.push_back(std::move(card));
         }
 
-    addButton_.setVisible(shownOwner_.isValid());
+    addButton_.setVisible(shownOwner_.isValid() && ownerTakesDevices(shownOwner_));
     closeStaleWindows();
     layoutCards();
     repaint();
@@ -362,10 +362,18 @@ void DevicePanel::openPluginWindow(const juce::ValueTree& device)
         windows_[id] = std::move(window);
 }
 
+bool DevicePanel::ownerTakesDevices(const juce::ValueTree& owner)
+{
+    if (!owner.hasType(session::ids::track))
+        return owner.isValid(); // the master
+    const auto kind = session::track::getKind(owner);
+    return kind != session::TrackKind::vca && kind != session::TrackKind::midi;
+}
+
 void DevicePanel::showAddMenu()
 {
     const auto owner = getOwner();
-    if (!owner.isValid())
+    if (!owner.isValid() || !ownerTakesDevices(owner))
         return;
 
     const bool instrumentsAllowed = owner.hasType(session::ids::track) && session::track::getKind(owner) == session::TrackKind::instrument;
@@ -459,6 +467,15 @@ void DevicePanel::paint(juce::Graphics& g)
         g.setFont(sans(12.5f));
         g.drawText("Select a track (or the master) to see its devices.", getLocalBounds().withTrimmedTop(kHeaderHeight),
                    juce::Justification::centred, false);
+    }
+    else if (!ownerTakesDevices(owner))
+    {
+        g.setColour(colour::textMuted);
+        g.setFont(sans(12.5f));
+        g.drawText(session::track::getKind(owner) == session::TrackKind::vca
+                       ? "A VCA Master has no devices: it controls the faders of its member tracks."
+                       : "A MIDI track has no devices: its MIDI plays the instrument track chosen in its menu (MIDI Output).",
+                   getLocalBounds().withTrimmedTop(kHeaderHeight), juce::Justification::centred, false);
     }
 }
 

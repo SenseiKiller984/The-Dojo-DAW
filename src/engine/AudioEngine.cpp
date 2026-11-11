@@ -92,10 +92,14 @@ void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutput
         slot.currentDelay = 0;
         slot.gainLeft.reset(sampleRate_, kTrackGainRampSeconds);
         slot.gainRight.reset(sampleRate_, kTrackGainRampSeconds);
+        slot.postGain.reset(sampleRate_, kTrackGainRampSeconds);
+        slot.postGain.setCurrentAndTargetValue(1.0);
         slot.trackId = 0;
     }
 
     masterGain_.reset(sampleRate_, kMasterGainRampSeconds);
+    masterFaderGain_.reset(sampleRate_, kMasterGainRampSeconds);
+    masterFaderGain_.setCurrentAndTargetValue(1.0);
     masterGain_.setCurrentAndTargetValue(masterGainTarget_);
     testTone_.prepare(sampleRate_);
     smoothedLoad_ = 0.0;
@@ -434,6 +438,9 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
         }
     }
 
+    if (graph_ != nullptr && graph_->hasMasterFader)
+        applyMasterFader(numSamples);
+
     if (capture_ != nullptr && (playing_ || !capture_->onlyWhilePlaying))
     {
         captureInputs(0, numSamples);
@@ -602,6 +609,7 @@ void AudioEngine::processTrack(int graphIndex) noexcept
         slot.currentDelay = track.compensationDelay;
         slot.gainLeft.setCurrentAndTargetValue(0.0);
         slot.gainRight.setCurrentAndTargetValue(0.0);
+        slot.postGain.setCurrentAndTargetValue(track.hasPostFader && track.postAudible ? track.postVolume : 1.0);
         slot.panic = true;
     }
 
@@ -627,7 +635,26 @@ void AudioEngine::processTrack(int graphIndex) noexcept
             renderMidiClips(track, slot);
         if (track.receivesLiveMidi && liveBlockPending_)
             slot.midi.addEvents(liveBlock_, 0, numSamples, 0);
+        // MIDI tracks routed here (rendered in an earlier level), unless muted.
+        for (const int source : track.midiSources)
+        {
+            const auto& sourceTrack = graph_->tracks[static_cast<std::size_t>(source)];
+            if (sourceTrack.audible)
+                slot.midi.addEvents(slots_[static_cast<std::size_t>(sourceTrack.slot)].midi, 0, numSamples, 0);
+        }
         break;
+
+    case TrackKind::midi:
+        // MIDI only: its instrument track picks it up from this slot.
+        if (playing_)
+            renderMidiClips(track, slot);
+        if (track.receivesLiveMidi && liveBlockPending_)
+            slot.midi.addEvents(liveBlock_, 0, numSamples, 0);
+        break;
+
+    case TrackKind::vca:
+    case TrackKind::masterFader:
+        break; // control tracks: never in the render graph
 
     case TrackKind::bus:
         sumBusSources(track, slot);
@@ -669,6 +696,8 @@ void AudioEngine::processTrack(int graphIndex) noexcept
     }
 
     applyFader(track, slot);
+    if (track.hasPostFader)
+        applyPostFader(track, slot);
     applyCompensationDelay(track, slot);
 
     if (capture_ != nullptr && (playing_ || !capture_->onlyWhilePlaying))
@@ -887,6 +916,8 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
         volume = automationToGain(track.volumeAutomation.valueAt(blockStartSeconds_));
     if (!track.panAutomation.isEmpty())
         pan = track.panAutomation.valueAt(blockStartSeconds_) * 2.0 - 1.0;
+    for (const auto& vca : track.vcaGains)
+        volume *= vca.automation.isEmpty() ? vca.gain : automationToGain(vca.automation.valueAt(blockStartSeconds_));
 
     const auto [panLeft, panRight] = balancePanGains(pan);
     const double sign = track.phaseInverted ? -1.0 : 1.0;
@@ -909,6 +940,46 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
     const auto meterIndex = static_cast<std::size_t>(track.slot) * 2;
     rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex], static_cast<float>(peakLeft));
     rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + 1], static_cast<float>(peakRight));
+}
+
+void AudioEngine::applyPostFader(const RenderTrack& track, SlotState& slot) noexcept
+{
+    const int numSamples = currentNumSamples_;
+    const double volume = track.postVolumeAutomation.isEmpty() ? track.postVolume
+                                                               : automationToGain(track.postVolumeAutomation.valueAt(blockStartSeconds_));
+    slot.postGain.setTargetValue(track.postAudible ? volume : 0.0);
+    Sample* left = slot.main.getWritePointer(0);
+    Sample* right = slot.main.getWritePointer(1);
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const Sample gain = slot.postGain.getNextValue();
+        left[i] *= gain;
+        right[i] *= gain;
+    }
+
+    // Post-fader devices (like the inserts of a master fader).
+    for (const auto& device : track.postDevices)
+        device.node->process(slot.main, numSamples, slot.midi, nullptr);
+}
+
+void AudioEngine::applyMasterFader(int numSamples) noexcept
+{
+    const double volume = graph_->masterFaderAutomation.isEmpty() ? graph_->masterFaderVolume
+                                                                  : automationToGain(graph_->masterFaderAutomation.valueAt(blockStartSeconds_));
+    masterFaderGain_.setTargetValue(graph_->masterFaderAudible ? volume : 0.0);
+    auto* left = masterBus_.getWritePointer(0);
+    auto* right = masterBus_.getWritePointer(1);
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const Sample gain = masterFaderGain_.getNextValue();
+        left[i] *= gain;
+        right[i] *= gain;
+    }
+
+    applyParameterAutomation(graph_->masterFaderParameterLanes);
+    masterMidi_.clear();
+    for (const auto& device : graph_->masterFaderDevices)
+        device.node->process(masterBus_, numSamples, masterMidi_, nullptr);
 }
 
 void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept

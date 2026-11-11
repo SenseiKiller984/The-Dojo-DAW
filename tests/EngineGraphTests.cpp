@@ -95,6 +95,7 @@ struct Rig
 };
 
 std::size_t at(double seconds) { return static_cast<std::size_t>(seconds * kRate); }
+double dbToGain(double db) { return std::pow(10.0, db / 20.0); }
 } // namespace
 
 TEST_CASE("Tracks routed to a bus are summed there and follow the bus fader", "[engine][routing]")
@@ -783,4 +784,209 @@ TEST_CASE("Inactive tracks are not rendered, and neither is anything routed into
     track::setActive(folder, true, nullptr);
     CHECK(graphIds().size() == 4);
     CHECK_THAT(level(), WithinAbs(0.5, 0.01));
+}
+
+TEST_CASE("MIDI tracks play the instrument track they are routed to", "[engine][midi][tracks]")
+{
+    test::TempFolder temp;
+    const auto file = test::writeWav(temp.dir.getChildFile("a440.wav"), test::sine(440.0, kRate, 96000, 0.5f), kRate);
+
+    Rig rig;
+    auto keys = rig.session.addTrack(TrackKind::instrument, "Keys");
+    auto d = rig.session.addDevice(keys, "builtin:sampler", "Sampler");
+    auto node = rig.devices.getNode(d);
+    REQUIRE(node != nullptr);
+    auto& sampler = dynamic_cast<devices::Sampler&>(node->getProcessor());
+    juce::String error;
+    REQUIRE(sampler.loadSample(file, error));
+    sampler.root_->setValueNotifyingHost(sampler.root_->convertTo0to1(69.0f));
+
+    auto midi = rig.session.addTrack(TrackKind::midi, "Melody");
+    CHECK(holdsMidi(track::getKind(midi)));
+    auto c = rig.session.addMidiClip(midi, 0.0, 2.0);
+    rig.session.addNote(c, 1.0, 1.0, 69); // 0.5 s .. 1 s
+    auto other = rig.session.addTrack(TrackKind::audio, "Other");
+    juce::ignoreUnused(other);
+
+    const auto render = [&rig]
+    {
+        rig.left.clear();
+        rig.publish();
+        rig.play();
+        rig.render(1.0);
+        return test::peak(rig.left, at(0.55), at(0.95));
+    };
+
+    CHECK(render() < 1e-6); // no instrument chosen yet
+    track::setMidiTarget(midi, track::getId(keys), nullptr);
+    CHECK(render() > 0.3);
+    CHECK_THAT(test::estimateFrequency(rig.left, at(0.55), at(0.95), kRate), WithinRel(440.0, 0.01));
+
+    track::setMuted(midi, true, nullptr); // a muted MIDI track sends nothing
+    CHECK(render() < 1e-6);
+    track::setMuted(midi, false, nullptr);
+
+    track::setSoloed(keys, true, nullptr); // soloing the instrument keeps its MIDI track playing
+    CHECK(render() > 0.3);
+    track::setSoloed(keys, false, nullptr);
+    track::setSoloed(other, true, nullptr); // soloing something else silences both
+    CHECK(render() < 1e-6);
+}
+
+TEST_CASE("VCA Masters control their members' volume, mute and solo", "[engine][vca][tracks]")
+{
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 96000, 0.25f), kRate);
+
+    Rig rig;
+    auto a = rig.audioTrackWith(tone);
+    auto b = rig.audioTrackWith(tone);
+    auto vca = rig.session.addTrack(TrackKind::vca, "VCA");
+    track::setVca(a, track::getId(vca), nullptr);
+
+    const auto levels = [&rig]
+    {
+        rig.left.clear();
+        rig.publish();
+        rig.play();
+        rig.render(0.5);
+        return test::peak(rig.left, at(0.2), at(0.5));
+    };
+    const auto levelOf = [&](const juce::ValueTree& solo)
+    {
+        track::setSoloed(solo, true, nullptr);
+        const double level = levels();
+        track::setSoloed(solo, false, nullptr);
+        return level;
+    };
+
+    CHECK_THAT(levels(), WithinAbs(0.5, 0.01)); // VCA at 0 dB: both at full level
+    track::setVolumeDb(vca, -6.0, nullptr);
+    CHECK_THAT(levelOf(a), WithinAbs(0.25 * dbToGain(-6.0), 0.005)); // the member follows the VCA
+    CHECK_THAT(levelOf(b), WithinAbs(0.25, 0.005));                  // the other does not
+
+    track::setMuted(vca, true, nullptr);
+    CHECK_THAT(levels(), WithinAbs(0.25, 0.005)); // only b
+    track::setMuted(vca, false, nullptr);
+
+    CHECK_THAT(levelOf(vca), WithinAbs(0.25 * dbToGain(-6.0), 0.005)); // soloing the VCA solos its members
+
+    // Nested: a VCA in a VCA multiplies; an inactive VCA does nothing.
+    auto outer = rig.session.addTrack(TrackKind::vca, "Outer");
+    track::setVca(vca, track::getId(outer), nullptr);
+    track::setVolumeDb(outer, -6.0, nullptr);
+    CHECK_THAT(levelOf(a), WithinAbs(0.25 * dbToGain(-12.0), 0.005));
+    track::setActive(outer, false, nullptr);
+    CHECK_THAT(levelOf(a), WithinAbs(0.25 * dbToGain(-6.0), 0.005));
+    track::setActive(outer, true, nullptr);
+
+    // VCA automation (a ramp) multiplies over time.
+    auto lane = rig.session.getAutomation(outer, automation::volumeTarget(), true, 1.0);
+    rig.session.addAutomationPoint(lane, 0.0, 60.0 / 66.0); // 0 dB
+    rig.session.addAutomationPoint(lane, 10.0, 60.0 / 66.0);
+    CHECK_THAT(levelOf(a), WithinAbs(0.25 * dbToGain(-6.0), 0.005));
+}
+
+TEST_CASE("Deleting a VCA Master, or duplicating a member without it, keeps the sound", "[engine][vca][tracks]")
+{
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 5 * 48000, 0.25f), kRate);
+
+    Rig rig;
+    auto a = rig.audioTrackWith(tone);
+    track::setVolumeDb(a, -3.0, nullptr);
+    auto vca = rig.session.addTrack(TrackKind::vca, "VCA");
+    track::setVca(a, track::getId(vca), nullptr);
+    track::setVolumeDb(vca, -10.0, nullptr); // ignored: the VCA's automation rules
+    auto lane = rig.session.getAutomation(vca, automation::volumeTarget(), true, 60.0 / 66.0); // 0 dB from 0 s ...
+    rig.session.addAutomationPoint(lane, 1.0, 60.0 / 66.0); // ... to 1 s ...
+    rig.session.addAutomationPoint(lane, 3.0, 48.0 / 66.0); // ... -12 dB at 3 s
+
+    const auto levelsAt = [&rig](std::initializer_list<double> times)
+    {
+        rig.left.clear();
+        rig.publish();
+        rig.play();
+        rig.render(4.0);
+        std::vector<double> result;
+        for (const double t : times)
+            result.push_back(test::peak(rig.left, at(t), at(t + 0.05)));
+        return result;
+    };
+
+    const auto before = levelsAt({0.5, 2.0, 3.5});
+    CHECK_THAT(before[0], WithinAbs(0.25 * dbToGain(-3.0), 0.003));
+    CHECK_THAT(before[2], WithinAbs(0.25 * dbToGain(-15.0), 0.003));
+
+    // Duplicated without its VCA assignment: the copy sounds like its source (solo it to hear it alone).
+    Session::DuplicateOptions options;
+    options.vcaAssignment = false;
+    auto copy = rig.session.duplicateTrack(a, options, a);
+    CHECK(track::getVca(copy) == 0);
+    track::setSoloed(copy, true, nullptr);
+    const auto copied = levelsAt({0.5, 2.0, 3.5});
+    track::setSoloed(copy, false, nullptr);
+    rig.session.removeTrack(copy);
+    for (std::size_t i = 0; i < before.size(); ++i)
+        CHECK_THAT(copied[i], WithinAbs(before[i], 0.005));
+
+    // Deleting the VCA coalesces its automation into the member.
+    rig.session.coalesceVca(a, vca);
+    rig.session.removeTrack(vca);
+    CHECK(track::getVca(a) == 0);
+    const auto after = levelsAt({0.5, 2.0, 3.5});
+    for (std::size_t i = 0; i < before.size(); ++i)
+        CHECK_THAT(after[i], WithinAbs(before[i], 0.005));
+}
+
+TEST_CASE("Master Faders: a last fader and post-fader devices on a bus or the main output", "[engine][masterfader][tracks]")
+{
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 96000, 0.25f), kRate);
+
+    Rig rig;
+    auto a = rig.audioTrackWith(tone);
+    auto b = rig.audioTrackWith(tone);
+    auto bus = rig.session.addTrack(TrackKind::bus, "Group");
+    track::setOutput(a, track::getId(bus), nullptr);
+
+    const auto level = [&rig]
+    {
+        rig.left.clear();
+        rig.publish();
+        rig.play();
+        rig.render(0.5);
+        return test::peak(rig.left, at(0.3), at(0.5));
+    };
+    CHECK_THAT(level(), WithinAbs(0.5, 0.005));
+
+    // On the bus: a and b sum 0.25 * g + 0.25.
+    auto busFader = rig.session.addTrack(TrackKind::masterFader, "Group Master");
+    track::setControlledBus(busFader, track::getId(bus), nullptr);
+    track::setVolumeDb(busFader, -6.0, nullptr);
+    CHECK_THAT(level(), WithinAbs(0.25 * dbToGain(-6.0) + 0.25, 0.005));
+    track::setMuted(busFader, true, nullptr);
+    CHECK_THAT(level(), WithinAbs(0.25, 0.005));
+    track::setMuted(busFader, false, nullptr);
+
+    // On the main output: everything.
+    auto mainFader = rig.session.addTrack(TrackKind::masterFader, "Master 1");
+    track::setVolumeDb(mainFader, -6.0, nullptr);
+    CHECK_THAT(level(), WithinAbs((0.25 * dbToGain(-6.0) + 0.25) * dbToGain(-6.0), 0.005));
+
+    // A second master fader on the same path does nothing (one per path).
+    auto extra = rig.session.addTrack(TrackKind::masterFader, "Master 2");
+    track::setVolumeDb(extra, -20.0, nullptr);
+    CHECK_THAT(level(), WithinAbs((0.25 * dbToGain(-6.0) + 0.25) * dbToGain(-6.0), 0.005));
+    rig.session.removeTrack(extra);
+
+    // Post-fader devices count for delay compensation.
+    rig.session.addDevice(mainFader, "builtin:limiter", "Limiter");
+    const auto graph = rig.builder.build(rig.session, rig.assets, &rig.devices);
+    CHECK(graph->totalLatency == 240);
+    CHECK(graph->hasMasterFader);
+    CHECK(graph->masterFaderDevices.size() == 1);
+    // ... and neither VCAs nor Master Faders are rendered as tracks.
+    for (const auto& rt : graph->tracks)
+        CHECK(isRendered(rt.kind));
 }

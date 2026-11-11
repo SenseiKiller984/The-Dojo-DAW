@@ -91,7 +91,7 @@ ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce:
         session_.beginTransaction("Arm Track");
         session::track::setArmed(track_, arm_.getToggleState(), &session_.getUndoManager());
     };
-    arm_.setVisible(kind != session::TrackKind::bus);
+    arm_.setVisible(kind == session::TrackKind::audio || session::holdsMidi(kind));
     addChildComponent(arm_);
 
     monitor_.setWantsKeyboardFocus(false);
@@ -188,6 +188,28 @@ ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce:
 
     rebuildRouting();
     rebuildSends();
+
+    // Control tracks show only what they have: a MIDI track has no audio (mute, solo, arm, monitoring);
+    // a VCA Master is a fader with mute and solo; a Master Fader is a fader with mute and its devices.
+    if (kind == session::TrackKind::midi || kind == session::TrackKind::vca || kind == session::TrackKind::masterFader)
+    {
+        for (auto* c : std::initializer_list<juce::Component*>{&output_, &addSend_, &pan_, &phase_, &meter_})
+            c->setVisible(false);
+        for (auto& control : sends_)
+            control->level.setVisible(false);
+        if (kind != session::TrackKind::masterFader)
+            devices_.setVisible(false);
+        if (kind == session::TrackKind::midi)
+            fader_.setVisible(false);
+        else
+        {
+            arm_.setVisible(false);
+            monitor_.setVisible(false);
+        }
+        if (kind == session::TrackKind::masterFader)
+            solo_.setVisible(false);
+    }
+
     syncFromModel();
     track_.addListener(this);
     session_.getState().addListener(this);
@@ -377,9 +399,9 @@ void ChannelStrip::showPanEditor()
 
 void ChannelStrip::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    if (volumeArea_.contains(e.getPosition()))
+    if (fader_.isVisible() && volumeArea_.contains(e.getPosition()))
         showVolumeEditor();
-    else if (panArea_.contains(e.getPosition()))
+    else if (pan_.isVisible() && panArea_.contains(e.getPosition()))
         showPanEditor();
 }
 
@@ -502,8 +524,10 @@ void ChannelStrip::paint(juce::Graphics& g)
     g.setColour(colour::textMuted);
     g.setFont(mono(10.0f));
     // Volume and pan, each double-clickable to type a value.
-    g.drawText(formatDecibels(session::track::getVolumeDb(track_)), volumeArea_.withTrimmedRight(5), juce::Justification::centredRight, false);
-    g.drawText(formatPan(session::track::getPan(track_)), panArea_.withTrimmedLeft(5), juce::Justification::centredLeft, false);
+    if (fader_.isVisible())
+        g.drawText(formatDecibels(session::track::getVolumeDb(track_)), volumeArea_.withTrimmedRight(5), juce::Justification::centredRight, false);
+    if (pan_.isVisible())
+        g.drawText(formatPan(session::track::getPan(track_)), panArea_.withTrimmedLeft(5), juce::Justification::centredLeft, false);
 }
 
 void ChannelStrip::paintOverChildren(juce::Graphics& g)

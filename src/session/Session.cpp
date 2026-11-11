@@ -65,9 +65,12 @@ juce::String defaultTrackName(TrackKind kind, bool folder, int number)
         return "Folder " + juce::String(number);
     switch (kind)
     {
-    case TrackKind::instrument: return "Instrument " + juce::String(number);
-    case TrackKind::bus:        return "Bus " + juce::String(number);
-    case TrackKind::audio:      break;
+    case TrackKind::instrument:  return "Instrument " + juce::String(number);
+    case TrackKind::bus:         return "Bus " + juce::String(number);
+    case TrackKind::midi:        return "MIDI " + juce::String(number);
+    case TrackKind::vca:         return "VCA " + juce::String(number);
+    case TrackKind::masterFader: return "Master " + juce::String(number);
+    case TrackKind::audio:       break;
     }
     return "Audio " + juce::String(number);
 }
@@ -92,9 +95,12 @@ juce::String toString(TrackKind kind)
 {
     switch (kind)
     {
-    case TrackKind::instrument: return "instrument";
-    case TrackKind::bus:        return "bus";
-    case TrackKind::audio:      break;
+    case TrackKind::instrument:  return "instrument";
+    case TrackKind::bus:         return "bus";
+    case TrackKind::midi:        return "midi";
+    case TrackKind::vca:         return "vca";
+    case TrackKind::masterFader: return "masterFader";
+    case TrackKind::audio:       break;
     }
     return "audio";
 }
@@ -120,8 +126,18 @@ TrackKind trackKindFromString(const juce::String& text)
         return TrackKind::instrument;
     if (text == "bus")
         return TrackKind::bus;
+    if (text == "midi")
+        return TrackKind::midi;
+    if (text == "vca")
+        return TrackKind::vca;
+    if (text == "masterFader")
+        return TrackKind::masterFader;
     return TrackKind::audio;
 }
+
+bool holdsMidi(TrackKind kind) { return kind == TrackKind::instrument || kind == TrackKind::midi; }
+bool holdsAudio(TrackKind kind) { return kind == TrackKind::audio; }
+bool isRendered(TrackKind kind) { return kind != TrackKind::vca && kind != TrackKind::masterFader; }
 
 //==================================================================================================
 // Track accessors
@@ -166,11 +182,14 @@ int getAuxChannel(const juce::ValueTree& t) { return t.getProperty(ids::auxChann
 bool isShowingAutomation(const juce::ValueTree& t) { return t.getProperty(ids::showAutomation, false); }
 TrackFormat getFormat(const juce::ValueTree& t)
 {
-    if (getKind(t) == TrackKind::instrument)
+    if (getKind(t) != TrackKind::audio && getKind(t) != TrackKind::bus)
         return TrackFormat::stereo;
     return trackFormatFromString(t.getProperty(ids::format, "stereo").toString());
 }
 bool isActive(const juce::ValueTree& t) { return t.getProperty(ids::active, true); }
+std::uint32_t getMidiTarget(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::midiTarget, 0))); }
+std::uint32_t getVca(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::vca, 0))); }
+std::uint32_t getControlledBus(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::controls, 0))); }
 
 void setName(juce::ValueTree t, const juce::String& name, juce::UndoManager* um)
 {
@@ -233,6 +252,18 @@ void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um)
 void setActive(juce::ValueTree t, bool active, juce::UndoManager* um)
 {
     t.setProperty(ids::active, active, um);
+}
+void setMidiTarget(juce::ValueTree t, std::uint32_t instrumentTrackId, juce::UndoManager* um)
+{
+    t.setProperty(ids::midiTarget, static_cast<int>(instrumentTrackId), um);
+}
+void setVca(juce::ValueTree t, std::uint32_t vcaTrackId, juce::UndoManager* um)
+{
+    t.setProperty(ids::vca, static_cast<int>(vcaTrackId), um);
+}
+void setControlledBus(juce::ValueTree t, std::uint32_t busId, juce::UndoManager* um)
+{
+    t.setProperty(ids::controls, static_cast<int>(busId), um);
 }
 } // namespace track
 
@@ -613,7 +644,7 @@ juce::ValueTree Session::addTrack(TrackKind kind, const juce::String& name, int 
         t.setProperty(ids::inputStereo, true, nullptr);
     }
 
-    if (kind != TrackKind::bus)
+    if (kind == TrackKind::audio || kind == TrackKind::instrument || kind == TrackKind::midi)
         t.setProperty(ids::monitor, static_cast<int>(engine::MonitorMode::automatic), nullptr);
 
     return insertTrackTree(t, index);
@@ -776,7 +807,101 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
 
     auto parent = after.getParent();
     parent.addChild(copy, parent.indexOf(after) + 1, &undo_);
+
+    // Without its VCA assignment, a copy keeps sounding the same: the VCA's gain is baked in.
+    if (!options.vcaAssignment)
+    {
+        const std::function<void(juce::ValueTree)> leaveVcas = [&](juce::ValueTree node)
+        {
+            // (Nested VCAs: each level in turn; a loop of VCAs just stops.)
+            for (int depth = 0; depth < 16; ++depth)
+            {
+                const auto v = findTrack(track::getVca(node));
+                if (!v.isValid() || v == node)
+                    break;
+                coalesceVca(node, v);
+            }
+            track::setVca(node, 0, &undo_);
+            for (auto child : node)
+                if (child.hasType(ids::track))
+                    leaveVcas(child);
+        };
+        leaveVcas(copy);
+    }
     return copy;
+}
+
+std::vector<juce::ValueTree> Session::getVcaMembers(const juce::ValueTree& vca) const
+{
+    std::vector<juce::ValueTree> members;
+    const auto id = track::getId(vca);
+    for (const auto& t : getAllTracks())
+        if (t != vca && track::getVca(t) == id)
+            members.push_back(t);
+    return members;
+}
+
+void Session::coalesceVca(juce::ValueTree member, const juce::ValueTree& vca)
+{
+    if (!member.isValid() || !vca.isValid())
+        return;
+
+    // Volume lanes are linear in dB: 0 = silence, (0, 1] = -60 dB .. +6 dB.
+    constexpr double range = kMaxVolumeDb - kMinusInfinityDb;
+    const auto toDb = [](double normalised) { return normalised <= 0.0 ? -1.0e9 : kMinusInfinityDb + normalised * range; };
+    const auto toNormalised = [](double db) { return db <= kMinusInfinityDb ? 0.0 : juce::jlimit(0.0, 1.0, (db - kMinusInfinityDb) / range); };
+
+    auto memberLane = getAutomation(member, automation::volumeTarget(), false, 0.0);
+    const auto vcaLane = getAutomation(vca, automation::volumeTarget(), false, 0.0);
+    const double memberDb = track::getVolumeDb(member);
+    const double vcaDb = track::getVolumeDb(vca);
+
+    if (!memberLane.isValid() && !vcaLane.isValid())
+    {
+        track::setVolumeDb(member, memberDb <= kMinusInfinityDb || vcaDb <= kMinusInfinityDb ? kMinusInfinityDb
+                                                                                              : juce::jmin(kMaxVolumeDb, memberDb + vcaDb),
+                           &undo_);
+    }
+    else
+    {
+        const auto memberCurve = memberLane.isValid() ? automation::toCurve(memberLane) : engine::AutomationCurve();
+        const auto vcaCurve = vcaLane.isValid() ? automation::toCurve(vcaLane) : engine::AutomationCurve();
+        const auto dbAt = [&](double t)
+        {
+            const double m = memberCurve.isEmpty() ? memberDb : toDb(memberCurve.valueAt(t));
+            const double v = vcaCurve.isEmpty() ? vcaDb : toDb(vcaCurve.valueAt(t));
+            return m + v;
+        };
+
+        // Sample at every breakpoint of both, and in between (the curves are splines).
+        std::set<double> times;
+        for (const auto* curve : {&memberCurve, &vcaCurve})
+            for (const auto& point : curve->getPoints())
+                times.insert(point.time);
+        std::vector<double> sampled(times.begin(), times.end());
+        for (std::size_t i = 0; i + 1 < sampled.size(); ++i)
+            for (int k = 1; k < 8; ++k)
+                times.insert(sampled[i] + (sampled[i + 1] - sampled[i]) * k / 8.0);
+
+        juce::ValueTree lane(ids::automation);
+        lane.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+        lane.setProperty(ids::target, automation::volumeTarget(), nullptr);
+        lane.setProperty(ids::visible, true, nullptr);
+        for (const double t : times)
+        {
+            juce::ValueTree p(ids::point);
+            p.setProperty(ids::time, t, nullptr);
+            p.setProperty(ids::value, toNormalised(dbAt(t)), nullptr);
+            lane.addChild(p, -1, nullptr);
+        }
+        if (memberLane.isValid())
+            member.removeChild(memberLane, &undo_);
+        member.addChild(lane, -1, &undo_);
+    }
+
+    if (track::isMuted(vca))
+        track::setMuted(member, true, &undo_);
+    track::setVca(member, track::getVca(vca), &undo_);
 }
 
 void Session::removeTrack(const juce::ValueTree& t)
@@ -995,7 +1120,7 @@ void Session::moveClip(juce::ValueTree c, juce::ValueTree targetTrack, double ne
 
     // Audio clips live on audio tracks, MIDI clips on instrument tracks.
     const auto kind = track::getKind(targetTrack);
-    const bool compatible = clip::isMidi(c) ? kind == TrackKind::instrument : kind == TrackKind::audio;
+    const bool compatible = clip::isMidi(c) ? holdsMidi(kind) : holdsAudio(kind);
     if (!compatible)
         return;
 

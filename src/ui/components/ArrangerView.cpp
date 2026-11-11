@@ -46,15 +46,24 @@ juce::String formatPan(double pan)
     return (pan < 0.0 ? "L" : "R") + juce::String(percent);
 }
 
+/** Tracks that can be record-enabled (they record audio or MIDI). */
+bool canArm(session::TrackKind kind)
+{
+    return kind == session::TrackKind::audio || session::holdsMidi(kind);
+}
+
 juce::String kindLabel(const juce::ValueTree& t)
 {
     if (session::track::isFolder(t))
         return "Folder";
     switch (session::track::getKind(t))
     {
-    case session::TrackKind::instrument: return "Instrument";
-    case session::TrackKind::bus:        return "Bus";
-    case session::TrackKind::audio:      break;
+    case session::TrackKind::instrument:  return "Instrument";
+    case session::TrackKind::bus:         return "Bus";
+    case session::TrackKind::midi:        return "MIDI";
+    case session::TrackKind::vca:         return "VCA";
+    case session::TrackKind::masterFader: return "Master Fader";
+    case session::TrackKind::audio:       break;
     }
     return "Audio";
 }
@@ -1013,6 +1022,21 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
                 g.fillRect(box.getX() + static_cast<float>(k) * 4.0f, box.getY(), 3.0f, box.getHeight());
         else if (kind == session::TrackKind::bus)
             g.drawEllipse(box.reduced(1.0f), 1.5f);
+        else if (kind == session::TrackKind::midi)
+        {
+            // A 5-pin DIN socket.
+            g.drawEllipse(box.reduced(0.5f), 1.3f);
+            for (int k = 0; k < 3; ++k)
+                g.fillEllipse(box.getX() + 2.5f + static_cast<float>(k) * 3.0f, box.getCentreY() - 1.0f, 2.0f, 2.0f);
+        }
+        else if (kind == session::TrackKind::vca || kind == session::TrackKind::masterFader)
+        {
+            // A fader: a slot and a cap (two caps for a VCA's group).
+            g.fillRect(box.getCentreX() - 0.75f, box.getY(), 1.5f, box.getHeight());
+            g.fillRoundedRectangle(box.getX(), box.getY() + box.getHeight() * 0.3f, box.getWidth(), 3.0f, 1.0f);
+            if (kind == session::TrackKind::vca)
+                g.fillRoundedRectangle(box.getX(), box.getY() + box.getHeight() * 0.7f, box.getWidth(), 3.0f, 1.0f);
+        }
         else
             for (int k = 0; k < 4; ++k)
             {
@@ -1038,9 +1062,10 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
     };
 
     paintToggle(getHeaderButton(rowIndex, 0), "A", session::track::isShowingAutomation(t), colour::textSecondary);
-    paintToggle(getHeaderButton(rowIndex, 1), "S", session::track::isSoloed(t), colour::play);
+    if (kind != session::TrackKind::masterFader) // (a master fader is not soloed)
+        paintToggle(getHeaderButton(rowIndex, 1), "S", session::track::isSoloed(t), colour::play);
     paintToggle(getHeaderButton(rowIndex, 2), "M", session::track::isMuted(t), colour::gold);
-    if (kind != session::TrackKind::bus)
+    if (canArm(kind))
         paintToggle(getHeaderButton(rowIndex, 3), "R", session::track::isArmed(t), colour::record);
 
     // Second line: routing summary.
@@ -1051,6 +1076,23 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
         info << "  In " << (session::track::getInput(t) + 1) << (session::track::isInputStereo(t) ? "/" + juce::String(session::track::getInput(t) + 2) : juce::String());
     if (const auto dest = session_.getDestination(t); dest.isValid() && !folder && session::track::getOutput(t) != 0)
         info << "  > " << session::track::getName(dest);
+    if (kind == session::TrackKind::midi)
+    {
+        const auto target = session_.findTrack(session::track::getMidiTarget(t));
+        info = "MIDI  > " + (target.isValid() ? session::track::getName(target) : juce::String("(no instrument)"));
+    }
+    else if (kind == session::TrackKind::vca)
+    {
+        const auto members = session_.getVcaMembers(t).size();
+        info = "VCA  " + formatDb(session::track::getVolumeDb(t)) + "  " + juce::String(members) + (members == 1 ? " track" : " tracks");
+    }
+    else if (kind == session::TrackKind::masterFader)
+    {
+        const auto bus = session_.findTrack(session::track::getControlledBus(t));
+        info = "Master Fader  " + formatDb(session::track::getVolumeDb(t)) + "  > " + (bus.isValid() ? session::track::getName(bus) : juce::String("Main"));
+    }
+    if (const auto vca = session_.findTrack(session::track::getVca(t)); vca.isValid())
+        info << "  VCA " << session::track::getName(vca);
     if (const auto devices = session::Session::getDevices(t); !devices.empty())
         info << "  [" << session::device::getName(devices.front()) << (devices.size() > 1 ? " +" + juce::String(devices.size() - 1) : juce::String()) << "]";
 
@@ -1684,7 +1726,7 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
             session::automation::setVisible(lane, true, nullptr);
         return;
     }
-    if (getHeaderButton(rowIndex, 1).contains(position))
+    if (kind != session::TrackKind::masterFader && getHeaderButton(rowIndex, 1).contains(position))
     {
         session_.beginTransaction("Solo");
         const bool on = !session::track::isSoloed(t);
@@ -1700,12 +1742,12 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
             session::track::setMuted(target, on, um);
         return;
     }
-    if (kind != session::TrackKind::bus && getHeaderButton(rowIndex, 3).contains(position))
+    if (canArm(kind) && getHeaderButton(rowIndex, 3).contains(position))
     {
         session_.beginTransaction("Arm Track");
         const bool on = !session::track::isArmed(t);
         for (auto target : targets)
-            if (session::track::getKind(target) != session::TrackKind::bus)
+            if (canArm(session::track::getKind(target)))
                 session::track::setArmed(target, on, um);
         return;
     }
@@ -2179,7 +2221,7 @@ void ArrangerView::mouseDoubleClick(const juce::MouseEvent& e)
     }
 
     const auto t = rows()[static_cast<std::size_t>(row)].track;
-    if (session::track::getKind(t) == session::TrackKind::instrument)
+    if (session::holdsMidi(session::track::getKind(t)))
         createMidiClipAt(t, snap(xToTime(e.position.x), e.mods));
 }
 
@@ -2507,7 +2549,107 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
                                              self.startRename(row);
                                      }));
     menu.addSubMenu("Colour", colours);
-    menu.addSubMenu("Output", output);
+    const auto kind = session::track::getKind(t);
+    if (kind != session::TrackKind::midi && kind != session::TrackKind::vca && kind != session::TrackKind::masterFader)
+        menu.addSubMenu("Output", output);
+
+    // MIDI tracks: the instrument track their MIDI plays.
+    if (kind == session::TrackKind::midi)
+    {
+        juce::PopupMenu midiOut;
+        const auto current = session::track::getMidiTarget(t);
+        midiOut.addItem("None", true, current == 0, withTracks(idsOf(selection), [](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                                                {
+                                                                    self.session_.beginTransaction("MIDI Output");
+                                                                    for (auto tree : trees)
+                                                                        if (session::track::getKind(tree) == session::TrackKind::midi)
+                                                                            session::track::setMidiTarget(tree, 0, &self.session_.getUndoManager());
+                                                                }));
+        for (const auto& candidate : session_.getAllTracks())
+            if (session::track::getKind(candidate) == session::TrackKind::instrument)
+            {
+                const auto targetId = session::track::getId(candidate);
+                midiOut.addItem(session::track::getName(candidate), true, current == targetId,
+                                withTracks(idsOf(selection), [targetId](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                           {
+                                               self.session_.beginTransaction("MIDI Output");
+                                               for (auto tree : trees)
+                                                   if (session::track::getKind(tree) == session::TrackKind::midi)
+                                                       session::track::setMidiTarget(tree, targetId, &self.session_.getUndoManager());
+                                           }));
+            }
+        menu.addSubMenu("MIDI Output", midiOut);
+    }
+
+    // Master Faders: the path they control (one master fader per path).
+    if (kind == session::TrackKind::masterFader)
+    {
+        juce::PopupMenu path;
+        const auto current = session::track::getControlledBus(t);
+        std::set<std::uint32_t> taken;
+        for (const auto& other : session_.getAllTracks())
+            if (other != t && session::track::getKind(other) == session::TrackKind::masterFader)
+                taken.insert(session::track::getControlledBus(other));
+        const auto setPath = [trackId, safe](std::uint32_t busId)
+        {
+            return [trackId, safe, busId]
+            {
+                if (safe == nullptr)
+                    return;
+                if (auto tree = safe->session_.findTrack(trackId); tree.isValid())
+                {
+                    safe->session_.beginTransaction("Master Fader Path");
+                    session::track::setControlledBus(tree, busId, &safe->session_.getUndoManager());
+                }
+            };
+        };
+        path.addItem("Main output", taken.count(0) == 0, current == 0, setPath(0));
+        for (const auto& bus : session_.getBusses())
+            if (!session::track::isFolder(bus))
+            {
+                const auto busId = session::track::getId(bus);
+                path.addItem(session::track::getName(bus), taken.count(busId) == 0, current == busId, setPath(busId));
+            }
+        menu.addSubMenu("Controls", path);
+    }
+
+    // VCA Masters: membership for every selected track (not a VCA into itself or a loop of VCAs).
+    {
+        juce::PopupMenu vcas;
+        const auto commonVca = std::all_of(selection.begin(), selection.end(), [&](const juce::ValueTree& tree)
+                                           { return session::track::getVca(tree) == session::track::getVca(t); })
+                                   ? session::track::getVca(t)
+                                   : std::uint32_t{0xffffffffu};
+        vcas.addItem("None", true, commonVca == 0, withTracks(idsOf(selection), [](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                                             {
+                                                                 self.session_.beginTransaction("VCA Assignment");
+                                                                 for (auto tree : trees)
+                                                                     session::track::setVca(tree, 0, &self.session_.getUndoManager());
+                                                             }));
+        for (const auto& candidate : session_.getAllTracks())
+        {
+            if (session::track::getKind(candidate) != session::TrackKind::vca)
+                continue;
+            // Would a member end up controlling itself?
+            bool loops = false;
+            for (const auto& tree : selection)
+            {
+                std::set<std::uint32_t> visited;
+                for (auto v = candidate; v.isValid() && visited.insert(session::track::getId(v)).second;
+                     v = session_.findTrack(session::track::getVca(v)))
+                    loops = loops || v == tree;
+            }
+            const auto vcaId = session::track::getId(candidate);
+            vcas.addItem(session::track::getName(candidate), !loops, commonVca == vcaId,
+                         withTracks(idsOf(selection), [vcaId](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                    {
+                                        self.session_.beginTransaction("VCA Assignment");
+                                        for (auto tree : trees)
+                                            session::track::setVca(tree, vcaId, &self.session_.getUndoManager());
+                                    }));
+        }
+        menu.addSubMenu("VCA", vcas, vcas.getNumItems() > 1);
+    }
     menu.addSubMenu("Add Automation Lane", automationMenu);
     menu.addSeparator();
     menu.addSubMenu("Move into Folder", folders, folders.getNumItems() > 0);
@@ -2568,7 +2710,7 @@ void ArrangerView::showLaneMenu(int row, double seconds)
     juce::Component::SafePointer<ArrangerView> safe(this);
     const auto t = row >= 0 ? rows()[static_cast<std::size_t>(row)].track : juce::ValueTree();
     const auto trackId = t.isValid() ? session::track::getId(t) : 0u;
-    const bool instrument = t.isValid() && session::track::getKind(t) == session::TrackKind::instrument;
+    const bool instrument = t.isValid() && session::holdsMidi(session::track::getKind(t));
 
     juce::PopupMenu menu;
     if (instrument)

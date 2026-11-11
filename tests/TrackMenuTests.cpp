@@ -490,3 +490,48 @@ TEST_CASE("Track menu commands in the main window; Scroll to Track moves the arr
     mixer.scrollToTrack(tracks[0]);
     CHECK(mixer.getScrollX() == 0);
 }
+
+TEST_CASE("Track > Delete on a VCA Master coalesces it; New gives each Master Fader its own path", "[ui][tracks][vca]")
+{
+    ProjectRig rig;
+    auto& session = rig.session();
+    auto vox = session.addTrack(TrackKind::audio, "Vox");
+    auto gtr = session.addTrack(TrackKind::audio, "Gtr");
+    track::setVolumeDb(gtr, -2.0, nullptr);
+    auto vca = session.addTrack(TrackKind::vca, "VCA 1");
+    track::setVolumeDb(vca, -6.0, nullptr);
+    track::setMuted(vca, true, nullptr);
+    track::setVca(vox, track::getId(vca), nullptr);
+    track::setVca(gtr, track::getId(vca), nullptr);
+    CHECK(session.getVcaMembers(vca).size() == 2);
+
+    rig.select({vca});
+    REQUIRE(ui::actions::deleteSelectedTracks(session, rig.editor));
+    CHECK_FALSE(session.findTrack(track::getId(vca)).isValid());
+    CHECK_THAT(track::getVolumeDb(vox), WithinAbs(-6.0, 1e-9));
+    CHECK_THAT(track::getVolumeDb(gtr), WithinAbs(-8.0, 1e-9));
+    CHECK(track::isMuted(vox)); // the VCA was muted
+    CHECK(track::getVca(vox) == 0);
+
+    session.getUndoManager().undo(); // one step: the VCA and its members as they were
+    CHECK(session.findTrack(track::getId(vca)).isValid());
+    CHECK_THAT(track::getVolumeDb(vox), WithinAbs(0.0, 1e-9));
+    CHECK(track::getVca(vox) == track::getId(vca));
+    CHECK_FALSE(track::isMuted(vox));
+
+    // New: MIDI tracks, VCA Masters and Master Faders (the main output's first, then a bus's).
+    auto bus = session.addTrack(TrackKind::bus, "Drums");
+    std::vector<ui::actions::NewTracks> rows(3);
+    rows[0].type = ui::actions::NewTrackType::midi;
+    rows[1].type = ui::actions::NewTrackType::vcaMaster;
+    rows[2].type = ui::actions::NewTrackType::masterFader;
+    rows[2].count = 2;
+    const auto created = ui::actions::addNewTracks(session, rig.editor, rows, false);
+    REQUIRE(created.size() == 4);
+    CHECK(track::getKind(created[0]) == TrackKind::midi);
+    CHECK(track::getKind(created[1]) == TrackKind::vca);
+    CHECK(track::getKind(created[2]) == TrackKind::masterFader);
+    CHECK(track::getControlledBus(created[2]) == 0);
+    CHECK(track::getControlledBus(created[3]) == track::getId(bus));
+    CHECK(track::getName(created[2]).startsWith("Master"));
+}

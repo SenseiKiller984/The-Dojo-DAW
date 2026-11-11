@@ -71,6 +71,9 @@ enum class NewTrackType
     audio,
     auxInput, ///< a bus: a return for sends, or a group other tracks are routed to
     instrument,
+    midi,        ///< MIDI clips sent to an instrument track
+    vcaMaster,   ///< controls the fader, mute and solo of its member tracks
+    masterFader, ///< a last fader (and post-fader devices) on the main output or a bus
     folder,
 };
 [[nodiscard]] juce::String getName(NewTrackType type);

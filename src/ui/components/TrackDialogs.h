@@ -79,7 +79,8 @@ public:
 
     juce::TextEditor copies;
     juce::ToggleButton clips{"Clips (audio and MIDI)"}, automation{"Automation"}, devices{"Devices (with their current settings)"},
-        sends{"Sends"}, afterLastSelected{"Insert after the last selected track"};
+        sends{"Sends"}, vcaAssignment{"VCA assignment (otherwise the VCA's gain is baked in)"},
+        afterLastSelected{"Insert after the last selected track"};
 
     void resized() override;
     void paint(juce::Graphics& g) override;

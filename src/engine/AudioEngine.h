@@ -179,6 +179,7 @@ private:
         std::uint32_t trackId = 0;
         juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> gainLeft;
         juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> gainRight;
+        juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> postGain; ///< a Master Fader on this bus
         juce::AudioBuffer<Sample> main; ///< working buffer; holds the post-fader output after processing
         juce::AudioBuffer<Sample> pre;  ///< pre-fader copy (when a pre-fader send needs it)
         juce::MidiBuffer midi;
@@ -224,6 +225,10 @@ private:
     void renderAudioTrackSources(const RenderTrack& track, SlotState& slot) noexcept;
     void sumBusSources(const RenderTrack& track, SlotState& slot) noexcept;
     void applyFader(const RenderTrack& track, SlotState& slot) noexcept;
+    /** A Master Fader on a bus: its gain and post-fader devices. */
+    void applyPostFader(const RenderTrack& track, SlotState& slot) noexcept;
+    /** A Master Fader on the main output. */
+    void applyMasterFader(int numSamples) noexcept;
     void applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept;
     void applyParameterAutomation(const std::vector<ParameterLane>& lanes) noexcept;
 
@@ -271,6 +276,7 @@ private:
     double loopEnd_ = 0.0;
     double masterGainTarget_ = 1.0;
     juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> masterGain_;
+    juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> masterFaderGain_; ///< a Master Fader on the main output
     dsp::TestToneGenerator testTone_;
     PreviewPlayer preview_;
     double smoothedLoad_ = 0.0;

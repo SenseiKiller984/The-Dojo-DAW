@@ -49,6 +49,8 @@ private:
     void rebuild();
     void layoutCards();
     void showAddMenu();
+    /** VCA Masters and MIDI tracks have no devices. */
+    [[nodiscard]] static bool ownerTakesDevices(const juce::ValueTree& owner);
     void closeStaleWindows();
 
     void handleAsyncUpdate() override { rebuild(); }

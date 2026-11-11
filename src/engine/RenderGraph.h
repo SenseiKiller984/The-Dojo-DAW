@@ -32,6 +32,9 @@ enum class TrackKind : std::uint8_t
     audio,      ///< plays audio clips (and/or a monitored input) through its device chain
     instrument, ///< MIDI clips (and live MIDI) drive the first device, an instrument
     bus,        ///< sums other tracks (folder children, routed tracks, sends) or an instrument's aux outs
+    midi,       ///< MIDI clips (and live MIDI), sent to an instrument track's instrument; no audio
+    vca,        ///< VCA Master: its fader, mute and solo control its member tracks; no audio of its own
+    masterFader, ///< a last gain stage (fader, mute, post-fader devices) on the main output or a bus
 };
 
 enum class MonitorMode : std::uint8_t
@@ -160,6 +163,25 @@ struct RenderTrack
     // Routing
     int outputIndex = -1;           ///< graph index of the bus this track feeds; -1 = master; -2 = none
     int compensationDelay = 0;      ///< plug-in delay compensation applied to the post-fader output
+
+    /** Instrument tracks: the MIDI tracks (graph indices) whose MIDI their instrument also plays. */
+    std::vector<int> midiSources;
+
+    /** VCA Masters this track belongs to (directly or through nested VCAs): each multiplies its
+        volume by its gain, or by its automation when that has points. */
+    struct VcaGain
+    {
+        double gain = 1.0;
+        AutomationCurve automation; ///< normalised like volume automation
+    };
+    std::vector<VcaGain> vcaGains;
+
+    /** A Master Fader on this bus: one more fader (with mute) and post-fader devices on its output. */
+    bool hasPostFader = false;
+    double postVolume = 1.0;
+    bool postAudible = true;
+    AutomationCurve postVolumeAutomation;
+    std::vector<RenderDevice> postDevices;
 };
 
 /**
@@ -191,6 +213,14 @@ struct RenderGraph
     AutomationCurve masterVolumeAutomation;
     std::vector<RenderDevice> masterDevices;
     std::vector<ParameterLane> masterParameterLanes;
+    /** A Master Fader on the main output: after the master bus, one more fader (with mute) and its
+        post-fader devices. */
+    bool hasMasterFader = false;
+    double masterFaderVolume = 1.0;
+    bool masterFaderAudible = true;
+    AutomationCurve masterFaderAutomation;
+    std::vector<RenderDevice> masterFaderDevices;
+    std::vector<ParameterLane> masterFaderParameterLanes;
 
     std::vector<RenderTrack> tracks;
     std::vector<std::vector<int>> levels; ///< graph indices per dependency level

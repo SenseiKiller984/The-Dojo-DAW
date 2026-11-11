@@ -257,6 +257,14 @@ bool deleteSelectedTracks(session::Session& session, EditorState& editor)
 
     const int index = session.indexOf(selected.front());
     session.beginTransaction(selected.size() > 1 ? "Delete Tracks" : "Delete Track");
+    // A deleted VCA Master's fader and automation are coalesced into its members (they sound the same).
+    const auto isDeleted = [&selected](const juce::ValueTree& t)
+    { return std::any_of(selected.begin(), selected.end(), [&t](const juce::ValueTree& s) { return session::Session::isWithin(t, s); }); };
+    for (const auto& t : session.getAllTracks())
+        if (session::track::getKind(t) == session::TrackKind::vca && isDeleted(t))
+            for (auto member : session.getVcaMembers(t))
+                if (!isDeleted(member))
+                    session.coalesceVca(member, t);
     for (const auto& t : selected)
         session.removeTrack(t);
     editor.clearClipSelection();
@@ -274,10 +282,13 @@ juce::String getName(NewTrackType type)
 {
     switch (type)
     {
-    case NewTrackType::auxInput:   return "Aux Input";
-    case NewTrackType::instrument: return "Instrument Track";
-    case NewTrackType::folder:     return "Folder";
-    case NewTrackType::audio:      break;
+    case NewTrackType::auxInput:    return "Aux Input";
+    case NewTrackType::instrument:  return "Instrument Track";
+    case NewTrackType::midi:        return "MIDI Track";
+    case NewTrackType::vcaMaster:   return "VCA Master";
+    case NewTrackType::masterFader: return "Master Fader";
+    case NewTrackType::folder:      return "Folder";
+    case NewTrackType::audio:       break;
     }
     return "Audio Track";
 }
@@ -314,6 +325,27 @@ std::vector<juce::ValueTree> addNewTracks(session::Session& session, EditorState
             case NewTrackType::audio:      t = session.addTrack(session::TrackKind::audio, name); break;
             case NewTrackType::auxInput:   t = session.addTrack(session::TrackKind::bus, name); break;
             case NewTrackType::instrument: t = session.addTrack(session::TrackKind::instrument, name); break;
+            case NewTrackType::midi:       t = session.addTrack(session::TrackKind::midi, name); break;
+            case NewTrackType::vcaMaster:  t = session.addTrack(session::TrackKind::vca, name); break;
+            case NewTrackType::masterFader:
+            {
+                // The main output's, unless it has one: then the first bus without one.
+                std::set<std::uint32_t> taken;
+                for (const auto& other : session.getAllTracks())
+                    if (session::track::getKind(other) == session::TrackKind::masterFader)
+                        taken.insert(session::track::getControlledBus(other));
+                std::uint32_t path = 0;
+                if (taken.count(0) > 0)
+                    for (const auto& bus : session.getBusses())
+                        if (!session::track::isFolder(bus) && taken.count(session::track::getId(bus)) == 0)
+                        {
+                            path = session::track::getId(bus);
+                            break;
+                        }
+                t = session.addTrack(session::TrackKind::masterFader, name);
+                session::track::setControlledBus(t, path, nullptr);
+                break;
+            }
             case NewTrackType::folder:     t = session.addFolder(name); break;
             }
             if (!t.isValid())

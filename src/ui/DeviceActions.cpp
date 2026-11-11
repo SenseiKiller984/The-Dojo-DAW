@@ -89,12 +89,17 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
     if (!isMaster)
     {
         const bool ownerIsInstrumentTrack = owner.isValid() && session::track::getKind(owner) == session::TrackKind::instrument;
+        const auto ownerKind = owner.isValid() ? session::track::getKind(owner) : session::TrackKind::audio;
         if (choice.instrument && !ownerIsInstrumentTrack)
         {
+            // An instrument dropped on a MIDI track gets its own instrument track, played by that MIDI track.
+            const auto midiTrack = ownerKind == session::TrackKind::midi ? owner : juce::ValueTree();
             owner = actions::addTrack(session, editor, session::TrackKind::instrument);
             session::track::setName(owner, choice.name, &session.getUndoManager());
+            if (midiTrack.isValid())
+                session::track::setMidiTarget(midiTrack, session::track::getId(owner), &session.getUndoManager());
         }
-        else if (!owner.isValid())
+        else if (!owner.isValid() || ownerKind == session::TrackKind::vca || ownerKind == session::TrackKind::midi)
         {
             owner = actions::addTrack(session, editor, session::TrackKind::audio);
         }

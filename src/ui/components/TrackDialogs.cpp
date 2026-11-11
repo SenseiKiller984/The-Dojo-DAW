@@ -45,8 +45,10 @@ void styleLabel(juce::Label& label, const juce::String& text)
     label.setColour(juce::Label::textColourId, theme::colour::textMuted);
 }
 
-constexpr std::array<actions::NewTrackType, 4> kNewTrackTypes{actions::NewTrackType::audio, actions::NewTrackType::auxInput,
-                                                             actions::NewTrackType::instrument, actions::NewTrackType::folder};
+constexpr std::array<actions::NewTrackType, 7> kNewTrackTypes{actions::NewTrackType::audio,     actions::NewTrackType::auxInput,
+                                                             actions::NewTrackType::instrument, actions::NewTrackType::midi,
+                                                             actions::NewTrackType::vcaMaster,  actions::NewTrackType::masterFader,
+                                                             actions::NewTrackType::folder};
 } // namespace
 
 //==================================================================================================
@@ -259,9 +261,10 @@ DuplicateTracksPanel::DuplicateTracksPanel(int numSelected, const actions::Dupli
     automation.setToggleState(initial.options.automation, juce::dontSendNotification);
     devices.setToggleState(initial.options.devices, juce::dontSendNotification);
     sends.setToggleState(initial.options.sends, juce::dontSendNotification);
+    vcaAssignment.setToggleState(initial.options.vcaAssignment, juce::dontSendNotification);
     afterLastSelected.setToggleState(initial.afterLastSelected, juce::dontSendNotification);
     afterLastSelected.setEnabled(numSelected > 1);
-    for (auto* toggle : {&clips, &automation, &devices, &sends, &afterLastSelected})
+    for (auto* toggle : {&clips, &automation, &devices, &sends, &vcaAssignment, &afterLastSelected})
     {
         toggle->setWantsKeyboardFocus(false);
         addAndMakeVisible(toggle);
@@ -274,7 +277,7 @@ DuplicateTracksPanel::DuplicateTracksPanel(int numSelected, const actions::Dupli
     addAndMakeVisible(duplicateButton_);
     addAndMakeVisible(cancelButton_);
 
-    setSize(420, 300);
+    setSize(420, 326);
 }
 
 actions::DuplicateSettings DuplicateTracksPanel::getSettings() const
@@ -285,6 +288,7 @@ actions::DuplicateSettings DuplicateTracksPanel::getSettings() const
     settings.options.automation = automation.getToggleState();
     settings.options.devices = devices.getToggleState();
     settings.options.sends = sends.getToggleState();
+    settings.options.vcaAssignment = vcaAssignment.getToggleState();
     settings.afterLastSelected = afterLastSelected.isEnabled() && afterLastSelected.getToggleState();
     return settings;
 }
@@ -306,7 +310,7 @@ void DuplicateTracksPanel::resized()
     copiesLabel_.setBounds(top);
     area.removeFromTop(10);
     takeLabel_.setBounds(area.removeFromTop(18));
-    for (auto* toggle : {&clips, &automation, &devices, &sends})
+    for (auto* toggle : {&clips, &automation, &devices, &sends, &vcaAssignment})
         toggle->setBounds(area.removeFromTop(26).withTrimmedLeft(8));
     area.removeFromTop(8);
     afterLastSelected.setBounds(area.removeFromTop(26));

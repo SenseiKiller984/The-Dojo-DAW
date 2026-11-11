@@ -91,6 +91,9 @@ inline const juce::Identifier showAutomation {"showAutomation"};
 inline const juce::Identifier format {"format"};
 inline const juce::Identifier active {"active"};
 inline const juce::Identifier sourceChannel {"sourceChannel"};
+inline const juce::Identifier midiTarget {"midiTarget"};
+inline const juce::Identifier vca {"vca"};
+inline const juce::Identifier controls {"controls"};
 
 inline const juce::Identifier file         {"file"};
 inline const juce::Identifier fileRelative {"fileRelative"};
@@ -137,6 +140,12 @@ const std::array<juce::Colour, 8>& getTrackPalette();
 
 [[nodiscard]] juce::String toString(TrackKind kind);
 [[nodiscard]] TrackKind trackKindFromString(const juce::String& text);
+/** Tracks of this kind hold MIDI clips (instrument and MIDI tracks). */
+[[nodiscard]] bool holdsMidi(TrackKind kind);
+/** Tracks of this kind hold audio clips. */
+[[nodiscard]] bool holdsAudio(TrackKind kind);
+/** Tracks of this kind make sound of their own (and have a place in the render graph). */
+[[nodiscard]] bool isRendered(TrackKind kind);
 
 /** A track's channel format (audio tracks and busses; instrument tracks are stereo). */
 enum class TrackFormat
@@ -176,6 +185,12 @@ bool isShowingAutomation(const juce::ValueTree& t);
 TrackFormat getFormat(const juce::ValueTree& t);
 /** Inactive tracks are not played or processed at all (their devices use no CPU). */
 bool isActive(const juce::ValueTree& t);
+/** MIDI tracks: the instrument track their MIDI goes to (0 = none). */
+std::uint32_t getMidiTarget(const juce::ValueTree& t);
+/** The VCA Master this track belongs to (0 = none). */
+std::uint32_t getVca(const juce::ValueTree& t);
+/** Master Faders: the bus they control, 0 = the main output. */
+std::uint32_t getControlledBus(const juce::ValueTree& t);
 
 void setName(juce::ValueTree t, const juce::String& name, juce::UndoManager* um);
 void setColour(juce::ValueTree t, juce::Colour colour, juce::UndoManager* um);
@@ -195,6 +210,9 @@ void setAuxSource(juce::ValueTree t, std::uint32_t instrumentTrackId, int firstC
 void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um);
 void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um);
 void setActive(juce::ValueTree t, bool active, juce::UndoManager* um);
+void setMidiTarget(juce::ValueTree t, std::uint32_t instrumentTrackId, juce::UndoManager* um);
+void setVca(juce::ValueTree t, std::uint32_t vcaTrackId, juce::UndoManager* um);
+void setControlledBus(juce::ValueTree t, std::uint32_t busId, juce::UndoManager* um);
 } // namespace track
 
 /** Typed accessors for a CLIP (audio) or MIDICLIP tree; the timing ones work on both. */
@@ -390,6 +408,7 @@ public:
         bool automation = true; ///< automation lanes (those of devices or sends left behind are dropped)
         bool devices = true;    ///< the device chain, with the state stored in the session
         bool sends = true;
+        bool vcaAssignment = true; ///< stays a member of its VCA; otherwise the VCA's gain is baked in
     };
     /** Copies `track` (a folder with everything inside it) with fresh ids and puts the copy right after
         `after` (after its contents too), in after's folder. References between the copied tracks
@@ -403,6 +422,13 @@ public:
 
     /** Removes a track (and, for a folder, everything inside it). */
     void removeTrack(const juce::ValueTree& track);
+
+    /** Takes `member` out of `vca` without changing how it sounds: the VCA's fader and volume
+        automation are added (in dB) to the member's own (its automation, or its fader when neither
+        has automation); a muted VCA mutes it. The member moves to the VCA's own VCA, if it has one. */
+    void coalesceVca(juce::ValueTree member, const juce::ValueTree& vca);
+    /** The tracks whose VCA is `vca`. */
+    [[nodiscard]] std::vector<juce::ValueTree> getVcaMembers(const juce::ValueTree& vca) const;
     /** Moves the track at index `fromIndex` (with its contents) to sit in front of the track at
         `toIndex`, inside that track's folder (or to the end of the top level for toIndex >= count). */
     void moveTrack(int fromIndex, int toIndex);
