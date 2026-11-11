@@ -31,6 +31,8 @@ add_library(dojo_ui STATIC
     components/DevicePanel.h
     components/ExportDialog.cpp
     components/ExportDialog.h
+    components/TrackDialogs.cpp
+    components/TrackDialogs.h
     components/IconButton.cpp
     components/IconButton.h
     components/LevelMeter.cpp

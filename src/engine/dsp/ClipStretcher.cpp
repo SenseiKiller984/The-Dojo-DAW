@@ -56,7 +56,7 @@ float sourceSample(const RenderClip& clip, int channel, SampleCount index) noexc
     if (index < 0 || index >= clip.sourceLength)
         return 0.0f;
 
-    const int ch = std::min(channel, clip.numChannels - 1);
+    const int ch = std::min(clip.sourceChannel >= 0 ? clip.sourceChannel : channel, clip.numChannels - 1);
     if (clip.channels != nullptr)
         return clip.channels[ch][index];
     if (clip.streamed != nullptr)

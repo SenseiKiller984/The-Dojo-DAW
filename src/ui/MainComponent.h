@@ -8,6 +8,7 @@
 #include "ui/components/ClipEditor.h"
 #include "ui/components/DevicePanel.h"
 #include "ui/components/MixerPanel.h"
+#include "ui/EditActions.h"
 #include "ui/components/StatusBar.h"
 #include "ui/components/TransportBar.h"
 #include "ui/EditorState.h"
@@ -95,6 +96,11 @@ public:
     /** The mouse and editing tips (Keyboard tab of the Preferences). */
     void showShortcutHelp();
     [[nodiscard]] ArrangerView& getArranger() noexcept { return arranger_; }
+    [[nodiscard]] MixerPanel& getMixer() noexcept { return mixer_; }
+    [[nodiscard]] EditorState& getEditorState() noexcept { return editor_; }
+    /** Track > Scroll to Track: selects track `number` (1 = first) and brings it to the top of the
+        arranger and the left of the mixer. False if there is no such track. */
+    bool scrollToTrackNumber(int number);
 
     /** Keyboard focus starts in the arranger (not in the first text field, e.g. a browser search). */
     void focusGained(FocusChangeType cause) override;
@@ -125,6 +131,10 @@ private:
 
     // Dialogs
     void showAudioSettings();
+    /** Track menu dialogs. */
+    void showNewTracksDialog();
+    void showDuplicateTracksDialog();
+    void showScrollToTrackDialog();
     void showMessage(const juce::String& title, const juce::String& message);
     /** Playhead to the start; with the preference on, the view follows. */
     void goToStart();
@@ -136,6 +146,7 @@ private:
     session::Project& project_;
     engine::EngineController& controller_;
     juce::ApplicationCommandManager& commandManager_;
+    actions::DuplicateSettings lastDuplicate_; ///< the Duplicate dialog starts from the last choices
 
     EditorState editor_; // before the components that observe it
 

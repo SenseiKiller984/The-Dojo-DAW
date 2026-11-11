@@ -51,13 +51,19 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, selectAllClips);
         break;
     case 2:
+        menu.addCommandItem(cm, newTracks);
         menu.addCommandItem(cm, addTrack);
         menu.addCommandItem(cm, addInstrumentTrack);
         menu.addCommandItem(cm, addBusTrack);
         menu.addCommandItem(cm, addFolder);
         menu.addSeparator();
-        menu.addCommandItem(cm, groupIntoFolder);
+        menu.addCommandItem(cm, duplicateTracks);
         menu.addCommandItem(cm, deleteTrack);
+        menu.addCommandItem(cm, splitIntoMono);
+        menu.addCommandItem(cm, groupIntoFolder);
+        menu.addCommandItem(cm, toggleTrackActive);
+        menu.addSeparator();
+        menu.addCommandItem(cm, scrollToTrack);
         break;
     case 3:
         menu.addCommandItem(cm, playStop);

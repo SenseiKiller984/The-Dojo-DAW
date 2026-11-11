@@ -73,6 +73,12 @@ public:
     std::function<void(std::uint32_t clipId)> onOpenClip;
     /** A device (browser drag description) was dropped onto a track. */
     std::function<void(const juce::ValueTree& track, const juce::String& description)> onDeviceDropped;
+    /** Runs an application command (the track menu's Duplicate..., Split into Mono, ...). */
+    std::function<void(int commandId)> onCommand;
+
+    /** Track > Scroll to Track: brings `track` as close to the top as possible (opening the folders
+        around it). */
+    void scrollToTrack(const juce::ValueTree& track);
 
     // juce::Component
     void paint(juce::Graphics& g) override;
@@ -214,6 +220,8 @@ private:
     /** The selected tracks in arranger order (all of them, or only the outermost: a selected folder's
         selected contents left out). */
     [[nodiscard]] std::vector<juce::ValueTree> selectedTracksInOrder(bool outermostOnly) const;
+    /** Inactive tracks are dimmed and labelled. */
+    void paintInactiveTracks(juce::Graphics& g) const;
 
     // Geometry
     [[nodiscard]] juce::Rectangle<int> getRulerArea() const;

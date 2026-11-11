@@ -1,5 +1,7 @@
 #include "ui/EditActions.h"
 
+#include "session/Project.h"
+
 #include <vector>
 
 namespace dojo::ui::actions
@@ -264,6 +266,196 @@ bool deleteSelectedTracks(session::Session& session, EditorState& editor)
     editor.selectTrack(count > 0 ? session::track::getId(session.getTrack(juce::jmin(index, count - 1)))
                                  : 0u);
     return true;
+}
+
+// --- Track menu ------------------------------------------------------------------------------------
+
+juce::String getName(NewTrackType type)
+{
+    switch (type)
+    {
+    case NewTrackType::auxInput:   return "Aux Input";
+    case NewTrackType::instrument: return "Instrument Track";
+    case NewTrackType::folder:     return "Folder";
+    case NewTrackType::audio:      break;
+    }
+    return "Audio Track";
+}
+
+bool hasFormatChoice(NewTrackType type)
+{
+    return type == NewTrackType::audio || type == NewTrackType::auxInput;
+}
+
+std::vector<juce::ValueTree> addNewTracks(session::Session& session, EditorState& editor, const std::vector<NewTracks>& rows,
+                                          bool afterSelection)
+{
+    std::vector<juce::ValueTree> created;
+    int total = 0;
+    for (const auto& row : rows)
+        total += std::max(0, row.count);
+    if (total <= 0)
+        return created;
+
+    juce::ValueTree after = afterSelection ? session.findTrack(editor.getSelectedTrack()) : juce::ValueTree();
+    session.beginTransaction(total > 1 ? "New Tracks" : "New Track");
+
+    for (const auto& row : rows)
+    {
+        const auto base = row.name.trim();
+        for (int n = 0; n < row.count; ++n)
+        {
+            const juce::String name = base.isEmpty() ? juce::String()
+                                      : row.count == 1 ? session.uniqueTrackName(base)
+                                                       : session.uniqueTrackName(base, " ", true);
+            juce::ValueTree t;
+            switch (row.type)
+            {
+            case NewTrackType::audio:      t = session.addTrack(session::TrackKind::audio, name); break;
+            case NewTrackType::auxInput:   t = session.addTrack(session::TrackKind::bus, name); break;
+            case NewTrackType::instrument: t = session.addTrack(session::TrackKind::instrument, name); break;
+            case NewTrackType::folder:     t = session.addFolder(name); break;
+            }
+            if (!t.isValid())
+                continue;
+
+            auto* um = &session.getUndoManager();
+            if (hasFormatChoice(row.type))
+            {
+                session::track::setFormat(t, row.format, um);
+                if (row.type == NewTrackType::audio)
+                    session::track::setInput(t, session::track::getInput(t), row.format == session::TrackFormat::stereo, um);
+            }
+            if (after.isValid())
+                session.moveAfter(t, after);
+            after = t;
+            created.push_back(t);
+        }
+    }
+
+    std::set<std::uint32_t> ids;
+    for (const auto& t : created)
+        ids.insert(session::track::getId(t));
+    editor.setSelectedTracks(std::move(ids), created.empty() ? 0u : session::track::getId(created.front()));
+    return created;
+}
+
+std::vector<juce::ValueTree> duplicateSelectedTracks(session::Project& project, EditorState& editor, const DuplicateSettings& settings)
+{
+    auto& session = project.getSession();
+    const auto sources = getSelectedTracks(session, editor);
+    std::vector<juce::ValueTree> created;
+    if (sources.empty() || settings.copies < 1)
+        return created;
+
+    project.getDevices().storeStates(); // copies start from the devices' current settings
+    session.beginTransaction(sources.size() * static_cast<std::size_t>(settings.copies) > 1 ? "Duplicate Tracks" : "Duplicate Track");
+
+    if (settings.afterLastSelected)
+    {
+        auto after = sources.back();
+        for (int k = 0; k < settings.copies; ++k)
+            for (const auto& source : sources)
+                if (auto copy = session.duplicateTrack(source, settings.options, after); copy.isValid())
+                {
+                    after = copy;
+                    created.push_back(copy);
+                }
+    }
+    else
+    {
+        for (const auto& source : sources)
+        {
+            auto after = source;
+            for (int k = 0; k < settings.copies; ++k)
+                if (auto copy = session.duplicateTrack(source, settings.options, after); copy.isValid())
+                {
+                    after = copy;
+                    created.push_back(copy);
+                }
+        }
+    }
+
+    std::set<std::uint32_t> ids;
+    for (const auto& t : created)
+        ids.insert(session::track::getId(t));
+    editor.setSelectedTracks(std::move(ids), created.empty() ? 0u : session::track::getId(created.front()));
+    return created;
+}
+
+std::vector<juce::ValueTree> getSplittableTracks(const session::Session& session, const EditorState& editor)
+{
+    std::vector<juce::ValueTree> tracks;
+    for (const auto& t : getSelectedTracks(session, editor))
+        if (session::track::getKind(t) == session::TrackKind::audio && !session::track::isFolder(t)
+            && session::track::getFormat(t) == session::TrackFormat::stereo)
+            tracks.push_back(t);
+    return tracks;
+}
+
+std::vector<juce::ValueTree> splitSelectedIntoMono(session::Project& project, EditorState& editor)
+{
+    auto& session = project.getSession();
+    const auto sources = getSplittableTracks(session, editor);
+    std::vector<juce::ValueTree> created;
+    if (sources.empty())
+        return created;
+
+    project.getDevices().storeStates();
+    session.beginTransaction("Split into Mono");
+    auto* um = &session.getUndoManager();
+
+    for (const auto& source : sources)
+    {
+        auto after = source;
+        const int input = session::track::getInput(source);
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            const auto name = session.uniqueTrackName(session::track::getName(source) + (channel == 0 ? ".L" : ".R"));
+            auto mono = session.duplicateTrack(source, {}, after, name);
+            if (!mono.isValid())
+                continue;
+            session::track::setFormat(mono, session::TrackFormat::mono, um);
+            session::track::setPan(mono, channel == 0 ? -1.0 : 1.0, um);
+            session::track::setInput(mono, input >= 0 ? input + channel : -1, false, um);
+            for (auto c : mono)
+                if (c.hasType(session::ids::clip))
+                    session::clip::setSourceChannel(c, channel, um);
+            after = mono;
+            created.push_back(mono);
+        }
+    }
+
+    std::set<std::uint32_t> ids;
+    for (const auto& t : created)
+        ids.insert(session::track::getId(t));
+    editor.setSelectedTracks(std::move(ids), created.empty() ? 0u : session::track::getId(created.front()));
+    return created;
+}
+
+bool anySelectedTrackActive(const session::Session& session, const EditorState& editor)
+{
+    const auto selected = getSelectedTracks(session, editor);
+    return std::any_of(selected.begin(), selected.end(), [](const juce::ValueTree& t) { return session::track::isActive(t); });
+}
+
+bool setSelectedTracksActive(session::Session& session, EditorState& editor, bool active)
+{
+    std::vector<juce::ValueTree> selected;
+    for (const auto& t : session.getAllTracks())
+        if (editor.isTrackSelected(session::track::getId(t)) && session::track::isActive(t) != active)
+            selected.push_back(t);
+    if (selected.empty())
+        return false;
+    session.beginTransaction(active ? "Make Active" : "Make Inactive");
+    for (auto t : selected)
+        session::track::setActive(t, active, &session.getUndoManager());
+    return true;
+}
+
+juce::ValueTree getTrackByNumber(const session::Session& session, int number)
+{
+    return session.getTrack(number - 1);
 }
 
 } // namespace dojo::ui::actions

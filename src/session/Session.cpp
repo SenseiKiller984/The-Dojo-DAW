@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <set>
 
 namespace dojo::session
@@ -97,6 +98,21 @@ juce::String toString(TrackKind kind)
     return "audio";
 }
 
+juce::String toString(TrackFormat format)
+{
+    return format == TrackFormat::mono ? "mono" : "stereo";
+}
+
+TrackFormat trackFormatFromString(const juce::String& text)
+{
+    return text == "mono" ? TrackFormat::mono : TrackFormat::stereo;
+}
+
+int getNumChannels(TrackFormat format)
+{
+    return format == TrackFormat::mono ? 1 : 2;
+}
+
 TrackKind trackKindFromString(const juce::String& text)
 {
     if (text == "instrument")
@@ -130,7 +146,10 @@ std::uint32_t getOutput(const juce::ValueTree& t)
     return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::output, 0)));
 }
 int getInput(const juce::ValueTree& t) { return t.getProperty(ids::input, -1); }
-bool isInputStereo(const juce::ValueTree& t) { return t.getProperty(ids::inputStereo, true); }
+bool isInputStereo(const juce::ValueTree& t)
+{
+    return getFormat(t) != TrackFormat::mono && static_cast<bool>(t.getProperty(ids::inputStereo, true));
+}
 engine::MonitorMode getMonitor(const juce::ValueTree& t)
 {
     return static_cast<engine::MonitorMode>(juce::jlimit(0, 2, static_cast<int>(t.getProperty(ids::monitor, 1))));
@@ -144,6 +163,13 @@ std::uint32_t getAuxSource(const juce::ValueTree& t)
 }
 int getAuxChannel(const juce::ValueTree& t) { return t.getProperty(ids::auxChannel, 0); }
 bool isShowingAutomation(const juce::ValueTree& t) { return t.getProperty(ids::showAutomation, false); }
+TrackFormat getFormat(const juce::ValueTree& t)
+{
+    if (getKind(t) == TrackKind::instrument)
+        return TrackFormat::stereo;
+    return trackFormatFromString(t.getProperty(ids::format, "stereo").toString());
+}
+bool isActive(const juce::ValueTree& t) { return t.getProperty(ids::active, true); }
 
 void setName(juce::ValueTree t, const juce::String& name, juce::UndoManager* um)
 {
@@ -199,6 +225,14 @@ void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um)
 {
     t.setProperty(ids::showAutomation, show, um);
 }
+void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um)
+{
+    t.setProperty(ids::format, toString(format), um);
+}
+void setActive(juce::ValueTree t, bool active, juce::UndoManager* um)
+{
+    t.setProperty(ids::active, active, um);
+}
 } // namespace track
 
 //==================================================================================================
@@ -219,6 +253,7 @@ double getFadeOut(const juce::ValueTree& c) { return c.getProperty(ids::fadeOut,
 double getGainDb(const juce::ValueTree& c) { return c.getProperty(ids::gain, 0.0); }
 double getStretch(const juce::ValueTree& c) { return c.getProperty(ids::stretch, 1.0); }
 double getPitch(const juce::ValueTree& c) { return c.getProperty(ids::pitch, 0.0); }
+int getSourceChannel(const juce::ValueTree& c) { return std::max(-1, static_cast<int>(c.getProperty(ids::sourceChannel, -1))); }
 
 void setStart(juce::ValueTree c, double seconds, juce::UndoManager* um)
 {
@@ -253,6 +288,10 @@ void setPitch(juce::ValueTree c, double semitones, juce::UndoManager* um)
     c.setProperty(ids::pitch, juce::jlimit(-24.0, 24.0, semitones), um);
 }
 void setName(juce::ValueTree c, const juce::String& name, juce::UndoManager* um) { c.setProperty(ids::name, name, um); }
+void setSourceChannel(juce::ValueTree c, int channel, juce::UndoManager* um)
+{
+    c.setProperty(ids::sourceChannel, std::max(-1, channel), um);
+}
 } // namespace clip
 
 //==================================================================================================
@@ -500,6 +539,14 @@ bool Session::isWithin(const juce::ValueTree& t, const juce::ValueTree& ancestor
     return false;
 }
 
+bool Session::isEffectivelyActive(const juce::ValueTree& t)
+{
+    for (auto node = t; node.isValid() && node.hasType(ids::track); node = node.getParent())
+        if (!track::isActive(node))
+            return false;
+    return true;
+}
+
 bool Session::isVisibleInArranger(const juce::ValueTree& t)
 {
     for (auto parent = getParentFolder(t); parent.isValid(); parent = getParentFolder(parent))
@@ -611,6 +658,113 @@ juce::ValueTree Session::groupIntoFolder(const std::vector<juce::ValueTree>& tra
     return folderTree;
 }
 
+juce::String Session::uniqueTrackName(const juce::String& base, const juce::String& separator, bool startAtOne) const
+{
+    std::set<juce::String> taken;
+    for (const auto& t : getAllTracks())
+        taken.insert(track::getName(t));
+    if (!startAtOne && taken.count(base) == 0)
+        return base;
+    for (int n = startAtOne ? 1 : 2;; ++n)
+        if (const auto candidate = base + separator + juce::String(n); taken.count(candidate) == 0)
+            return candidate;
+}
+
+juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const DuplicateOptions& options, const juce::ValueTree& after,
+                                        const juce::String& name)
+{
+    if (!t.isValid() || !t.hasType(ids::track) || !after.isValid() || !after.getParent().isValid())
+        return {};
+
+    auto copy = t.createCopy();
+
+    // Leave behind what was not asked for (in every track of a copied folder).
+    std::map<std::uint32_t, std::uint32_t> newId; // old id -> new id, for every node that has one
+    const std::function<void(juce::ValueTree)> strip = [&](juce::ValueTree node)
+    {
+        std::set<std::uint32_t> droppedDevices, droppedSends;
+        for (int i = node.getNumChildren(); --i >= 0;)
+        {
+            const auto child = node.getChild(i);
+            const bool drop = ((child.hasType(ids::clip) || child.hasType(ids::midiClip)) && !options.clips)
+                              || (child.hasType(ids::device) && !options.devices) || (child.hasType(ids::send) && !options.sends)
+                              || (child.hasType(ids::automation) && !options.automation);
+            if (drop)
+            {
+                if (child.hasType(ids::device))
+                    droppedDevices.insert(device::getId(child));
+                if (child.hasType(ids::send))
+                    droppedSends.insert(send::getId(child));
+                node.removeChild(i, nullptr);
+            }
+        }
+        // Automation of a device or send that stayed behind has nothing left to control.
+        for (int i = node.getNumChildren(); --i >= 0;)
+        {
+            const auto lane = node.getChild(i);
+            if (!lane.hasType(ids::automation))
+                continue;
+            std::uint32_t id = 0;
+            int index = 0;
+            const auto target = automation::getTarget(lane);
+            if ((automation::parseParameterTarget(target, id, index) && droppedDevices.count(id) > 0)
+                || (automation::parseSendTarget(target, id) && droppedSends.count(id) > 0))
+                node.removeChild(i, nullptr);
+        }
+        for (auto child : node)
+            if (child.hasType(ids::track))
+                strip(child);
+    };
+    strip(copy);
+
+    // Fresh ids for every node that has one.
+    const std::function<void(juce::ValueTree)> renumber = [&](juce::ValueTree node)
+    {
+        if (node.hasProperty(ids::id))
+        {
+            const auto id = allocateId();
+            newId[static_cast<std::uint32_t>(static_cast<int>(node.getProperty(ids::id)))] = id;
+            node.setProperty(ids::id, static_cast<int>(id), nullptr);
+        }
+        for (auto child : node)
+            renumber(child);
+    };
+    renumber(copy);
+
+    // References inside the copy follow it: automation targets, outputs, sends, sidechains, aux sources.
+    const auto remap = [&newId](std::uint32_t id) { const auto it = newId.find(id); return it != newId.end() ? it->second : id; };
+    const std::function<void(juce::ValueTree)> relink = [&](juce::ValueTree node)
+    {
+        if (node.hasType(ids::automation))
+        {
+            std::uint32_t id = 0;
+            int index = 0;
+            const auto target = automation::getTarget(node);
+            if (automation::parseParameterTarget(target, id, index))
+                node.setProperty(ids::target, automation::parameterTarget(remap(id), index), nullptr);
+            else if (automation::parseSendTarget(target, id))
+                node.setProperty(ids::target, automation::sendTarget(remap(id)), nullptr);
+        }
+        else
+        {
+            for (const auto& property : {ids::output, ids::auxSource, ids::sidechain, ids::target})
+                if (node.hasProperty(property))
+                    node.setProperty(property, static_cast<int>(remap(static_cast<std::uint32_t>(static_cast<int>(node.getProperty(property))))), nullptr);
+        }
+        if (node.hasType(ids::track))
+            node.setProperty(ids::armed, false, nullptr);
+        for (auto child : node)
+            relink(child);
+    };
+    relink(copy);
+
+    copy.setProperty(ids::name, name.isNotEmpty() ? name : uniqueTrackName(track::getName(t) + ".dup", "", true), nullptr);
+
+    auto parent = after.getParent();
+    parent.addChild(copy, parent.indexOf(after) + 1, &undo_);
+    return copy;
+}
+
 void Session::removeTrack(const juce::ValueTree& t)
 {
     if (!t.isValid() || !t.hasType(ids::track))
@@ -672,6 +826,18 @@ void Session::moveTracks(const std::vector<juce::ValueTree>& tracks, int toIndex
 
     for (const auto& t : moving)
         moveTrack(indexOf(t), before.isValid() ? indexOf(before) : getNumTracks());
+}
+
+bool Session::moveAfter(const juce::ValueTree& t, const juce::ValueTree& after)
+{
+    if (!t.isValid() || !after.isValid() || t == after || isWithin(after, t) || !after.getParent().isValid())
+        return false;
+    auto moving = t;
+    auto newParent = after.getParent();
+    if (auto oldParent = moving.getParent(); oldParent.isValid())
+        oldParent.removeChild(moving, &undo_);
+    newParent.addChild(moving, newParent.indexOf(after) + 1, &undo_);
+    return true;
 }
 
 bool Session::moveIntoFolder(const juce::ValueTree& t, const juce::ValueTree& folderTree)

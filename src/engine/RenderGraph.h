@@ -64,6 +64,7 @@ struct RenderClip
     const float* const* channels = nullptr; ///< in-memory audio (kept alive by RenderGraph::keepAlive)
     const StreamedAudio* streamed = nullptr; ///< or disk-streamed audio
     int numChannels = 0;                    ///< 1 = mono (played on both sides), 2 = stereo
+    int sourceChannel = -1;                 ///< play only this source channel (on both sides); -1 = all
     SampleCount sourceLength = 0;           ///< frames in the source
     double sourceSampleRate = 48000.0;
 };
@@ -126,6 +127,7 @@ struct RenderTrack
     std::uint32_t trackId = 0; ///< stable identity, so smoothing/delay state survives graph swaps
     int slot = 0;              ///< index into the engine's per-track state, buffers and meters
     TrackKind kind = TrackKind::audio;
+    bool mono = false; ///< a mono track: its sources are folded to mono before its devices
 
     // Mix
     double volume = 1.0; ///< linear; ignored while volumeAutomation has points

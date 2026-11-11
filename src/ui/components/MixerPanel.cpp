@@ -13,7 +13,6 @@ namespace
 {
 constexpr int kHeaderHeight = 26;
 constexpr int kMasterStripWidth = 132;
-constexpr int kStripWidth = 104;
 constexpr float kFaderMinDb = static_cast<float>(session::kMinusInfinityDb);
 constexpr float kFaderMaxDb = static_cast<float>(session::kMaxVolumeDb);
 constexpr double kPeakReadoutHoldSeconds = 2.0;
@@ -332,6 +331,10 @@ void ChannelStrip::syncFromModel()
     mute_.setToggleState(session::track::isMuted(track_), juce::dontSendNotification);
     solo_.setToggleState(session::track::isSoloed(track_), juce::dontSendNotification);
     phase_.setToggleState(session::track::isPhaseInverted(track_), juce::dontSendNotification);
+    // An inactive track's controls do nothing; the strip stays selectable (to make it active again).
+    const bool active = session::Session::isEffectivelyActive(track_);
+    for (auto* child : getChildren())
+        child->setEnabled(active);
     repaint();
 }
 
@@ -339,7 +342,7 @@ void ChannelStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::I
 {
     if (tree == track_ && (property == session::ids::output || property == session::ids::input || property == session::ids::inputStereo))
         rebuildRouting();
-    if (tree == track_ || tree.getParent() == track_)
+    if (tree == track_ || tree.getParent() == track_ || property == session::ids::active) // (a folder around it)
         syncFromModel();
     else if (tree.hasType(session::ids::track) && property == session::ids::name)
         rebuildRouting();
@@ -501,6 +504,21 @@ void ChannelStrip::paint(juce::Graphics& g)
     // Volume and pan, each double-clickable to type a value.
     g.drawText(formatDecibels(session::track::getVolumeDb(track_)), volumeArea_.withTrimmedRight(5), juce::Justification::centredRight, false);
     g.drawText(formatPan(session::track::getPan(track_)), panArea_.withTrimmedLeft(5), juce::Justification::centredLeft, false);
+}
+
+void ChannelStrip::paintOverChildren(juce::Graphics& g)
+{
+    if (session::Session::isEffectivelyActive(track_))
+        return;
+    using namespace theme;
+    g.setColour(colour::windowBackground.withAlpha(0.55f));
+    g.fillRect(getLocalBounds().withTrimmedTop(nameArea_.getBottom()));
+    const auto badge = juce::Rectangle<int>(0, nameArea_.getBottom() + 4, getWidth(), 16).reduced(10, 0);
+    g.setColour(colour::control);
+    g.fillRoundedRectangle(badge.toFloat(), 3.0f);
+    g.setColour(colour::textSecondary);
+    g.setFont(label(9.5f));
+    g.drawText("INACTIVE", badge, juce::Justification::centred, false);
 }
 
 //==================================================================================================
@@ -710,6 +728,15 @@ void MixerPanel::rebuildStrips()
 
     layoutStrips();
     repaint();
+}
+
+void MixerPanel::scrollToTrack(const juce::ValueTree& track)
+{
+    if (strips_.size() != static_cast<std::size_t>(project_.getSession().getNumTracks()))
+        rebuildStrips(); // (a rebuild may still be pending)
+    for (std::size_t i = 0; i < strips_.size(); ++i)
+        if (strips_[i]->getTrack() == track)
+            viewport_.setViewPosition(static_cast<int>(i) * kStripWidth, 0);
 }
 
 void MixerPanel::layoutStrips()

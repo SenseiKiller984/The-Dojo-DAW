@@ -56,6 +56,8 @@ public:
         The clicked track becomes the current one, unless Ctrl removed it.
     */
     void selectTrackWithModifiers(std::uint32_t trackId, bool toggle, bool range, const std::vector<std::uint32_t>& order);
+    /** Selects exactly `trackIds`; `current` (one of them) becomes the current track and the anchor. */
+    void setSelectedTracks(std::set<std::uint32_t> trackIds, std::uint32_t current);
 
     /** The master bus is selected (its devices are shown in the Devices panel). */
     [[nodiscard]] bool isMasterSelected() const noexcept { return masterSelected_; }

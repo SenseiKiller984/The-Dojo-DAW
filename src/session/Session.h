@@ -84,6 +84,9 @@ inline const juce::Identifier pitch        {"pitch"};
 inline const juce::Identifier auxSource    {"auxSource"};
 inline const juce::Identifier auxChannel   {"auxChannel"};
 inline const juce::Identifier showAutomation {"showAutomation"};
+inline const juce::Identifier format {"format"};
+inline const juce::Identifier active {"active"};
+inline const juce::Identifier sourceChannel {"sourceChannel"};
 
 inline const juce::Identifier file         {"file"};
 inline const juce::Identifier fileRelative {"fileRelative"};
@@ -131,6 +134,16 @@ const std::array<juce::Colour, 8>& getTrackPalette();
 [[nodiscard]] juce::String toString(TrackKind kind);
 [[nodiscard]] TrackKind trackKindFromString(const juce::String& text);
 
+/** A track's channel format (audio tracks and busses; instrument tracks are stereo). */
+enum class TrackFormat
+{
+    mono,
+    stereo,
+};
+[[nodiscard]] juce::String toString(TrackFormat format);
+[[nodiscard]] TrackFormat trackFormatFromString(const juce::String& text);
+[[nodiscard]] int getNumChannels(TrackFormat format);
+
 /** Typed accessors for a TRACK tree. Setters take an UndoManager (nullptr = not undoable). */
 namespace track
 {
@@ -155,6 +168,10 @@ double getPitch(const juce::ValueTree& t);
 std::uint32_t getAuxSource(const juce::ValueTree& t);
 int getAuxChannel(const juce::ValueTree& t);
 bool isShowingAutomation(const juce::ValueTree& t);
+/** Mono tracks play their clips (or one chosen channel of them) and record one input channel. */
+TrackFormat getFormat(const juce::ValueTree& t);
+/** Inactive tracks are not played or processed at all (their devices use no CPU). */
+bool isActive(const juce::ValueTree& t);
 
 void setName(juce::ValueTree t, const juce::String& name, juce::UndoManager* um);
 void setColour(juce::ValueTree t, juce::Colour colour, juce::UndoManager* um);
@@ -172,6 +189,8 @@ void setSpeed(juce::ValueTree t, double speed, juce::UndoManager* um);
 void setPitch(juce::ValueTree t, double semitones, juce::UndoManager* um);
 void setAuxSource(juce::ValueTree t, std::uint32_t instrumentTrackId, int firstChannel, juce::UndoManager* um);
 void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um);
+void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um);
+void setActive(juce::ValueTree t, bool active, juce::UndoManager* um);
 } // namespace track
 
 /** Typed accessors for a CLIP (audio) or MIDICLIP tree; the timing ones work on both. */
@@ -190,6 +209,8 @@ double getFadeOut(const juce::ValueTree& c);
 double getGainDb(const juce::ValueTree& c);
 double getStretch(const juce::ValueTree& c); ///< timeline seconds per source second
 double getPitch(const juce::ValueTree& c);   ///< semitones
+/** The source file channel an audio clip plays (on both sides), or -1 for all of them. */
+int getSourceChannel(const juce::ValueTree& c);
 
 void setStart(juce::ValueTree c, double seconds, juce::UndoManager* um);
 void setLength(juce::ValueTree c, double seconds, juce::UndoManager* um);
@@ -200,6 +221,7 @@ void setGainDb(juce::ValueTree c, double db, juce::UndoManager* um);
 void setStretch(juce::ValueTree c, double ratio, juce::UndoManager* um);
 void setPitch(juce::ValueTree c, double semitones, juce::UndoManager* um);
 void setName(juce::ValueTree c, const juce::String& name, juce::UndoManager* um);
+void setSourceChannel(juce::ValueTree c, int channel, juce::UndoManager* um);
 } // namespace clip
 
 /** NOTE accessors (times in beats relative to the clip's content). */
@@ -325,6 +347,8 @@ public:
     [[nodiscard]] static bool isWithin(const juce::ValueTree& track, const juce::ValueTree& ancestor);
     /** False if `track` lies inside a collapsed folder. */
     [[nodiscard]] static bool isVisibleInArranger(const juce::ValueTree& track);
+    /** False if `track` or a folder around it is inactive. */
+    [[nodiscard]] static bool isEffectivelyActive(const juce::ValueTree& track);
 
     /** Adds an audio track at track index `index` (-1 = at the end of the top level). */
     juce::ValueTree addTrack(const juce::String& name = {}, int index = -1);
@@ -340,6 +364,24 @@ public:
         from other folders move into it too; their order is kept. Invalid if there is nothing to group. */
     juce::ValueTree groupIntoFolder(const std::vector<juce::ValueTree>& tracks, const juce::String& name = {});
 
+    /** What a duplicate takes along; the rest of the track (mix, routing, format, ...) always comes. */
+    struct DuplicateOptions
+    {
+        bool clips = true;      ///< audio and MIDI clips
+        bool automation = true; ///< automation lanes (those of devices or sends left behind are dropped)
+        bool devices = true;    ///< the device chain, with the state stored in the session
+        bool sends = true;
+    };
+    /** Copies `track` (a folder with everything inside it) with fresh ids and puts the copy right after
+        `after` (after its contents too), in after's folder. References between the copied tracks
+        (outputs, sends, sidechains) point at the copies. The copy is not armed. `name` empty: the
+        source's name + ".dup1", ".dup2", ... (the first one not taken). */
+    juce::ValueTree duplicateTrack(const juce::ValueTree& track, const DuplicateOptions& options,
+                                   const juce::ValueTree& after, const juce::String& name = {});
+    /** A track name not used yet: `base`, else `base` + `separator` + 2, 3, ... (or 1, 2, ... with
+        startAtOne). */
+    [[nodiscard]] juce::String uniqueTrackName(const juce::String& base, const juce::String& separator = " ", bool startAtOne = false) const;
+
     /** Removes a track (and, for a folder, everything inside it). */
     void removeTrack(const juce::ValueTree& track);
     /** Moves the track at index `fromIndex` (with its contents) to sit in front of the track at
@@ -349,6 +391,8 @@ public:
         track's folder, keeping their order (toIndex >= count: to the end of the top level). Dropping
         them onto themselves changes nothing. */
     void moveTracks(const std::vector<juce::ValueTree>& tracks, int toIndex);
+    /** Moves `track` (with its contents) to right after `after` (after its contents too), in after's folder. */
+    bool moveAfter(const juce::ValueTree& track, const juce::ValueTree& after);
     /** Moves a track into `folder` (at its end), or to the top level if `folder` is invalid. */
     bool moveIntoFolder(const juce::ValueTree& track, const juce::ValueTree& folder);
 

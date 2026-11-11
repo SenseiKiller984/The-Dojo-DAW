@@ -79,7 +79,7 @@ juce::String Recorder::start()
 
     for (const auto& t : session.getAllTracks())
     {
-        if (!track::isArmed(t))
+        if (!track::isArmed(t) || !Session::isEffectivelyActive(t))
             continue;
 
         if (track::getKind(t) == TrackKind::instrument)

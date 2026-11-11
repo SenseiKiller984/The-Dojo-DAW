@@ -73,13 +73,14 @@ bool renderStreamedClip(const RenderClip& clip, double blockStartSeconds, double
     const double sourceStep = secondsPerSample / stretch * clip.sourceSampleRate;
     const double firstTimeInClip = blockStartSeconds + first * secondsPerSample - clip.startSeconds;
     const double firstSourcePosition = (clip.sourceOffsetSeconds + firstTimeInClip / stretch) * clip.sourceSampleRate;
-    const bool stereo = clip.numChannels > 1;
+    const int leftChannel = clip.sourceChannel >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : 0;
+    const bool stereo = clip.sourceChannel < 0 && clip.numChannels > 1;
 
     for (int i = first; i < last; ++i)
     {
         const double gain = clip.gain * clipEdgeGain(clip, firstTimeInClip + (i - first) * secondsPerSample);
         const double position = firstSourcePosition + (i - first) * sourceStep;
-        const double l = interpolateStreamed(audio, 0, position);
+        const double l = interpolateStreamed(audio, leftChannel, position);
         const double r = stereo ? interpolateStreamed(audio, 1, position) : l;
         left[i] += l * gain;
         right[i] += r * gain;
@@ -139,8 +140,10 @@ bool renderClip(const RenderClip& clip, double blockStartSeconds, double seconds
     const double stretch = clip.stretch > 0.0 ? clip.stretch : 1.0;
     const double sourceStep = secondsPerSample / stretch * clip.sourceSampleRate;
 
-    const float* const sourceLeft = clip.channels[0];
-    const float* const sourceRight = clip.numChannels > 1 ? clip.channels[1] : clip.channels[0];
+    // One chosen channel plays on both sides (a track split into mono); otherwise left and right.
+    const int chosen = clip.sourceChannel >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : -1;
+    const float* const sourceLeft = clip.channels[chosen >= 0 ? chosen : 0];
+    const float* const sourceRight = chosen >= 0 ? sourceLeft : (clip.numChannels > 1 ? clip.channels[1] : clip.channels[0]);
 
     const double firstTimeInClip = blockStartSeconds + first * secondsPerSample - clip.startSeconds;
     const double firstSourcePosition = (clip.sourceOffsetSeconds + firstTimeInClip / stretch) * clip.sourceSampleRate;

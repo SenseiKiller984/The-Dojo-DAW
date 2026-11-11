@@ -137,7 +137,12 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 {
     using engine::TrackKind;
 
-    const auto allTracks = session.getAllTracks();
+    // Inactive tracks (and everything inside an inactive folder) are left out entirely: they are not
+    // rendered and their devices are not run.
+    std::vector<juce::ValueTree> allTracks;
+    for (const auto& t : session.getAllTracks())
+        if (Session::isEffectivelyActive(t))
+            allTracks.push_back(t);
 
     // --- Slots: forget tracks that no longer exist, keep the rest stable ----------------------------
     std::set<std::uint32_t> liveIds;
@@ -217,6 +222,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     {
         const auto dest = session.getDestination(trees[i]);
         int target = dest.isValid() ? indexOf(track::getId(dest)) : -1;
+        if (dest.isValid() && target < 0)
+        {
+            destination[i] = -2; // routed to an inactive bus: its output goes nowhere
+            continue;
+        }
         if (target >= 0 && !routing.tryAdd(static_cast<int>(i), target))
         {
             // The assignment would close a loop: fall back to the folder, then to the master.
@@ -347,6 +357,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         rt.trackId = track::getId(t);
         rt.slot = slotOf[i];
         rt.kind = track::getKind(t);
+        rt.mono = rt.kind != TrackKind::instrument && track::getFormat(t) == TrackFormat::mono;
         rt.volume = dbToGain(track::getVolumeDb(t));
         rt.pan = track::getPan(t);
         rt.audible = !track::isMuted(t) && (!anySoloed || soloedUpstream[i] || soloedDownstream[i]);
@@ -422,6 +433,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 rc.stretch = std::max(kMinStretch, clip::getStretch(c)) / trackSpeed;
                 rc.pitchSemitones = clip::getPitch(c) + trackPitch + globalTranspose + speedCompensation;
                 rc.numChannels = asset->numChannels;
+                rc.sourceChannel = clip::getSourceChannel(c);
                 rc.sourceLength = asset->numFrames;
                 rc.sourceSampleRate = asset->sampleRate;
 
@@ -538,7 +550,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     // --- Master ---------------------------------------------------------------------------------------
     for (std::size_t i = 0; i < count; ++i)
-        if (destination[i] < 0)
+        if (destination[i] == -1)
             graph->masterSources.push_back(static_cast<int>(i));
 
     const auto masterTree = session.getMaster();
@@ -625,7 +637,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             const int out = arrival[i] + compensation[i];
             if (destination[i] >= 0)
                 target[static_cast<std::size_t>(destination[i])] = std::max(target[static_cast<std::size_t>(destination[i])], out);
-            else
+            else if (destination[i] == -1) // (-2: silenced, it reaches nothing)
                 masterTarget = std::max(masterTarget, out);
         }
         for (std::size_t b = 0; b < count; ++b)
@@ -636,7 +648,9 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         bool changed = false;
         for (std::size_t i = 0; i < count; ++i)
         {
-            int needed = destination[i] >= 0 ? target[static_cast<std::size_t>(destination[i])] - arrival[i] : masterTarget - arrival[i];
+            int needed = destination[i] >= 0    ? target[static_cast<std::size_t>(destination[i])] - arrival[i]
+                         : destination[i] == -1 ? masterTarget - arrival[i]
+                                                : 0;
             for (std::size_t b = 0; b < count; ++b)
                 for (const auto& [source, s] : incomingSends[b])
                     if (source == static_cast<int>(i) && !send::isPreFader(s))

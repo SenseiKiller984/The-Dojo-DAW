@@ -3,6 +3,11 @@
 #include "session/Session.h"
 #include "ui/EditorState.h"
 
+namespace dojo::session
+{
+class Project;
+}
+
 namespace dojo::ui::actions
 {
 
@@ -57,5 +62,64 @@ juce::ValueTree groupSelectedTracksIntoFolder(session::Session& session, EditorS
 
 /** Deletes the selected tracks (with their clips). Returns false if no track is selected. */
 bool deleteSelectedTracks(session::Session& session, EditorState& editor);
+
+// --- Track menu ------------------------------------------------------------------------------------
+
+/** What Track > New can create. */
+enum class NewTrackType
+{
+    audio,
+    auxInput, ///< a bus: a return for sends, or a group other tracks are routed to
+    instrument,
+    folder,
+};
+[[nodiscard]] juce::String getName(NewTrackType type);
+/** Whether the type has a mono / stereo choice (instrument tracks and folders are stereo). */
+[[nodiscard]] bool hasFormatChoice(NewTrackType type);
+
+/** One row of the New Tracks dialog. */
+struct NewTracks
+{
+    int count = 1;
+    NewTrackType type = NewTrackType::audio;
+    session::TrackFormat format = session::TrackFormat::stereo;
+    juce::String name; ///< empty: default names; one track: this name; several: name 1, name 2, ...
+};
+/**
+    Track > New: adds every row's tracks, in order, after the current track (inside its folder) or,
+    without one (or with afterSelection false), at the end. The new tracks are selected. One undo step.
+*/
+std::vector<juce::ValueTree> addNewTracks(session::Session& session, EditorState& editor, const std::vector<NewTracks>& rows,
+                                          bool afterSelection = true);
+
+/** Track > Duplicate. */
+struct DuplicateSettings
+{
+    int copies = 1;
+    session::Session::DuplicateOptions options;
+    /** All copies after the last selected track (in sets: A.dup1 B.dup1 A.dup2 B.dup2 ...), instead of
+        each copy right after its source. */
+    bool afterLastSelected = false;
+};
+/** Duplicates the selected tracks (with the devices' current state) and selects the copies. One undo step. */
+std::vector<juce::ValueTree> duplicateSelectedTracks(session::Project& project, EditorState& editor, const DuplicateSettings& settings);
+
+/** Stereo audio tracks among the selection (what Split into Mono works on). */
+[[nodiscard]] std::vector<juce::ValueTree> getSplittableTracks(const session::Session& session, const EditorState& editor);
+/**
+    Track > Split into Mono: each selected stereo audio track gets a mono track per channel right after
+    it ("Name.L", "Name.R"), panned hard left and right, each playing that channel of every clip and
+    recording that input channel, with the source's devices, sends and automation. The source track is
+    kept. The new tracks are selected. One undo step.
+*/
+std::vector<juce::ValueTree> splitSelectedIntoMono(session::Project& project, EditorState& editor);
+
+/** True if any selected track is active (so the command reads "Make Inactive"). */
+[[nodiscard]] bool anySelectedTrackActive(const session::Session& session, const EditorState& editor);
+/** Track > Make Inactive / Make Active for every selected track. One undo step. */
+bool setSelectedTracksActive(session::Session& session, EditorState& editor, bool active);
+
+/** Track numbers (Scroll to Track): 1 = the first track in the arranger, counting tracks inside folders. */
+[[nodiscard]] juce::ValueTree getTrackByNumber(const session::Session& session, int number);
 
 } // namespace dojo::ui::actions

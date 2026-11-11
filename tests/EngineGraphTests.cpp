@@ -631,3 +631,156 @@ TEST_CASE("After stopping at the end, playing again starts from the beginning", 
     REQUIRE(rig.engine.post(engine::command::SetPlaying{false}));
     rig.render(0.05);
 }
+
+namespace
+{
+/** A stereo WAV: a 440 Hz tone on the left, a 1 kHz tone on the right. */
+juce::File writeTwoTone(const juce::File& file)
+{
+    const int frames = static_cast<int>(kRate);
+    juce::AudioBuffer<float> buffer(2, frames);
+    const auto left = test::sine(440.0, kRate, frames, 0.3f);
+    const auto right = test::sine(1000.0, kRate, frames, 0.3f);
+    std::copy(left.begin(), left.end(), buffer.getWritePointer(0));
+    std::copy(right.begin(), right.end(), buffer.getWritePointer(1));
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+    juce::WavAudioFormat wav;
+    auto writer = wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                  .withSampleRate(kRate)
+                                                  .withNumChannels(2)
+                                                  .withBitsPerSample(32)
+                                                  .withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
+    REQUIRE(writer != nullptr);
+    writer->writeFromAudioSampleBuffer(buffer, 0, frames);
+    return file;
+}
+
+/** Amplitude of `frequency` in x[begin, end) (Goertzel). */
+double toneIn(const std::vector<float>& x, double frequency, std::size_t begin, std::size_t end)
+{
+    const double coefficient = 2.0 * std::cos(2.0 * 3.14159265358979323846 * frequency / kRate);
+    double s1 = 0.0, s2 = 0.0;
+    for (std::size_t i = begin; i < end; ++i)
+    {
+        const double s0 = x[i] + coefficient * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return 2.0 * std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - coefficient * s1 * s2)) / static_cast<double>(end - begin);
+}
+} // namespace
+
+TEST_CASE("Mono tracks fold stereo clips; a clip can play just one channel of its file", "[engine][mono]")
+{
+    test::TempFolder temp;
+    const auto file = writeTwoTone(temp.dir.getChildFile("two tone.wav"));
+
+    struct Expect
+    {
+        double left440, left1000, right440, right1000;
+    };
+    const auto renderWith = [&](auto setUp)
+    {
+        Rig rig;
+        auto t = rig.audioTrackWith(file);
+        setUp(rig, t);
+        rig.publish();
+        rig.play();
+        rig.render(0.6);
+        const auto from = at(0.1), to = at(0.5);
+        return Expect{toneIn(rig.left, 440.0, from, to), toneIn(rig.left, 1000.0, from, to), toneIn(rig.right, 440.0, from, to),
+                      toneIn(rig.right, 1000.0, from, to)};
+    };
+    const auto clipOf = [](const juce::ValueTree& t)
+    {
+        for (const auto& c : t)
+            if (c.hasType(ids::clip))
+                return c;
+        return juce::ValueTree();
+    };
+
+    // Stereo track: left on the left, right on the right.
+    const auto stereo = renderWith([](Rig&, juce::ValueTree) {});
+    CHECK_THAT(stereo.left440, WithinAbs(0.3, 0.01));
+    CHECK(stereo.left1000 < 0.005);
+    CHECK_THAT(stereo.right1000, WithinAbs(0.3, 0.01));
+    CHECK(stereo.right440 < 0.005);
+
+    // Mono track: both channels carry the mono sum (half of each tone).
+    const auto mono = renderWith([](Rig&, juce::ValueTree t) { track::setFormat(t, TrackFormat::mono, nullptr); });
+    for (const double v : {mono.left440, mono.left1000, mono.right440, mono.right1000})
+        CHECK_THAT(v, WithinAbs(0.15, 0.01));
+
+    // One channel of the file (Split into Mono): the right channel only, on both sides.
+    const auto right = renderWith([&](Rig&, juce::ValueTree t)
+                                  {
+                                      track::setFormat(t, TrackFormat::mono, nullptr);
+                                      clip::setSourceChannel(clipOf(t), 1, nullptr);
+                                  });
+    CHECK_THAT(right.left1000, WithinAbs(0.3, 0.01));
+    CHECK_THAT(right.right1000, WithinAbs(0.3, 0.01));
+    CHECK(right.left440 < 0.005);
+    CHECK(right.right440 < 0.005);
+
+    // ... also through the time-stretcher, and panned hard left.
+    const auto stretched = renderWith([&](Rig&, juce::ValueTree t)
+                                      {
+                                          track::setFormat(t, TrackFormat::mono, nullptr);
+                                          track::setPan(t, -1.0, nullptr);
+                                          clip::setSourceChannel(clipOf(t), 0, nullptr);
+                                          clip::setStretch(clipOf(t), 1.5, nullptr);
+                                          clip::setLength(clipOf(t), 1.5, nullptr);
+                                      });
+    CHECK(stretched.left440 > 0.2);
+    CHECK(stretched.left1000 < 0.01);
+    CHECK(stretched.right440 < 0.005); // hard left
+}
+
+TEST_CASE("Inactive tracks are not rendered, and neither is anything routed into them", "[engine][inactive]")
+{
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 48000, 0.25f), kRate);
+
+    Rig rig;
+    auto a = rig.audioTrackWith(tone);
+    auto b = rig.audioTrackWith(tone);
+    auto bus = rig.session.addTrack(TrackKind::bus, "Group");
+    track::setOutput(b, track::getId(bus), nullptr);
+    auto folder = rig.session.groupIntoFolder({a}, "Folder");
+    rig.session.addDevice(a, "builtin:eq", "EQ");
+
+    const auto graphIds = [&rig]
+    {
+        std::set<std::uint32_t> ids;
+        const auto graph = rig.builder.build(rig.session, rig.assets, &rig.devices);
+        for (const auto& rt : graph->tracks)
+            ids.insert(rt.trackId);
+        return ids;
+    };
+    const auto level = [&rig]
+    {
+        rig.left.clear();
+        rig.publish();
+        rig.play();
+        rig.render(0.3);
+        return test::peak(rig.left, at(0.1), at(0.3));
+    };
+
+    CHECK(graphIds().size() == 4);
+    CHECK_THAT(level(), WithinAbs(0.5, 0.01)); // a and b
+
+    // An inactive bus: b (routed into it) is silent but still runs; the bus itself is gone.
+    track::setActive(bus, false, nullptr);
+    CHECK(graphIds() == std::set<std::uint32_t>{track::getId(a), track::getId(b), track::getId(folder)});
+    CHECK_THAT(level(), WithinAbs(0.25, 0.01));
+
+    // An inactive folder takes its contents (with their devices) out of the graph.
+    track::setActive(folder, false, nullptr);
+    CHECK(graphIds() == std::set<std::uint32_t>{track::getId(b)});
+    CHECK(level() < 1.0e-6);
+
+    track::setActive(bus, true, nullptr);
+    track::setActive(folder, true, nullptr);
+    CHECK(graphIds().size() == 4);
+    CHECK_THAT(level(), WithinAbs(0.5, 0.01));
+}

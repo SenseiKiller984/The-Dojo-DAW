@@ -7,6 +7,7 @@
 #include "engine/AudioEngine.h"
 #include "ui/DemoProject.h"
 #include "ui/components/ExportDialog.h"
+#include "ui/components/TrackDialogs.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -141,6 +142,7 @@ MainComponent::MainComponent(AppServices& services)
     {
         showImportChooser();
     };
+    arranger_.onCommand = [this](int commandId) { commandManager_.invokeDirectly(commandId, true); };
     browser_.onFileActivated = [this](const juce::File& file)
     {
         importAudioFiles({file.getFullPathName()});
@@ -309,7 +311,12 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    openDemo,
                                    cutClips,
                                    copyClips,
-                                   pasteClips};
+                                   pasteClips,
+                                   newTracks,
+                                   duplicateTracks,
+                                   splitIntoMono,
+                                   toggleTrackActive,
+                                   scrollToTrack};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -421,6 +428,32 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     case zoomToFit:
         info.setInfo("Zoom to Fit", "Show the whole session", categories::view, 0);
         info.addDefaultKeypress('0', cmd);
+        break;
+
+    case newTracks:
+        info.setInfo("New...", "Add one or more audio tracks, aux inputs, instrument tracks or folders", categories::track, 0);
+        info.addDefaultKeypress('n', cmd | shift);
+        break;
+    case duplicateTracks:
+        info.setInfo("Duplicate...", "Copy the selected tracks: how many, and with what", categories::track, 0);
+        info.setActive(!actions::getSelectedTracks(session, editor_).empty());
+        info.addDefaultKeypress('d', juce::ModifierKeys::altModifier | shift);
+        break;
+    case splitIntoMono:
+        info.setInfo("Split into Mono", "Make a mono track for each channel of the selected stereo tracks", categories::track, 0);
+        info.setActive(!actions::getSplittableTracks(session, editor_).empty());
+        break;
+    case toggleTrackActive:
+    {
+        const bool anyActive = actions::anySelectedTrackActive(session, editor_);
+        info.setInfo(anyActive ? "Make Inactive" : "Make Active",
+                     "Inactive tracks do not play and their devices use no processing power", categories::track, 0);
+        info.setActive(!actions::getSelectedTracks(session, editor_).empty());
+        break;
+    }
+    case scrollToTrack:
+        info.setInfo("Scroll to Track...", "Bring a track (by its number) into view", categories::track, 0);
+        info.setActive(session.getNumTracks() > 0);
         break;
 
     case preferences:
@@ -587,6 +620,21 @@ bool MainComponent::perform(const InvocationInfo& invocation)
     case preferences:
         if (services_.showPreferences)
             services_.showPreferences(Preferences::Tab::general);
+        break;
+    case newTracks:
+        showNewTracksDialog();
+        break;
+    case duplicateTracks:
+        showDuplicateTracksDialog();
+        break;
+    case splitIntoMono:
+        actions::splitSelectedIntoMono(project_, editor_);
+        break;
+    case toggleTrackActive:
+        actions::setSelectedTracksActive(session, editor_, !actions::anySelectedTrackActive(session, editor_));
+        break;
+    case scrollToTrack:
+        showScrollToTrackDialog();
         break;
     case audioSettings:
         showAudioSettings();
@@ -934,6 +982,65 @@ void MainComponent::showMessage(const juce::String& title, const juce::String& m
                                                          .withButton("OK")
                                                          .withAssociatedComponent(this),
                                                      nullptr);
+}
+
+void MainComponent::showNewTracksDialog()
+{
+    juce::Component::SafePointer<MainComponent> safe(this);
+    NewTracksPanel::show(this, [safe](const std::vector<actions::NewTracks>& rows, bool afterSelection)
+                         {
+                             if (safe != nullptr)
+                                 actions::addNewTracks(safe->project_.getSession(), safe->editor_, rows, afterSelection);
+                         });
+}
+
+void MainComponent::showDuplicateTracksDialog()
+{
+    const auto selected = actions::getSelectedTracks(project_.getSession(), editor_);
+    if (selected.empty())
+        return;
+    juce::Component::SafePointer<MainComponent> safe(this);
+    DuplicateTracksPanel::show(this, static_cast<int>(selected.size()), lastDuplicate_,
+                               [safe](const actions::DuplicateSettings& settings)
+                               {
+                                   if (safe == nullptr)
+                                       return;
+                                   safe->lastDuplicate_ = settings;
+                                   actions::duplicateSelectedTracks(safe->project_, safe->editor_, settings);
+                               });
+}
+
+void MainComponent::showScrollToTrackDialog()
+{
+    auto& session = project_.getSession();
+    juce::StringArray names;
+    int current = 0;
+    const auto tracks = session.getAllTracks();
+    for (std::size_t i = 0; i < tracks.size(); ++i)
+    {
+        names.add(session::track::getName(tracks[i]));
+        if (session::track::getId(tracks[i]) == editor_.getSelectedTrack())
+            current = static_cast<int>(i) + 1;
+    }
+    if (names.isEmpty())
+        return;
+    juce::Component::SafePointer<MainComponent> safe(this);
+    ScrollToTrackPanel::show(this, names, current, [safe](int number)
+                             {
+                                 if (safe != nullptr)
+                                     safe->scrollToTrackNumber(number);
+                             });
+}
+
+bool MainComponent::scrollToTrackNumber(int number)
+{
+    const auto t = actions::getTrackByNumber(project_.getSession(), number);
+    if (!t.isValid())
+        return false;
+    editor_.selectTrack(session::track::getId(t));
+    arranger_.scrollToTrack(t);
+    mixer_.scrollToTrack(t);
+    return true;
 }
 
 void MainComponent::showShortcutHelp()

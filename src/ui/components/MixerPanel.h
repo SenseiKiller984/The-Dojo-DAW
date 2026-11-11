@@ -41,6 +41,7 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
 
@@ -128,6 +129,8 @@ private:
 class MixerPanel final : public juce::Component, private juce::ValueTree::Listener, private juce::AsyncUpdater
 {
 public:
+    static constexpr int kStripWidth = 104;
+
     MixerPanel(session::Project& project, engine::EngineController& controller, EditorState& editor);
 
     /** Shows the Devices panel (a strip's FX button was clicked). */
@@ -139,6 +142,10 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+
+    /** Brings `track`'s strip as close to the left as possible. */
+    void scrollToTrack(const juce::ValueTree& track);
+    [[nodiscard]] int getScrollX() const { return viewport_.getViewPositionX(); }
 
 private:
     void rebuildStrips();

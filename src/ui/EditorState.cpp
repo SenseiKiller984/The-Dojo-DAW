@@ -59,6 +59,19 @@ void EditorState::selectTrack(std::uint32_t trackId)
     notify();
 }
 
+void EditorState::setSelectedTracks(std::set<std::uint32_t> trackIds, std::uint32_t current)
+{
+    if (current != 0)
+        trackIds.insert(current);
+    else if (!trackIds.empty())
+        current = *trackIds.begin();
+    selectedTracks_ = std::move(trackIds);
+    selectedTrack_ = current;
+    trackAnchor_ = current;
+    masterSelected_ = false;
+    notify();
+}
+
 void EditorState::selectTrackWithModifiers(std::uint32_t trackId, bool toggle, bool range, const std::vector<std::uint32_t>& order)
 {
     const auto position = [&order](std::uint32_t id)

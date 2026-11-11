@@ -50,6 +50,11 @@ enum : juce::CommandID
     copyClips,
     pasteClips,
     preferences,
+    newTracks,
+    duplicateTracks,
+    splitIntoMono,
+    toggleTrackActive,
+    scrollToTrack,
 };
 
 namespace categories

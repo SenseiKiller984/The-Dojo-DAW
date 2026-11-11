@@ -3,6 +3,7 @@
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
 
+#include "ui/Commands.h"
 #include "ui/EditActions.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -773,6 +774,7 @@ void ArrangerView::paint(juce::Graphics& g)
     paintMarquee(g);
     paintRuler(g);
     paintHeaders(g);
+    paintInactiveTracks(g);
     paintDropIndicator(g);
     paintPlayhead(g);
 
@@ -781,6 +783,49 @@ void ArrangerView::paint(juce::Graphics& g)
 
     g.setColour(theme::colour::panel);
     g.fillRect(getWidth() - kScrollbarThickness, getHeight() - kScrollbarThickness, kScrollbarThickness, kScrollbarThickness);
+}
+
+void ArrangerView::paintInactiveTracks(juce::Graphics& g) const
+{
+    using namespace theme;
+    const auto& all = rows();
+    const juce::Rectangle<int> content(0, metrics::rulerHeight, getWidth() - kScrollbarThickness, getLaneArea().getHeight());
+    g.saveState();
+    g.reduceClipRegion(content);
+    for (std::size_t i = 0; i < all.size(); ++i)
+    {
+        if (session::Session::isEffectivelyActive(all[i].track))
+            continue;
+        const auto row = getRowBounds(static_cast<int>(i)).withLeft(0).withRight(content.getRight());
+        if (!row.intersects(content))
+            continue;
+        g.setColour(colour::windowBackground.withAlpha(0.6f));
+        g.fillRect(row);
+        if (all[i].kind == Row::Kind::track)
+        {
+            const auto badge = juce::Rectangle<int>(metrics::trackHeaderWidth - 74, row.getY() + 33, 64, 16);
+            g.setColour(colour::control);
+            g.fillRoundedRectangle(badge.toFloat(), 3.0f);
+            g.setColour(colour::textSecondary);
+            g.setFont(label(9.5f));
+            g.drawText("INACTIVE", badge, juce::Justification::centred, false);
+        }
+    }
+    g.restoreState();
+}
+
+void ArrangerView::scrollToTrack(const juce::ValueTree& track)
+{
+    for (auto folder = session::Session::getParentFolder(track); folder.isValid(); folder = session::Session::getParentFolder(folder))
+        if (session::track::isCollapsed(folder))
+            session::track::setCollapsed(folder, false, nullptr);
+    rowsDirty_ = true;
+    const int row = rowOfTrack(track);
+    if (row < 0)
+        return;
+    setScroll(scrollSeconds_, rows()[static_cast<std::size_t>(row)].top);
+    updateScrollbars();
+    repaint();
 }
 
 void ArrangerView::paintRuler(juce::Graphics& g) const
@@ -984,7 +1029,9 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
         paintToggle(getHeaderButton(rowIndex, 3), "R", session::track::isArmed(t), colour::record);
 
     // Second line: routing summary.
-    juce::String info = kindLabel(t) + "  " + formatDb(session::track::getVolumeDb(t)) + "  " + formatPan(session::track::getPan(t));
+    const bool mono = !folder && kind != session::TrackKind::instrument && session::track::getFormat(t) == session::TrackFormat::mono;
+    juce::String info = kindLabel(t) + (mono ? " mono" : "") + "  " + formatDb(session::track::getVolumeDb(t)) + "  "
+                        + formatPan(session::track::getPan(t));
     if (kind == session::TrackKind::audio && session::track::getInput(t) >= 0)
         info << "  In " << (session::track::getInput(t) + 1) << (session::track::isInputStereo(t) ? "/" + juce::String(session::track::getInput(t) + 2) : juce::String());
     if (const auto dest = session_.getDestination(t); dest.isValid() && !folder && session::track::getOutput(t) != 0)
@@ -1317,12 +1364,15 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
     const double stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
     const double bucketsPerSecond = asset->sampleRate / session::WaveformPeaks::kFramesPerBucket;
 
-    // Stereo files show their two channels (left above right), mono files one.
+    // Stereo files show their two channels (left above right), mono files one; a clip that plays one
+    // channel of its file (a track split into mono) shows that channel.
+    const int chosen = session::clip::getSourceChannel(c);
     const auto firstX = static_cast<int>(std::floor(visible.getX()));
     const auto lastX = static_cast<int>(std::ceil(visible.getRight()));
-    waveform::paintChannels(g, area, std::min(peaks.numChannels, 2), firstX, lastX, colour.withAlpha(0.85f),
-                            [&](int channel, int x)
+    waveform::paintChannels(g, area, chosen >= 0 ? 1 : std::min(peaks.numChannels, 2), firstX, lastX, colour.withAlpha(0.85f),
+                            [&](int lane, int x)
                             {
+                                const int channel = chosen >= 0 ? std::min(chosen, peaks.numChannels - 1) : lane;
                                 const double sourceT0 = offset + (xToTime(static_cast<float>(x)) - start) / stretch;
                                 const double sourceT1 = offset + (xToTime(static_cast<float>(x + 1)) - start) / stretch;
                                 const int b0 = juce::jlimit(0, numBuckets - 1, static_cast<int>(std::floor(sourceT0 * bucketsPerSecond)));
@@ -1600,6 +1650,12 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
         session::track::setCollapsed(t, !session::track::isCollapsed(t), nullptr);
         return;
     }
+
+    // An inactive track's solo, mute and arm do nothing (it does not play).
+    if (!session::Session::isEffectivelyActive(t))
+        for (const int button : {1, 2, 3})
+            if (getHeaderButton(rowIndex, button).contains(position))
+                return;
 
     // Solo, mute and arm switch every selected track when the clicked one is part of the selection.
     const auto targets = inSelection ? selectedTracksInOrder(false) : std::vector<juce::ValueTree>{t};
@@ -2452,6 +2508,24 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
                      if (safe != nullptr)
                          actions::groupSelectedTracksIntoFolder(safe->session_, safe->editor_);
                  });
+    const auto runCommand = [safe](int id)
+    {
+        return [safe, id]
+        {
+            if (safe != nullptr && safe->onCommand)
+                safe->onCommand(id);
+        };
+    };
+    menu.addItem(outermost.size() > 1 ? "Duplicate " + juce::String(outermost.size()) + " Tracks..." : juce::String("Duplicate..."),
+                 runCommand(commands::duplicateTracks));
+    menu.addItem("Split into Mono", !actions::getSplittableTracks(session_, editor_).empty(), false, runCommand(commands::splitIntoMono));
+    const bool anyActive = std::any_of(selection.begin(), selection.end(), [](const juce::ValueTree& tree) { return session::track::isActive(tree); });
+    menu.addItem(anyActive ? "Make Inactive" : "Make Active", withTracks(idsOf(selection), [anyActive](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                                                         {
+                                                                             self.session_.beginTransaction(anyActive ? "Make Inactive" : "Make Active");
+                                                                             for (auto tree : trees)
+                                                                                 session::track::setActive(tree, !anyActive, &self.session_.getUndoManager());
+                                                                         }));
     if (session::track::isFolder(t))
         menu.addItem(session::track::isCollapsed(t) ? "Expand Folder" : "Collapse Folder",
                      withTrack([](ArrangerView&, juce::ValueTree tree)

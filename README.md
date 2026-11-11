@@ -12,6 +12,15 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Solo follows the routing: soloing a track keeps the busses it feeds audible, soloing a bus keeps its sources audible.
 - **Plug-in delay compensation** aligns every path that meets at a bus or the master.
 - The graph renders on **all CPU cores**: independent tracks run in parallel.
+- Audio tracks and aux inputs (busses) are **mono or stereo**. A mono track plays its clips as one signal, or one chosen channel of each clip's file. It also records one input channel.
+
+**Track menu**
+- **New...** (Ctrl+Shift+N) adds one or more tracks in one go. Each row is a count, a format (mono or stereo), a type (audio track, aux input, instrument track or folder) and a name; + and - add and remove rows. The tracks go after the selected track (inside its folder) or at the end.
+- **Duplicate...** (Alt+Shift+D) makes any number of copies of the selected tracks. You choose whether the copies get the clips, automation, devices (with their current settings) and sends. Each copy goes right after its source, or all of them after the last selected track. A folder is copied with its contents; routing inside it points at the copies.
+- **Delete** removes the selected tracks (undoable).
+- **Split into Mono** gives each selected stereo audio track one mono track per channel ("Name.L", "Name.R"). They are panned hard left and right, play and record that channel, and get the source's devices, sends and automation; the source track stays.
+- **Make Inactive / Make Active**: an inactive track (or everything in an inactive folder) is not played and its devices use no CPU. Tracks routed into an inactive bus are silent. Inactive tracks are dimmed and can't be soloed, muted or recorded.
+- **Scroll to Track...** takes a track number (or a pick from the list), selects that track and brings it to the top of the arranger (opening collapsed folders) and the left of the mixer.
 
 **Recording and MIDI**
 - Pick each audio track's input (mono channel or stereo pair), arm it (R) and record (R key or the record button). Input monitoring: auto (while armed), always or off.
@@ -88,6 +97,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Space / Home | Play-stop / return to start |
 | R / L | Record / loop on-off |
 | Ctrl+T, Ctrl+Shift+T, Ctrl+B, Ctrl+Shift+F | Add audio track, instrument track, bus, folder |
+| Ctrl+Shift+N, Alt+Shift+D | New tracks, duplicate tracks |
 | Ctrl+Shift+G | Put the selected tracks into a new folder |
 | Ctrl+I, Ctrl+R | Import audio, export audio |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |

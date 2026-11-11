@@ -636,6 +636,15 @@ void AudioEngine::processTrack(int graphIndex) noexcept
         break;
     }
 
+    if (track.mono)
+    {
+        // A mono track carries one signal: fold whatever its sources produced (e.g. a stereo clip).
+        Sample* left = slot.main.getWritePointer(0);
+        Sample* right = slot.main.getWritePointer(1);
+        for (int i = 0; i < numSamples; ++i)
+            left[i] = right[i] = 0.5 * (left[i] + right[i]);
+    }
+
     for (const auto& device : track.devices)
     {
         const juce::AudioBuffer<Sample>* sidechain = nullptr;
