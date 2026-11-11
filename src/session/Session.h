@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace dojo::session
@@ -58,6 +59,9 @@ inline const juce::Identifier tempo        {"tempo"};
 inline const juce::Identifier masterVolume {"masterVolumeDb"};
 inline const juce::Identifier nextId       {"nextId"};
 inline const juce::Identifier loopEnabled  {"loopEnabled"};
+inline const juce::Identifier punchIn      {"punchIn"};
+inline const juce::Identifier punchOut     {"punchOut"};
+inline const juce::Identifier inputOnly    {"inputOnlyMonitoring"};
 inline const juce::Identifier loopStart    {"loopStart"};
 inline const juce::Identifier loopEnd      {"loopEnd"};
 inline const juce::Identifier speed        {"speed"};
@@ -319,6 +323,21 @@ public:
     void setLoop(bool enabled, double startSeconds, double endSeconds);
     void setLoopEnabled(bool enabled);
 
+    /** Punch recording: with punch-in on, recording starts at the loop start; with punch-out on, it
+        ends at the loop end. Playback (and monitoring) before and after is the track as it was. */
+    [[nodiscard]] bool isPunchInEnabled() const;
+    [[nodiscard]] bool isPunchOutEnabled() const;
+    void setPunchInEnabled(bool enabled);
+    void setPunchOutEnabled(bool enabled);
+    /** The part of the timeline recording keeps: [loop start or 0, loop end or no end). */
+    [[nodiscard]] std::pair<double, double> getPunchWindow() const;
+
+    /** How record-enabled tracks (with automatic monitoring) are monitored: Input Only (always the
+        input) or, when false, Auto Input (the input while stopped and while punched in; the track's
+        clips otherwise). Saved with the session. */
+    [[nodiscard]] bool isInputOnlyMonitoring() const;
+    void setInputOnlyMonitoring(bool inputOnly);
+
     /** Global playback speed (varispeed, 0.25..4). With keepPitch, audio keeps its pitch. */
     [[nodiscard]] double getSpeed() const;
     [[nodiscard]] bool getKeepPitch() const;
@@ -431,6 +450,10 @@ public:
 
     /** End time of the last clip (0 for an empty session). */
     [[nodiscard]] double getEndTime() const;
+
+    /** Removes everything on `track` between `start` and `end` (seconds): clips inside go, clips across
+        the edges are trimmed (or split, when they span the whole range). For recording over. */
+    void clearRange(juce::ValueTree track, double start, double end);
 
     // --- MIDI --------------------------------------------------------------------------------------
     juce::ValueTree addNote(juce::ValueTree midiClip, double startBeat, double lengthBeats, int noteNumber,

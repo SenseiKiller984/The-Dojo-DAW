@@ -192,6 +192,10 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     graph->loopEnd = session.getLoopEnd();
     graph->hasTransportSettings = true;
     graph->arrangementEnd = session.getEndTime();
+    graph->inputOnlyMonitoring = session.isInputOnlyMonitoring();
+    const auto [punchStart, punchEnd] = session.getPunchWindow();
+    graph->punchStart = punchStart;
+    graph->punchEnd = std::isfinite(punchEnd) ? punchEnd : 1.0e300;
     graph->masterGain = dbToGain(session.getMasterVolumeDb());
     graph->tracks.resize(count);
 

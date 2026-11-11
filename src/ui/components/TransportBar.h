@@ -66,6 +66,8 @@ private:
     IconButton stopButton_;
     IconButton recordButton_;
     IconButton loopButton_;
+    IconButton punchInButton_;
+    IconButton punchOutButton_;
     std::unique_ptr<ValueField> tempoField_;
     std::unique_ptr<ValueField> speedField_;
     std::unique_ptr<ValueField> transposeField_;
@@ -87,6 +89,8 @@ private:
     bool playing_ = false;
     bool recording_ = false;
     bool loopShown_ = false;
+    bool punchInShown_ = false;
+    bool punchOutShown_ = false;
     float dspLoad_ = 0.0f;
 };
 

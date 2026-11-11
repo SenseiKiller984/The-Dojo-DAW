@@ -55,6 +55,9 @@ enum : juce::CommandID
     splitIntoMono,
     toggleTrackActive,
     scrollToTrack,
+    togglePunchIn,
+    togglePunchOut,
+    toggleRecordMonitoring,
 };
 
 namespace categories

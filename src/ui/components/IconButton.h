@@ -17,6 +17,8 @@ public:
         record,
         loop,
         returnToStart,
+        punchIn,  ///< "[" with a record dot after it
+        punchOut, ///< a record dot with "]" after it
     };
 
     IconButton(const juce::String& name, Icon icon, juce::Colour activeColour);

@@ -25,7 +25,9 @@ namespace dojo::session
     closed and become clips (audio) or MIDI clips — one undo step. Clips are placed with latency
     compensation: everything the performer heard was late by the output latency plus the graph's
     plug-in latency, and audio input arrives a further input latency later. The loop range is
-    ignored while recording. Message thread only.
+    ignored while recording, except as the punch range: with punch-in / punch-out on, takes keep
+    only what falls between the loop start / end. A take replaces what was on its track where it
+    lies (one undo step with the recording). Message thread only.
 */
 class Recorder final : private juce::Timer
 {
@@ -82,6 +84,8 @@ private:
     std::uint32_t stopCountBefore_ = 0;
     juce::uint32 stopRequestedAt_ = 0;
     double stopPosition_ = 0.0;
+    double punchStart_ = 0.0; ///< the part of the timeline takes keep (punch in / out), from start()
+    double punchEnd_ = 0.0;
     double audioLatency_ = 0.0;
     double midiLatency_ = 0.0;
 };

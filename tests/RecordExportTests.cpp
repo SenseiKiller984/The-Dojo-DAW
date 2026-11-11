@@ -227,3 +227,180 @@ TEST_CASE("Offline export renders the mix and stems aligned to the timeline", "[
         CHECK(mix.audio.getMagnitude(0, 0, mix.audio.getNumSamples()) > 0.3f);
     }
 }
+
+namespace
+{
+/** Drives the engine like an audio device: every input sample is `inputLevel` (DC, both channels). */
+struct Device
+{
+    explicit Device(App& a)
+        : app(a)
+    {
+    }
+
+    /** Runs `seconds` and returns the left output. */
+    std::vector<float> run(double seconds, float inputLevel)
+    {
+        std::vector<float> out;
+        std::vector<float> inL(kBlock, inputLevel), inR(kBlock, inputLevel), outL(kBlock), outR(kBlock);
+        const float* inputs[2] = {inL.data(), inR.data()};
+        float* outputs[2] = {outL.data(), outR.data()};
+        for (int done = 0; done < static_cast<int>(seconds * kRate); done += kBlock)
+        {
+            app.engine.process(inputs, 2, outputs, 2, kBlock);
+            out.insert(out.end(), outL.begin(), outL.end());
+        }
+        return out;
+    }
+
+    App& app;
+};
+
+double meanOf(const std::vector<float>& x, double fromSeconds, double toSeconds)
+{
+    const auto from = static_cast<std::size_t>(fromSeconds * kRate);
+    const auto to = std::min(x.size(), static_cast<std::size_t>(toSeconds * kRate));
+    double sum = 0.0;
+    for (auto i = from; i < to; ++i)
+        sum += x[i];
+    return sum / static_cast<double>(to - from);
+}
+
+double toneOf(const std::vector<float>& x, double fromSeconds, double toSeconds)
+{
+    const auto from = static_cast<std::size_t>(fromSeconds * kRate);
+    const auto to = std::min(x.size(), static_cast<std::size_t>(toSeconds * kRate));
+    const double coefficient = 2.0 * std::cos(2.0 * 3.14159265358979323846 * 440.0 / kRate);
+    double s1 = 0.0, s2 = 0.0;
+    for (auto i = from; i < to; ++i)
+    {
+        const double s0 = x[i] + coefficient * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return 2.0 * std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - coefficient * s1 * s2)) / static_cast<double>(to - from);
+}
+
+std::vector<juce::ValueTree> clipsOf(const juce::ValueTree& t)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : t)
+        if (c.hasType(ids::clip))
+            clips.push_back(c);
+    std::sort(clips.begin(), clips.end(), [](const auto& a, const auto& b) { return clip::getStart(a) < clip::getStart(b); });
+    return clips;
+}
+} // namespace
+
+TEST_CASE("Clearing a range trims, splits and removes clips", "[session][record]")
+{
+    Session session;
+    auto t = session.addTrack("Take");
+    const auto file = juce::File::getCurrentWorkingDirectory().getChildFile("x.wav");
+    session.addClip(t, file, 0.0, 4.0);
+    session.addClip(t, file, 5.0, 1.0);
+    session.addClip(t, file, 7.0, 2.0);
+    session.addClip(t, file, 10.0, 10.0, 1.0);
+
+    session.beginTransaction("Clear");
+    session.clearRange(t, 3.0, 7.5);
+    session.clearRange(t, 12.0, 15.0);
+    auto clips = clipsOf(t);
+    REQUIRE(clips.size() == 4);
+    CHECK_THAT(clip::getStart(clips[0]), WithinAbs(0.0, 1e-9));
+    CHECK_THAT(clip::getEnd(clips[0]), WithinAbs(3.0, 1e-9)); // trimmed at the range start
+    CHECK_THAT(clip::getStart(clips[1]), WithinAbs(7.5, 1e-9)); // its start moved to the range end...
+    CHECK_THAT(clip::getEnd(clips[1]), WithinAbs(9.0, 1e-9));
+    CHECK_THAT(clip::getOffset(clips[1]), WithinAbs(0.5, 1e-9)); // ...and its source with it
+    CHECK_THAT(clip::getEnd(clips[2]), WithinAbs(12.0, 1e-9)); // split around the range
+    CHECK_THAT(clip::getStart(clips[3]), WithinAbs(15.0, 1e-9));
+    CHECK_THAT(clip::getOffset(clips[3]), WithinAbs(6.0, 1e-9));
+
+    session.getUndoManager().undo();
+    CHECK(clipsOf(t).size() == 4);
+    CHECK_THAT(clip::getEnd(clipsOf(t)[0]), WithinAbs(4.0, 1e-9));
+}
+
+TEST_CASE("Record-enabled tracks: Auto Input, Input Only, and punch recording", "[record][monitoring]")
+{
+    test::TempFolder temp;
+    App app;
+    app.engine.prepare(kRate, kBlock, 2, 2);
+    auto& session = app.project.getSession();
+    REQUIRE(app.project.saveAs(temp.dir.getChildFile("punch.dojo")).wasOk());
+
+    // The track already holds a take: a 440 Hz tone over 4 s.
+    const auto tone = test::writeWav(temp.dir.getChildFile("old take.wav"), test::sine(440.0, kRate, 4 * 48000, 0.25f), kRate);
+    juce::String error;
+    REQUIRE(app.project.getAssets().loadNow(tone, error) != nullptr);
+    auto t = session.addTrack("Vocal");
+    session.addClip(t, tone, 0.0, 4.0);
+    track::setInput(t, 0, true, nullptr);
+    track::setArmed(t, true, nullptr);
+    REQUIRE(track::getMonitor(t) == engine::MonitorMode::automatic);
+    app.project.getCompiler().rebuildNow();
+    Device device(app);
+
+    // Auto Input (the default), stopped: the input (DC 0.5).
+    auto out = device.run(0.2, 0.5f);
+    CHECK_THAT(meanOf(out, 0.1, 0.2), WithinAbs(0.5, 0.01));
+
+    // Playing (not recording): the track's clip, not the input.
+    app.controller.locateSeconds(0.0);
+    app.controller.play();
+    out = device.run(0.5, 0.5f);
+    CHECK_THAT(toneOf(out, 0.1, 0.5), WithinAbs(0.25, 0.01));
+    CHECK_THAT(meanOf(out, 0.1, 0.5), WithinAbs(0.0, 0.01));
+
+    // Input Only: the input, never the clip.
+    session.setInputOnlyMonitoring(true);
+    app.project.getCompiler().rebuildNow();
+    out = device.run(0.5, 0.5f);
+    CHECK_THAT(meanOf(out, 0.1, 0.5), WithinAbs(0.5, 0.01));
+    CHECK(toneOf(out, 0.1, 0.5) < 0.01);
+    app.controller.stop();
+    session.setInputOnlyMonitoring(false);
+
+    // Punch in at 1 s, out at 2 s (the loop range; the loop itself stays off).
+    session.setLoop(false, 1.0, 2.0);
+    session.setPunchInEnabled(true);
+    session.setPunchOutEnabled(true);
+    app.project.getCompiler().rebuildNow();
+    device.run(0.05, 0.5f);
+
+    Recorder recorder(app.project, app.controller);
+    REQUIRE(recorder.start().isEmpty());
+    app.controller.locateSeconds(0.0);
+    out = device.run(3.0, 0.5f);
+    recorder.stop();
+    device.run(0.01, 0.5f); // acknowledges StopCapture
+    REQUIRE(test::pumpMessagesUntil([&] { return !recorder.isBusy(); }));
+
+    // What was heard: the old take, the input while punched in, the old take again.
+    CHECK_THAT(toneOf(out, 0.2, 0.95), WithinAbs(0.25, 0.01));
+    CHECK_THAT(meanOf(out, 0.2, 0.95), WithinAbs(0.0, 0.01));
+    CHECK_THAT(meanOf(out, 1.05, 1.95), WithinAbs(0.5, 0.01));
+    CHECK(toneOf(out, 1.05, 1.95) < 0.01);
+    CHECK_THAT(toneOf(out, 2.05, 2.9), WithinAbs(0.25, 0.01));
+
+    // What was kept: the new take between 1 and 2 s, replacing the old one there.
+    const auto clips = clipsOf(t);
+    REQUIRE(clips.size() == 3);
+    CHECK(clip::getFile(clips[0]) == tone);
+    CHECK_THAT(clip::getEnd(clips[0]), WithinAbs(1.0, 1e-9));
+    CHECK(clip::getFile(clips[1]) != tone);
+    CHECK_THAT(clip::getStart(clips[1]), WithinAbs(1.0, 1e-9));
+    CHECK_THAT(clip::getEnd(clips[1]), WithinAbs(2.0, 1e-9));
+    CHECK_THAT(clip::getOffset(clips[1]), WithinAbs(1.0, 1e-9)); // the recording started at 0
+    CHECK(clip::getFile(clips[2]) == tone);
+    CHECK_THAT(clip::getStart(clips[2]), WithinAbs(2.0, 1e-9));
+    CHECK_THAT(clip::getOffset(clips[2]), WithinAbs(2.0, 1e-9));
+
+    const auto recorded = decode(clip::getFile(clips[1]));
+    CHECK_THAT(recorded.audio.getSample(0, static_cast<int>(1.5 * kRate)), WithinAbs(0.5, 1e-3));
+
+    // One undo step brings the old take back whole.
+    REQUIRE(session.getUndoManager().undo());
+    REQUIRE(clipsOf(t).size() == 1);
+    CHECK_THAT(clip::getEnd(clipsOf(t)[0]), WithinAbs(4.0, 1e-9));
+}

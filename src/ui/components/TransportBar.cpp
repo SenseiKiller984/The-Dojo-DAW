@@ -138,6 +138,8 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     , stopButton_("Stop", IconButton::Icon::stop, theme::colour::textPrimary)
     , recordButton_("Record", IconButton::Icon::record, theme::colour::record)
     , loopButton_("Loop", IconButton::Icon::loop, theme::colour::gold)
+    , punchInButton_("Punch In", IconButton::Icon::punchIn, theme::colour::record)
+    , punchOutButton_("Punch Out", IconButton::Icon::punchOut, theme::colour::record)
 {
     tempoField_ = std::make_unique<ValueField>(
         session, ValueField::Spec{"BPM", session::ids::tempo, [this] { return session_.getTempo(); },
@@ -175,6 +177,8 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     stopButton_.setTooltip("Stop. Press again to return to start.");
     recordButton_.setTooltip("Record onto the armed tracks (R)");
     loopButton_.setTooltip("Loop playback between the loop markers (L). Drag in the ruler's top strip to set them.");
+    punchInButton_.setTooltip("Punch in: recording starts at the loop start (the track plays as it was until then)");
+    punchOutButton_.setTooltip("Punch out: recording ends at the loop end (the track plays as it was after it)");
 
     returnButton_.onClick = [this]
     {
@@ -210,6 +214,8 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
         session_.beginTransaction("Toggle Loop");
         session_.setLoopEnabled(!session_.isLoopEnabled());
     };
+    punchInButton_.onClick = [this] { session_.setPunchInEnabled(!session_.isPunchInEnabled()); };
+    punchOutButton_.onClick = [this] { session_.setPunchOutEnabled(!session_.isPunchOutEnabled()); };
 
     snapButton_.setButtonText("SNAP");
     snapButton_.setTooltip("Snap clip edits to the grid (hold Alt or Shift while dragging to bypass)");
@@ -255,7 +261,7 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     };
 
     for (auto* child : std::initializer_list<juce::Component*>{
-             &returnButton_, &playButton_, &stopButton_, &recordButton_, &loopButton_, tempoField_.get(),
+             &returnButton_, &playButton_, &stopButton_, &recordButton_, &loopButton_, &punchInButton_, &punchOutButton_, tempoField_.get(),
              speedField_.get(), &keepPitchButton_, transposeField_.get(), &snapButton_, &gridBox_, &testToneButton_,
              &audioSettingsButton_})
         addAndMakeVisible(child);
@@ -307,6 +313,16 @@ void TransportBar::update(const engine::TelemetrySnapshot& telemetry, double sam
         loopShown_ = session_.isLoopEnabled();
         loopButton_.setLit(loopShown_);
     }
+    if (session_.isPunchInEnabled() != punchInShown_)
+    {
+        punchInShown_ = session_.isPunchInEnabled();
+        punchInButton_.setLit(punchInShown_);
+    }
+    if (session_.isPunchOutEnabled() != punchOutShown_)
+    {
+        punchOutShown_ = session_.isPunchOutEnabled();
+        punchOutButton_.setLit(punchOutShown_);
+    }
 
     if (keepPitchButton_.getToggleState() != session_.getKeepPitch())
         keepPitchButton_.setToggleState(session_.getKeepPitch(), juce::dontSendNotification);
@@ -338,9 +354,17 @@ void TransportBar::resized()
         button->setBounds(buttons.removeFromLeft(kButtonSize));
         buttons.removeFromLeft(kButtonGap);
     }
+    // Punch in / out, smaller, next to the loop button whose range they use.
+    area.removeFromLeft(kButtonGap);
+    constexpr int kPunchSize = 28;
+    for (auto* button : {&punchInButton_, &punchOutButton_})
+    {
+        button->setBounds(area.removeFromLeft(kPunchSize).withSizeKeepingCentre(kPunchSize, kPunchSize));
+        area.removeFromLeft(2);
+    }
 
-    area.removeFromLeft(12);
-    positionArea_ = area.removeFromLeft(232).withSizeKeepingCentre(232, 44);
+    area.removeFromLeft(10);
+    positionArea_ = area.removeFromLeft(216).withSizeKeepingCentre(216, 44);
     area.removeFromLeft(8);
     tempoField_->setBounds(area.removeFromLeft(92).withSizeKeepingCentre(92, 44));
     area.removeFromLeft(6);

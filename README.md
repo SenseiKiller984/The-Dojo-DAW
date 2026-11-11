@@ -23,7 +23,12 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Scroll to Track...** takes a track number (or a pick from the list), selects that track and brings it to the top of the arranger (opening collapsed folders) and the left of the mixer.
 
 **Recording and MIDI**
-- Pick each audio track's input (mono channel or stereo pair), arm it (R) and record (R key or the record button). Input monitoring: auto (while armed), always or off.
+- Pick each audio track's input (mono channel or stereo pair), arm it (R) and record (R key or the record button). Each track's monitoring is AUTO, IN (always the input) or OFF.
+- **Track > Set Record Tracks to Input Only / Auto Input** decides what record-enabled tracks on AUTO hear:
+  - **Input Only**: always their input.
+  - **Auto Input** (tape-machine style, the default): the input while stopped. While playing, the track's own clips. While recording, the input from the punch-in point to the punch-out point, and the clips before and after.
+- **Punch In / Punch Out** (the buttons next to the loop button, or the Transport menu) use the loop range. A take keeps only what lies between the punch points; red brackets in the ruler show them.
+- A take replaces what was on its track where it lies; one undo brings the old take back whole.
 - MIDI keyboards are enabled automatically, also when plugged in while The Dojo runs. Armed instrument tracks play and record live MIDI (notes, controllers, pitch bend).
 - Recorded clips are placed with **latency compensation** (input + output + plug-in latency).
 

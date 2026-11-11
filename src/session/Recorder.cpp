@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 
 #include <map>
+#include <tuple>
 
 namespace dojo::session
 {
@@ -139,6 +140,7 @@ juce::String Recorder::start()
 
     audioLatency_ = getAudioLatencySeconds();
     midiLatency_ = getMidiLatencySeconds();
+    std::tie(punchStart_, punchEnd_) = session.getPunchWindow();
     capture_ = std::move(capture);
     takes_ = std::move(takes);
     midiTracks_ = std::move(midiTracks);
@@ -211,20 +213,21 @@ void Recorder::finish()
             continue;
         }
 
-        double start = captureStart - audioLatency_;
-        double offset = 0.0;
-        double clipLength = length;
-        if (start < 0.0)
-        {
-            offset = -start;
-            clipLength -= offset;
-            start = 0.0;
-        }
+        // The take covers [start, start + length) of the timeline; keep what lies in the punch window.
+        const double start = captureStart - audioLatency_;
+        const double keepFrom = std::max({start, 0.0, punchStart_});
+        const double keepTo = std::min(start + length, punchEnd_);
 
-        if (clipLength > kMinClipLength)
+        if (keepTo - keepFrom > kMinClipLength)
         {
             project_.getAssets().request(take.file, {});
-            session.addClip(t, take.file, start, clipLength, offset);
+            session.clearRange(t, keepFrom, keepTo); // the take replaces what was there
+            session.addClip(t, take.file, keepFrom, keepTo - keepFrom, keepFrom - start);
+        }
+        else
+        {
+            take.stream.reset();
+            take.file.deleteFile(); // nothing of it is inside the punch window
         }
     }
 
@@ -308,6 +311,24 @@ void Recorder::createMidiClips(double captureStart, double stopPosition)
         notes.push_back({pending.startBeat, std::max(endBeat, pending.startBeat + kMinNoteLength), key % 128, key / 128,
                          pending.velocity});
 
+    // Keep the punch window: notes that start in it (ending by its end) and controllers in it.
+    const double keepFrom = std::max(clipStart, punchStart_);
+    const double keepTo = std::min(clipEnd, punchEnd_);
+    if (keepTo - keepFrom <= kMinClipLength)
+        return;
+    const double fromBeat = (keepFrom - clipStart) * beatsPerSecond;
+    const double toBeat = (keepTo - clipStart) * beatsPerSecond;
+    std::vector<Note> keptNotes;
+    for (const auto& n : notes)
+        if (n.startBeat >= fromBeat && n.startBeat < toBeat)
+            keptNotes.push_back({n.startBeat - fromBeat, std::min(n.endBeat, toBeat) - fromBeat, n.note, n.channel, n.velocity});
+    std::vector<Control> keptControls;
+    for (const auto& c : controls)
+        if (c.beat >= fromBeat && c.beat < toBeat)
+            keptControls.push_back({c.beat - fromBeat, c.controller, c.channel, c.value});
+    notes = std::move(keptNotes);
+    controls = std::move(keptControls);
+
     if (notes.empty() && controls.empty())
         return;
 
@@ -317,7 +338,8 @@ void Recorder::createMidiClips(double captureStart, double stopPosition)
         if (!t.isValid())
             continue;
 
-        auto clipTree = session.addMidiClip(t, clipStart, clipEnd - clipStart, track::getName(t) + " take");
+        session.clearRange(t, keepFrom, keepTo); // the take replaces what was there
+        auto clipTree = session.addMidiClip(t, keepFrom, keepTo - keepFrom, track::getName(t) + " take");
         for (const auto& n : notes)
             session.addNote(clipTree, n.startBeat, n.endBeat - n.startBeat, n.note, n.velocity, n.channel);
         for (const auto& c : controls)

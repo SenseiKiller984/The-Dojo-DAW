@@ -459,6 +459,26 @@ TEST_CASE("Track menu commands in the main window; Scroll to Track moves the arr
 
         CHECK_FALSE(main.scrollToTrackNumber(0));
         CHECK_FALSE(main.scrollToTrackNumber(session.getNumTracks() + 1));
+
+        // Set Record Tracks to Input Only / Auto Input: named after what it switches to.
+        main.getCommandInfo(ui::commands::toggleRecordMonitoring, info);
+        CHECK(info.shortName == "Set Record Tracks to Input Only");
+        REQUIRE(commands.invokeDirectly(ui::commands::toggleRecordMonitoring, false));
+        CHECK(session.isInputOnlyMonitoring());
+        main.getCommandInfo(ui::commands::toggleRecordMonitoring, info);
+        CHECK(info.shortName == "Set Record Tracks to Auto Input");
+        REQUIRE(commands.invokeDirectly(ui::commands::toggleRecordMonitoring, false));
+        CHECK_FALSE(session.isInputOnlyMonitoring());
+
+        // Punch in / out (Transport menu), ticked while on.
+        REQUIRE(commands.invokeDirectly(ui::commands::togglePunchIn, false));
+        main.getCommandInfo(ui::commands::togglePunchIn, info);
+        CHECK((info.flags & juce::ApplicationCommandInfo::isTicked) != 0);
+        CHECK(session.isPunchInEnabled());
+        CHECK_FALSE(session.isPunchOutEnabled());
+        REQUIRE(commands.invokeDirectly(ui::commands::togglePunchOut, false));
+        CHECK(session.isPunchOutEnabled());
+        CHECK(session.getPunchWindow() == std::pair{session.getLoopStart(), session.getLoopEnd()});
     }
 
     // The mixer: the strip as close to the left as possible.

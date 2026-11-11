@@ -218,7 +218,10 @@ private:
     void processTrack(int graphIndex) noexcept;
     void renderAudioClips(const RenderTrack& track, SlotState& slot) noexcept;
     void renderMidiClips(const RenderTrack& track, SlotState& slot) noexcept;
-    void addMonitoredInput(const RenderTrack& track, SlotState& slot) noexcept;
+    /** Adds the track's input channels to its buffer, for samples [from, to) of the block. */
+    void addInput(const RenderTrack& track, SlotState& slot, int from, int to) noexcept;
+    /** An audio track's sources: its clips and/or its input, as its monitoring says. */
+    void renderAudioTrackSources(const RenderTrack& track, SlotState& slot) noexcept;
     void sumBusSources(const RenderTrack& track, SlotState& slot) noexcept;
     void applyFader(const RenderTrack& track, SlotState& slot) noexcept;
     void applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept;

@@ -316,7 +316,10 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    duplicateTracks,
                                    splitIntoMono,
                                    toggleTrackActive,
-                                   scrollToTrack};
+                                   scrollToTrack,
+                                   togglePunchIn,
+                                   togglePunchOut,
+                                   toggleRecordMonitoring};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -454,6 +457,23 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     case scrollToTrack:
         info.setInfo("Scroll to Track...", "Bring a track (by its number) into view", categories::track, 0);
         info.setActive(session.getNumTracks() > 0);
+        break;
+    case togglePunchIn:
+        info.setInfo("Punch In", "Recording starts at the loop start", categories::transport, 0);
+        info.setTicked(session.isPunchInEnabled());
+        break;
+    case togglePunchOut:
+        info.setInfo("Punch Out", "Recording ends at the loop end", categories::transport, 0);
+        info.setTicked(session.isPunchOutEnabled());
+        break;
+    case toggleRecordMonitoring:
+        // Named after what it switches to.
+        if (session.isInputOnlyMonitoring())
+            info.setInfo("Set Record Tracks to Auto Input",
+                         "Record-enabled tracks hear their input while stopped and while punched in, and their clips otherwise",
+                         categories::track, 0);
+        else
+            info.setInfo("Set Record Tracks to Input Only", "Record-enabled tracks always hear their input", categories::track, 0);
         break;
 
     case preferences:
@@ -635,6 +655,15 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case scrollToTrack:
         showScrollToTrackDialog();
+        break;
+    case togglePunchIn:
+        session.setPunchInEnabled(!session.isPunchInEnabled());
+        break;
+    case togglePunchOut:
+        session.setPunchOutEnabled(!session.isPunchOutEnabled());
+        break;
+    case toggleRecordMonitoring:
+        session.setInputOnlyMonitoring(!session.isInputOnlyMonitoring());
         break;
     case audioSettings:
         showAudioSettings();

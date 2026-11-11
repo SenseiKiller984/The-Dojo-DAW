@@ -182,6 +182,10 @@ struct RenderGraph
     double loopEnd = 0.0;
     bool hasTransportSettings = false; ///< apply speed/loop from this graph when it is swapped in
     double arrangementEnd = 0.0;       ///< end of the last clip (for "stop at the end"); 0 = no clips
+    // Recording: what armed audio tracks with automatic monitoring hear.
+    bool inputOnlyMonitoring = false; ///< always their input; otherwise Auto Input (tape-style)
+    double punchStart = 0.0;          ///< while recording, the input is heard from here...
+    double punchEnd = 1.0e300;        ///< ...to here (the track's clips before and after)
 
     double masterGain = 1.0;
     AutomationCurve masterVolumeAutomation;

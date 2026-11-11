@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -455,6 +456,19 @@ void Session::setLoop(bool enabled, double startSeconds, double endSeconds)
 }
 
 void Session::setLoopEnabled(bool enabled) { state_.setProperty(ids::loopEnabled, enabled, &undo_); }
+
+bool Session::isPunchInEnabled() const { return state_.getProperty(ids::punchIn, false); }
+bool Session::isPunchOutEnabled() const { return state_.getProperty(ids::punchOut, false); }
+void Session::setPunchInEnabled(bool enabled) { state_.setProperty(ids::punchIn, enabled, nullptr); }
+void Session::setPunchOutEnabled(bool enabled) { state_.setProperty(ids::punchOut, enabled, nullptr); }
+
+std::pair<double, double> Session::getPunchWindow() const
+{
+    return {isPunchInEnabled() ? getLoopStart() : 0.0, isPunchOutEnabled() ? getLoopEnd() : std::numeric_limits<double>::infinity()};
+}
+
+bool Session::isInputOnlyMonitoring() const { return state_.getProperty(ids::inputOnly, false); }
+void Session::setInputOnlyMonitoring(bool inputOnly) { state_.setProperty(ids::inputOnly, inputOnly, nullptr); }
 
 double Session::getSpeed() const { return state_.getProperty(ids::speed, 1.0); }
 bool Session::getKeepPitch() const { return state_.getProperty(ids::keepPitch, false); }
@@ -1019,6 +1033,43 @@ juce::ValueTree Session::pasteClip(const juce::ValueTree& original, juce::ValueT
     copy.setProperty(ids::start, std::max(0.0, start), nullptr);
     t.addChild(copy, -1, &undo_);
     return copy;
+}
+
+void Session::clearRange(juce::ValueTree t, double start, double end)
+{
+    if (!t.isValid() || end <= start)
+        return;
+
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : t)
+        if (isClip(c))
+            clips.push_back(c);
+
+    for (auto c : clips)
+    {
+        const double clipStart = clip::getStart(c);
+        const double clipEnd = clip::getEnd(c);
+        if (clipEnd <= start || clipStart >= end)
+            continue;
+
+        if (clipStart < start)
+        {
+            // Keep the part before the range (and, if the clip runs past it, the part after).
+            if (clipEnd > end)
+                splitClip(c, end);
+            clip::setLength(c, start - clipStart, &undo_);
+        }
+        else if (clipEnd > end)
+        {
+            // Starts inside: keep the part after the range.
+            if (splitClip(c, end).isValid())
+                removeClip(c);
+        }
+        else
+        {
+            removeClip(c);
+        }
+    }
 }
 
 juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)

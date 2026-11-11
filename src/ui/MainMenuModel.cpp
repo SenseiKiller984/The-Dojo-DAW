@@ -63,6 +63,8 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, groupIntoFolder);
         menu.addCommandItem(cm, toggleTrackActive);
         menu.addSeparator();
+        menu.addCommandItem(cm, toggleRecordMonitoring);
+        menu.addSeparator();
         menu.addCommandItem(cm, scrollToTrack);
         break;
     case 3:
@@ -71,6 +73,8 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, returnToStart);
         menu.addSeparator();
         menu.addCommandItem(cm, toggleLoop);
+        menu.addCommandItem(cm, togglePunchIn);
+        menu.addCommandItem(cm, togglePunchOut);
         break;
     case 4:
         menu.addCommandItem(cm, zoomIn);

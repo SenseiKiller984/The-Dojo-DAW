@@ -98,6 +98,22 @@ juce::Path IconButton::createGlyph(Icon icon, juce::Rectangle<float> r)
         break;
     }
 
+    case Icon::punchIn:
+    case Icon::punchOut:
+    {
+        // A bracket on the punch side, and the record dot inside it.
+        const float stroke = r.getWidth() * 0.13f;
+        const bool in = icon == Icon::punchIn;
+        const float bracketX = in ? r.getX() : r.getRight() - stroke;
+        const float tick = r.getWidth() * 0.28f;
+        p.addRectangle(bracketX, r.getY(), stroke, r.getHeight());
+        p.addRectangle(in ? bracketX : bracketX - tick + stroke, r.getY(), tick, stroke);
+        p.addRectangle(in ? bracketX : bracketX - tick + stroke, r.getBottom() - stroke, tick, stroke);
+        const float dot = r.getWidth() * 0.46f;
+        p.addEllipse(in ? r.getRight() - dot : r.getX(), r.getCentreY() - dot * 0.5f, dot, dot);
+        break;
+    }
+
     case Icon::loop:
     {
         juce::Path outline;

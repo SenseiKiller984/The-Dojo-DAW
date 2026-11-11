@@ -863,6 +863,21 @@ void ArrangerView::paintRuler(juce::Graphics& g) const
                                                   static_cast<float>(strip.getHeight()) - 2.0f),
                            3.0f);
 
+    // Punch in / out: red brackets at the loop edges (recording keeps only what lies between them).
+    const auto punchMark = [&](float x, bool in)
+    {
+        const auto top = static_cast<float>(strip.getY());
+        const auto height = static_cast<float>(ruler.getBottom()) - top;
+        g.setColour(colour::record);
+        g.fillRect(in ? x : x - 2.0f, top, 2.0f, height);
+        g.fillRect(in ? x : x - 7.0f, top, 7.0f, 2.0f);
+        g.fillRect(in ? x : x - 7.0f, top + height - 2.0f, 7.0f, 2.0f);
+    };
+    if (session_.isPunchInEnabled())
+        punchMark(loopX0, true);
+    if (session_.isPunchOutEnabled())
+        punchMark(loopX1, false);
+
     const double beatSeconds = 60.0 / getTempo();
     const double barSeconds = beatSeconds * kBeatsPerBar;
     const double barPixels = barSeconds * pixelsPerSecond_;

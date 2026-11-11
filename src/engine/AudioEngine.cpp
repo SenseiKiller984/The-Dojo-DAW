@@ -619,9 +619,7 @@ void AudioEngine::processTrack(int graphIndex) noexcept
     switch (track.kind)
     {
     case TrackKind::audio:
-        if (playing_)
-            renderAudioClips(track, slot);
-        addMonitoredInput(track, slot);
+        renderAudioTrackSources(track, slot);
         break;
 
     case TrackKind::instrument:
@@ -774,16 +772,62 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
     }
 }
 
-void AudioEngine::addMonitoredInput(const RenderTrack& track, SlotState& slot) noexcept
+void AudioEngine::renderAudioTrackSources(const RenderTrack& track, SlotState& slot) noexcept
 {
-    const bool monitoring = track.monitor == MonitorMode::always || (track.monitor == MonitorMode::automatic && track.armed);
-    if (!monitoring || track.inputChannel < 0 || track.inputChannel >= numInputs_)
+    const int numSamples = currentNumSamples_;
+
+    if (!(track.monitor == MonitorMode::automatic && track.armed))
+    {
+        // Not record-enabled with automatic monitoring: the clips, plus the input when monitoring is "IN".
+        if (playing_)
+            renderAudioClips(track, slot);
+        if (track.monitor == MonitorMode::always)
+            addInput(track, slot, 0, numSamples);
+        return;
+    }
+
+    // Record-enabled. Input Only: always the input. Auto Input (tape style): the input while stopped
+    // and while recording inside the punch window; the track's clips while playing otherwise.
+    int from = 0;
+    int to = numSamples;
+    if (playing_ && !graph_->inputOnlyMonitoring)
+    {
+        const bool recording = capture_ != nullptr && (!capture_->inputs.empty() || capture_->captureMidi);
+        if (!recording)
+        {
+            from = to = 0;
+        }
+        else
+        {
+            const auto sampleAt = [&](double seconds)
+            {
+                const double position = std::ceil((seconds - blockStartSeconds_) / secondsPerSample_ - 1.0e-9);
+                return static_cast<int>(std::clamp(position, 0.0, static_cast<double>(numSamples)));
+            };
+            from = sampleAt(graph_->punchStart);
+            to = std::max(from, sampleAt(graph_->punchEnd));
+        }
+
+        if (from > 0 || to < numSamples)
+        {
+            renderAudioClips(track, slot);
+            if (to > from)
+                for (int ch = 0; ch < 2; ++ch)
+                    slot.main.clear(ch, from, to - from);
+        }
+    }
+
+    addInput(track, slot, from, to);
+}
+
+void AudioEngine::addInput(const RenderTrack& track, SlotState& slot, int from, int to) noexcept
+{
+    if (to <= from || track.inputChannel < 0 || track.inputChannel >= numInputs_)
         return;
 
-    const int numSamples = currentNumSamples_;
     const int second = track.inputStereo && track.inputChannel + 1 < numInputs_ ? track.inputChannel + 1 : track.inputChannel;
-    slot.main.addFrom(0, 0, inputBus_, track.inputChannel, 0, numSamples);
-    slot.main.addFrom(1, 0, inputBus_, second, 0, numSamples);
+    slot.main.addFrom(0, from, inputBus_, track.inputChannel, from, to - from);
+    slot.main.addFrom(1, from, inputBus_, second, from, to - from);
 }
 
 void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexcept
