@@ -389,8 +389,9 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress('t', cmd);
         break;
     case deleteTrack:
-        info.setInfo("Delete Track", "Delete the selected track and its clips", categories::track, 0);
-        info.setActive(session.findTrack(editor_.getSelectedTrack()).isValid());
+        info.setInfo(actions::getSelectedTracks(session, editor_).size() > 1 ? "Delete Tracks" : "Delete Track",
+                     "Delete the selected tracks and their clips", categories::track, 0);
+        info.setActive(!actions::getSelectedTracks(session, editor_).empty());
         break;
 
     case playStop:
@@ -466,8 +467,8 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress('f', cmd | shift);
         break;
     case groupIntoFolder:
-        info.setInfo("Group into Folder", "Put the selected track into a new folder", categories::track, 0);
-        info.setActive(session.findTrack(editor_.getSelectedTrack()).isValid());
+        info.setInfo("Group into Folder", "Put the selected tracks into a new folder", categories::track, 0);
+        info.setActive(!actions::getSelectedTracks(session, editor_).empty());
         info.addDefaultKeypress('g', cmd | shift);
         break;
     case showMixer:
@@ -561,7 +562,7 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         actions::addTrack(session, editor_);
         break;
     case deleteTrack:
-        actions::deleteSelectedTrack(session, editor_);
+        actions::deleteSelectedTracks(session, editor_);
         break;
 
     case playStop:
@@ -619,7 +620,7 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         actions::addFolder(session, editor_);
         break;
     case groupIntoFolder:
-        actions::groupSelectedTrackIntoFolder(session, editor_);
+        actions::groupSelectedTracksIntoFolder(session, editor_);
         break;
     case showMixer:
         showBottomTab(BottomTab::mixer);
@@ -965,7 +966,11 @@ void MainComponent::showShortcutHelp()
         "name to rename it; drag a track header to reorder; right-click for more.\n\n"
         "Selecting clips: drag in empty space to draw a selection box (Ctrl or Shift adds to\n"
         "the selection); Ctrl+click adds or removes one clip; Shift+click selects every clip on\n"
-        "that track from the last clicked clip to this one (Ctrl+Shift+click adds that range).";
+        "that track from the last clicked clip to this one (Ctrl+Shift+click adds that range).\n\n"
+        "Selecting tracks: in the track headers, Shift+click selects every track from the last\n"
+        "clicked one to this one, Ctrl+click adds or removes one (Ctrl+Shift+click adds a range).\n"
+        "Ctrl+Shift+G groups the selected tracks into a new folder; drag one of their headers to\n"
+        "move them all; M, S and R on one of them switch all of them.";
 
     messageBox_ = juce::AlertWindow::showScopedAsync(juce::MessageBoxOptions()
                                                          .withIconType(juce::MessageBoxIconType::InfoIcon)

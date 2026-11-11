@@ -382,7 +382,17 @@ void ChannelStrip::mouseDoubleClick(const juce::MouseEvent& e)
 
 void ChannelStrip::mouseDown(const juce::MouseEvent& e)
 {
-    editor_.selectTrack(session::track::getId(track_));
+    // Ctrl / Shift on the strip itself select like in the arranger's track headers.
+    const auto trackId = session::track::getId(track_);
+    if (e.eventComponent == this && (e.mods.isCommandDown() || e.mods.isShiftDown()) && !e.mods.isPopupMenu())
+    {
+        std::vector<std::uint32_t> order;
+        for (const auto& t : session_.getAllTracks())
+            order.push_back(session::track::getId(t));
+        editor_.selectTrackWithModifiers(trackId, e.mods.isCommandDown(), e.mods.isShiftDown(), order);
+        return;
+    }
+    editor_.selectTrack(trackId);
 
     // Right-click on a send: pre/post fader, remove.
     for (auto& control : sends_)
@@ -467,7 +477,7 @@ void ChannelStrip::paint(juce::Graphics& g)
 {
     using namespace theme;
 
-    const bool selected = session::track::getId(track_) == editor_.getSelectedTrack();
+    const bool selected = editor_.isTrackSelected(session::track::getId(track_));
     auto bounds = getLocalBounds();
 
     g.setColour(selected ? colour::panelHeader.brighter(0.05f) : colour::panel);

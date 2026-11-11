@@ -47,10 +47,15 @@ juce::ValueTree addInstrumentTrack(session::Session& session, EditorState& edito
 /** Adds an empty folder below the selected track and selects it. */
 juce::ValueTree addFolder(session::Session& session, EditorState& editor);
 
-/** Puts the selected track into a new folder. */
-juce::ValueTree groupSelectedTrackIntoFolder(session::Session& session, EditorState& editor);
+/** The selected tracks that still exist, in arranger order, without those inside another selected
+    track (a selected folder brings its contents along). */
+std::vector<juce::ValueTree> getSelectedTracks(const session::Session& session, const EditorState& editor);
 
-/** Deletes the selected track (with its clips). Returns false if no track is selected. */
-bool deleteSelectedTrack(session::Session& session, EditorState& editor);
+/** Puts the selected tracks into a new folder where the topmost of them is (tracks from other
+    folders move in too), and selects the folder. */
+juce::ValueTree groupSelectedTracksIntoFolder(session::Session& session, EditorState& editor);
+
+/** Deletes the selected tracks (with their clips). Returns false if no track is selected. */
+bool deleteSelectedTracks(session::Session& session, EditorState& editor);
 
 } // namespace dojo::ui::actions

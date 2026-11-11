@@ -21,6 +21,11 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 **Editing**
 - Audio clips: move (also across tracks), trim, fades, split, duplicate, cut/copy/paste; overlapping clips **crossfade** (equal power).
 - Selecting clips like files in Explorer: **drag a box** in empty space (Ctrl/Shift adds to the selection), **Ctrl+click** adds or removes a clip, **Shift+click** selects every clip on that track from the last clicked one (Ctrl+Shift+click adds that range).
+- Selecting tracks the same way, in the track headers (or on mixer strips): **Shift+click** selects every track from the last one clicked to this one, **Ctrl+click** adds or removes one track, **Ctrl+Shift+click** adds a range. Then:
+  - **Ctrl+Shift+G** or *Group into New Folder* puts all of them into one new folder, in their order. Tracks from different folders are moved in too.
+  - Dragging one of their headers moves them all (drop them inside a folder to move them into it).
+  - M, S and R on one of them switch all of them.
+  - The right-click menu's colour, output, move into or out of a folder and delete apply to all of them.
 - Stereo clips show **both channels** (left above right), mono clips one waveform.
 - **Time-stretch and pitch-shift** per clip (Signalsmith Stretch), plus per-track speed and pitch.
 - Global **speed** (varispeed, or *keep pitch*) and **transpose**.
@@ -83,7 +88,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Space / Home | Play-stop / return to start |
 | R / L | Record / loop on-off |
 | Ctrl+T, Ctrl+Shift+T, Ctrl+B, Ctrl+Shift+F | Add audio track, instrument track, bus, folder |
-| Ctrl+Shift+G | Put the selected track into a new folder |
+| Ctrl+Shift+G | Put the selected tracks into a new folder |
 | Ctrl+I, Ctrl+R | Import audio, export audio |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+X / C / V, Delete, Ctrl+D, Ctrl+E, Ctrl+A | Cut / copy / paste, delete, duplicate, split at playhead, select all clips |

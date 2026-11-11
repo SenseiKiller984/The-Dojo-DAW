@@ -333,7 +333,11 @@ public:
     juce::ValueTree addTrack(TrackKind kind, const juce::String& name, int index = -1);
     /** Adds an empty folder (a bus that sums the tracks inside it). */
     juce::ValueTree addFolder(const juce::String& name = {}, int index = -1);
-    /** Wraps `tracks` (which must share one parent) in a new folder at the first one's position. */
+    /** `tracks` in arranger order, without those inside another of them (a folder brings its
+        contents along) and without any that are not in the session. */
+    [[nodiscard]] std::vector<juce::ValueTree> outermostInOrder(const std::vector<juce::ValueTree>& tracks) const;
+    /** Wraps `tracks` in a new folder, placed where the first of them (in arranger order) is. Tracks
+        from other folders move into it too; their order is kept. Invalid if there is nothing to group. */
     juce::ValueTree groupIntoFolder(const std::vector<juce::ValueTree>& tracks, const juce::String& name = {});
 
     /** Removes a track (and, for a folder, everything inside it). */
@@ -341,6 +345,10 @@ public:
     /** Moves the track at index `fromIndex` (with its contents) to sit in front of the track at
         `toIndex`, inside that track's folder (or to the end of the top level for toIndex >= count). */
     void moveTrack(int fromIndex, int toIndex);
+    /** Moves several tracks (each with its contents) in front of the track at `toIndex`, inside that
+        track's folder, keeping their order (toIndex >= count: to the end of the top level). Dropping
+        them onto themselves changes nothing. */
+    void moveTracks(const std::vector<juce::ValueTree>& tracks, int toIndex);
     /** Moves a track into `folder` (at its end), or to the top level if `folder` is invalid. */
     bool moveIntoFolder(const juce::ValueTree& track, const juce::ValueTree& folder);
 

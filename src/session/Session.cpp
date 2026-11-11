@@ -566,43 +566,48 @@ juce::ValueTree Session::addFolder(const juce::String& name, int index)
     return t;
 }
 
+std::vector<juce::ValueTree> Session::outermostInOrder(const std::vector<juce::ValueTree>& tracks) const
+{
+    const auto listed = [&tracks](const juce::ValueTree& t) { return std::find(tracks.begin(), tracks.end(), t) != tracks.end(); };
+    std::vector<juce::ValueTree> ordered;
+    for (const auto& t : getAllTracks())
+    {
+        if (!listed(t))
+            continue;
+        bool nested = false;
+        for (auto parent = getParentFolder(t); parent.isValid() && !nested; parent = getParentFolder(parent))
+            nested = listed(parent);
+        if (!nested)
+            ordered.push_back(t);
+    }
+    return ordered;
+}
+
 juce::ValueTree Session::groupIntoFolder(const std::vector<juce::ValueTree>& tracks, const juce::String& name)
 {
-    if (tracks.empty())
+    const auto ordered = outermostInOrder(tracks);
+    if (ordered.empty())
         return {};
 
-    auto parent = tracks.front().getParent();
-    for (const auto& t : tracks)
-        if (t.getParent() != parent)
-            return {};
+    auto parent = ordered.front().getParent();
+    const int insertAt = parent.indexOf(ordered.front());
 
     juce::ValueTree folderTree(ids::track);
     const int count = getNumTracks();
     folderTree.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
     folderTree.setProperty(ids::name, name.isNotEmpty() ? name : defaultTrackName(TrackKind::bus, true, count + 1), nullptr);
-    folderTree.setProperty(ids::colour, track::getColour(tracks.front()).toString(), nullptr);
+    folderTree.setProperty(ids::colour, track::getColour(ordered.front()).toString(), nullptr);
     folderTree.setProperty(ids::kind, toString(TrackKind::bus), nullptr);
     folderTree.setProperty(ids::folder, true, nullptr);
     folderTree.setProperty(ids::volume, 0.0, nullptr);
     folderTree.setProperty(ids::pan, 0.0, nullptr);
-
-    int insertAt = parent.getNumChildren();
-    for (const auto& t : tracks)
-        insertAt = std::min(insertAt, parent.indexOf(t));
-
     parent.addChild(folderTree, insertAt, &undo_);
 
-    // Keep the tracks' order: sort by their current position.
-    auto ordered = tracks;
-    std::sort(ordered.begin(), ordered.end(), [&](const auto& a, const auto& b) { return parent.indexOf(a) < parent.indexOf(b); });
-
-    for (const auto& t : ordered)
+    for (auto t : ordered)
     {
-        auto copy = t; // removeChild invalidates nothing, but keep a handle
-        parent.removeChild(copy, &undo_);
-        folderTree.addChild(copy, -1, &undo_);
+        t.getParent().removeChild(t, &undo_);
+        folderTree.addChild(t, -1, &undo_);
     }
-
     return folderTree;
 }
 
@@ -649,6 +654,24 @@ void Session::moveTrack(int fromIndex, int toIndex)
 
     oldParent.removeChild(moving, &undo_);
     newParent.addChild(moving, before.isValid() ? newParent.indexOf(before) : -1, &undo_);
+}
+
+void Session::moveTracks(const std::vector<juce::ValueTree>& tracks, int toIndex)
+{
+    const auto moving = outermostInOrder(tracks);
+    const auto all = getAllTracks();
+    const int count = static_cast<int>(all.size());
+
+    // Dropping onto (or inside) one of the moving tracks means just after them.
+    const auto isMoving = [&moving](const juce::ValueTree& t)
+    { return std::any_of(moving.begin(), moving.end(), [&t](const juce::ValueTree& m) { return isWithin(t, m); }); };
+    int target = toIndex;
+    while (target >= 0 && target < count && isMoving(all[static_cast<std::size_t>(target)]))
+        ++target;
+    const juce::ValueTree before = target >= 0 && target < count ? all[static_cast<std::size_t>(target)] : juce::ValueTree();
+
+    for (const auto& t : moving)
+        moveTrack(indexOf(t), before.isValid() ? indexOf(before) : getNumTracks());
 }
 
 bool Session::moveIntoFolder(const juce::ValueTree& t, const juce::ValueTree& folderTree)

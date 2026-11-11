@@ -182,6 +182,42 @@ int ArrangerView::rowOfTrack(const juce::ValueTree& t) const
     return -1;
 }
 
+std::vector<std::uint32_t> ArrangerView::shownTrackOrder() const
+{
+    std::vector<std::uint32_t> order;
+    for (const int r : trackRows())
+        order.push_back(session::track::getId(rows()[static_cast<std::size_t>(r)].track));
+    return order;
+}
+
+std::vector<juce::ValueTree> ArrangerView::selectedTracksInOrder(bool outermostOnly) const
+{
+    if (outermostOnly)
+        return actions::getSelectedTracks(session_, editor_);
+    std::vector<juce::ValueTree> selected;
+    for (const auto& t : session_.getAllTracks())
+        if (editor_.isTrackSelected(session::track::getId(t)))
+            selected.push_back(t);
+    return selected;
+}
+
+void ArrangerView::selectTrackWithModifiers(const juce::ValueTree& track, juce::ModifierKeys mods)
+{
+    editor_.selectTrackWithModifiers(session::track::getId(track), mods.isCommandDown(), mods.isShiftDown(), shownTrackOrder());
+}
+
+juce::Rectangle<int> ArrangerView::getTrackHeaderArea(const juce::ValueTree& track) const
+{
+    const int row = rowOfTrack(track);
+    return row >= 0 ? getRowBounds(row).withWidth(theme::metrics::trackHeaderWidth) : juce::Rectangle<int>();
+}
+
+juce::Rectangle<int> ArrangerView::getTrackButtonArea(const juce::ValueTree& track, int indexFromRight) const
+{
+    const int row = rowOfTrack(track);
+    return row >= 0 ? getHeaderButton(row, indexFromRight) : juce::Rectangle<int>();
+}
+
 std::vector<int> ArrangerView::trackRows() const
 {
     std::vector<int> result;
@@ -871,14 +907,19 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
     using namespace theme;
 
     const auto& t = row.track;
-    const bool selected = session::track::getId(t) == editor_.getSelectedTrack();
+    const bool selected = editor_.isTrackSelected(session::track::getId(t));
     const auto trackColour = session::track::getColour(t);
     const bool folder = session::track::isFolder(t);
     const auto kind = session::track::getKind(t);
     auto bounds = getRowBounds(rowIndex).withWidth(metrics::trackHeaderWidth);
 
-    g.setColour(selected ? colour::panelHeader.brighter(0.06f) : (folder ? colour::panelHeader : colour::panelRaised));
+    g.setColour(selected ? colour::controlHover : (folder ? colour::panelHeader : colour::panelRaised));
     g.fillRect(bounds);
+    if (selected) // clearly marked, so a multi-selection reads at a glance
+    {
+        g.setColour(colour::accent.withAlpha(0.75f));
+        g.drawRect(bounds.withTrimmedLeft(4).withTrimmedBottom(1), 1);
+    }
     g.setColour(colour::outline);
     g.fillRect(bounds.removeFromBottom(1));
     g.setColour(trackColour);
@@ -1003,7 +1044,6 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
     g.fillRect(lanes);
 
     const auto& all = rows();
-    const auto selectedTrack = editor_.getSelectedTrack();
 
     int trackOrdinal = 0;
     for (std::size_t i = 0; i < all.size(); ++i)
@@ -1021,7 +1061,7 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
         }
         else
         {
-            const bool selected = session::track::getId(all[i].track) == selectedTrack;
+            const bool selected = editor_.isTrackSelected(session::track::getId(all[i].track));
             const bool folder = session::track::isFolder(all[i].track);
             g.setColour(selected ? colour::laneOdd.brighter(0.05f)
                                  : folder ? colour::panelRaised
@@ -1424,7 +1464,8 @@ void ArrangerView::locateTo(double seconds)
 
 void ArrangerView::mouseDown(const juce::MouseEvent& e)
 {
-    grabKeyboardFocus();
+    if (isShowing()) // (a component off screen cannot take the focus)
+        grabKeyboardFocus();
 
     dragMode_ = DragMode::none;
     dragMoved_ = false;
@@ -1524,10 +1565,11 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
     const auto position = e.getPosition();
     auto t = row.track;
     auto* um = &session_.getUndoManager();
-    editor_.selectTrack(session::track::getId(t));
+    const auto trackId = session::track::getId(t);
 
     if (row.kind == Row::Kind::automation)
     {
+        editor_.selectTrack(trackId);
         const auto close = juce::Rectangle<int>(theme::metrics::trackHeaderWidth - 26, getRowBounds(rowIndex).getY() + 6, 16, 16);
         if (close.contains(position))
         {
@@ -1539,8 +1581,16 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
         return;
     }
 
+    // A track of a multi-selection keeps the selection for its buttons, its menu and drags; any
+    // other track is selected on its own.
+    const bool inSelection = editor_.isTrackSelected(trackId) && editor_.getSelectedTracks().size() > 1;
+    if (!inSelection && !(e.mods.isCommandDown() || e.mods.isShiftDown()))
+        editor_.selectTrack(trackId);
+
     if (e.mods.isPopupMenu())
     {
+        if (!inSelection)
+            editor_.selectTrack(trackId);
         showTrackMenu(t);
         return;
     }
@@ -1551,6 +1601,8 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
         return;
     }
 
+    // Solo, mute and arm switch every selected track when the clicked one is part of the selection.
+    const auto targets = inSelection ? selectedTracksInOrder(false) : std::vector<juce::ValueTree>{t};
     const auto kind = session::track::getKind(t);
     if (getHeaderButton(rowIndex, 0).contains(position))
     {
@@ -1564,22 +1616,39 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
     if (getHeaderButton(rowIndex, 1).contains(position))
     {
         session_.beginTransaction("Solo");
-        session::track::setSoloed(t, !session::track::isSoloed(t), um);
+        const bool on = !session::track::isSoloed(t);
+        for (auto target : targets)
+            session::track::setSoloed(target, on, um);
         return;
     }
     if (getHeaderButton(rowIndex, 2).contains(position))
     {
         session_.beginTransaction("Mute");
-        session::track::setMuted(t, !session::track::isMuted(t), um);
+        const bool on = !session::track::isMuted(t);
+        for (auto target : targets)
+            session::track::setMuted(target, on, um);
         return;
     }
     if (kind != session::TrackKind::bus && getHeaderButton(rowIndex, 3).contains(position))
     {
         session_.beginTransaction("Arm Track");
-        session::track::setArmed(t, !session::track::isArmed(t), um);
+        const bool on = !session::track::isArmed(t);
+        for (auto target : targets)
+            if (session::track::getKind(target) != session::TrackKind::bus)
+                session::track::setArmed(target, on, um);
         return;
     }
 
+    // Ctrl / Shift: select like files in Explorer.
+    if (e.mods.isCommandDown() || e.mods.isShiftDown())
+    {
+        selectTrackWithModifiers(t, e.mods);
+        return;
+    }
+
+    // Dragging the header moves the track (or every selected track); a click without a drag on a
+    // track of a multi-selection selects only that track (on release, so the drag can happen first).
+    pendingTrackClick_ = inSelection ? trackId : 0u;
     dragMode_ = DragMode::reorderTrack;
     reorderTrack_ = t;
     reorderTargetRow_ = rowIndex;
@@ -1906,7 +1975,13 @@ void ArrangerView::mouseUp(const juce::MouseEvent& e)
         if (reorderTargetRow_ >= 0 && reorderTargetRow_ < static_cast<int>(all.size()))
             to = session_.indexOf(all[static_cast<std::size_t>(reorderTargetRow_)].track);
 
-        if (from >= 0 && to != from && to != from + 1)
+        if (editor_.isTrackSelected(session::track::getId(reorderTrack_)) && editor_.getSelectedTracks().size() > 1)
+        {
+            // The whole selection moves, in order (into a folder if dropped inside one).
+            session_.beginTransaction("Move Tracks");
+            session_.moveTracks(selectedTracksInOrder(true), to);
+        }
+        else if (from >= 0 && to != from && to != from + 1)
         {
             session_.beginTransaction("Move Track");
             session_.moveTrack(from, to);
@@ -1933,6 +2008,10 @@ void ArrangerView::mouseUp(const juce::MouseEvent& e)
     // A plain click on a clip that was part of a multi-selection selects just that clip.
     if (dragMode_ == DragMode::moveClips && !dragMoved_ && !e.mods.isAnyModifierKeyDown())
         editor_.selectClip(dragAnchorId_, false);
+    // Likewise for a track header.
+    if (dragMode_ == DragMode::reorderTrack && !dragMoved_ && pendingTrackClick_ != 0 && !e.mods.isAnyModifierKeyDown())
+        editor_.selectTrack(pendingTrackClick_);
+    pendingTrackClick_ = 0;
 
     dragMode_ = DragMode::none;
     dragMoved_ = false;
@@ -2244,61 +2323,112 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
         };
     };
 
+    // Colour, output, folder moves, grouping and deleting apply to every selected track (the clicked
+    // one is always among them: a right-click elsewhere selects it alone).
+    auto selection = selectedTracksInOrder(false);
+    if (std::find(selection.begin(), selection.end(), t) == selection.end())
+        selection = {t};
+    auto outermost = session_.outermostInOrder(selection);
+    const bool multiple = selection.size() > 1;
+    const auto idsOf = [](const std::vector<juce::ValueTree>& tracks)
+    {
+        std::vector<std::uint32_t> ids;
+        for (const auto& tree : tracks)
+            ids.push_back(session::track::getId(tree));
+        return ids;
+    };
+    const auto withTracks = [safe](std::vector<std::uint32_t> ids, auto fn)
+    {
+        return [safe, ids, fn]
+        {
+            if (safe == nullptr)
+                return;
+            std::vector<juce::ValueTree> trees;
+            for (const auto id : ids)
+                if (auto tree = safe->session_.findTrack(id); tree.isValid())
+                    trees.push_back(tree);
+            if (!trees.empty())
+                fn(*safe, trees);
+        };
+    };
+    const auto all = [](const std::vector<juce::ValueTree>& tracks, auto predicate)
+    { return std::all_of(tracks.begin(), tracks.end(), predicate); };
+
     juce::PopupMenu colours;
     const auto& palette = session::getTrackPalette();
     for (std::size_t i = 0; i < palette.size(); ++i)
     {
         juce::PopupMenu::Item item(kColourNames[i]);
         item.colour = palette[i];
-        item.isTicked = session::track::getColour(t) == palette[i];
-        item.action = withTrack([colour = palette[i]](ArrangerView& self, juce::ValueTree tree)
-                                {
-                                    self.session_.beginTransaction("Track Colour");
-                                    session::track::setColour(tree, colour, &self.session_.getUndoManager());
-                                });
+        item.isTicked = all(selection, [&](const juce::ValueTree& tree) { return session::track::getColour(tree) == palette[i]; });
+        item.action = withTracks(idsOf(selection), [colour = palette[i]](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                 {
+                                     self.session_.beginTransaction("Track Colour");
+                                     for (auto tree : trees)
+                                         session::track::setColour(tree, colour, &self.session_.getUndoManager());
+                                 });
         colours.addItem(item);
     }
 
     // Output routing: master (or the folder), or any bus that would not create a loop.
     juce::PopupMenu output;
     const auto folderTree = session::Session::getParentFolder(t);
-    output.addItem(folderTree.isValid() ? "Folder (" + session::track::getName(folderTree) + ")" : juce::String("Master"), true,
-                   session::track::getOutput(t) == 0, withTrack([](ArrangerView& self, juce::ValueTree tree)
-                                                                {
-                                                                    self.session_.beginTransaction("Route Track");
-                                                                    session::track::setOutput(tree, 0, &self.session_.getUndoManager());
-                                                                }));
+    const juce::String direct = multiple ? juce::String("Master / Folder")
+                                : folderTree.isValid() ? "Folder (" + session::track::getName(folderTree) + ")"
+                                                       : juce::String("Master");
+    output.addItem(direct, true, all(selection, [](const juce::ValueTree& tree) { return session::track::getOutput(tree) == 0; }),
+                   withTracks(idsOf(selection), [](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                              {
+                                  self.session_.beginTransaction("Route Track");
+                                  for (auto tree : trees)
+                                      session::track::setOutput(tree, 0, &self.session_.getUndoManager());
+                              }));
     for (const auto& bus : session_.getBusses())
     {
-        if (bus == t || bus == folderTree)
+        const bool own = std::any_of(selection.begin(), selection.end(), [&bus](const juce::ValueTree& tree)
+                                     { return bus == tree || bus == session::Session::getParentFolder(tree); });
+        if (own)
             continue;
         const auto busId = session::track::getId(bus);
-        output.addItem(session::track::getName(bus), session_.canFeed(t, bus), session::track::getOutput(t) == busId,
-                       withTrack([busId](ArrangerView& self, juce::ValueTree tree)
-                                 {
-                                     self.session_.beginTransaction("Route Track");
-                                     session::track::setOutput(tree, busId, &self.session_.getUndoManager());
-                                 }));
+        output.addItem(session::track::getName(bus), all(selection, [&](const juce::ValueTree& tree) { return session_.canFeed(tree, bus); }),
+                       all(selection, [busId](const juce::ValueTree& tree) { return session::track::getOutput(tree) == busId; }),
+                       withTracks(idsOf(selection), [busId](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                  {
+                                      self.session_.beginTransaction("Route Track");
+                                      for (auto tree : trees)
+                                          session::track::setOutput(tree, busId, &self.session_.getUndoManager());
+                                  }));
     }
 
-    // Folders to move into.
+    // Folders to move into (not one of the tracks moving, nor inside one).
     juce::PopupMenu folders;
     for (const auto& candidate : session_.getAllTracks())
-        if (session::track::isFolder(candidate) && !session::Session::isWithin(candidate, t) && candidate != folderTree)
-        {
-            const auto folderId = session::track::getId(candidate);
-            folders.addItem(session::track::getName(candidate), withTrack([folderId](ArrangerView& self, juce::ValueTree tree)
-                                                                          {
-                                                                              self.session_.beginTransaction("Move into Folder");
-                                                                              self.session_.moveIntoFolder(tree, self.session_.findTrack(folderId));
-                                                                          }));
-        }
+    {
+        if (!session::track::isFolder(candidate))
+            continue;
+        const bool inside = std::any_of(outermost.begin(), outermost.end(), [&candidate](const juce::ValueTree& tree)
+                                        { return session::Session::isWithin(candidate, tree); });
+        const bool already = all(outermost, [&candidate](const juce::ValueTree& tree) { return session::Session::getParentFolder(tree) == candidate; });
+        if (inside || already)
+            continue;
+        const auto folderId = session::track::getId(candidate);
+        folders.addItem(session::track::getName(candidate),
+                        withTracks(idsOf(outermost), [folderId](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                   {
+                                       self.session_.beginTransaction("Move into Folder");
+                                       for (const auto& tree : trees)
+                                           self.session_.moveIntoFolder(tree, self.session_.findTrack(folderId));
+                                   }));
+    }
+    const bool anyInFolder = std::any_of(outermost.begin(), outermost.end(), [](const juce::ValueTree& tree)
+                                         { return session::Session::getParentFolder(tree).isValid(); });
 
     juce::PopupMenu automationMenu;
     addAutomationMenuItems(automationMenu, t);
 
     juce::PopupMenu menu;
-    menu.addSectionHeader(session::track::getName(t) + "  (" + kindLabel(t) + ")");
+    menu.addSectionHeader(multiple ? juce::String(selection.size()) + " tracks selected"
+                                   : session::track::getName(t) + "  (" + kindLabel(t) + ")");
     menu.addItem("Rename", withTrack([](ArrangerView& self, juce::ValueTree tree)
                                      {
                                          const int row = self.rowOfTrack(tree);
@@ -2310,15 +2440,17 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
     menu.addSubMenu("Add Automation Lane", automationMenu);
     menu.addSeparator();
     menu.addSubMenu("Move into Folder", folders, folders.getNumItems() > 0);
-    menu.addItem("Move out of Folder", folderTree.isValid(), false, withTrack([](ArrangerView& self, juce::ValueTree tree)
-                                                                              {
-                                                                                  self.session_.beginTransaction("Move out of Folder");
-                                                                                  self.session_.moveIntoFolder(tree, {});
-                                                                              }));
-    menu.addItem("Group into New Folder", [safe]
+    menu.addItem("Move out of Folder", anyInFolder, false,
+                 withTracks(idsOf(outermost), [](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                            {
+                                self.session_.beginTransaction("Move out of Folder");
+                                for (const auto& tree : trees)
+                                    self.session_.moveIntoFolder(tree, {});
+                            }));
+    menu.addItem(outermost.size() > 1 ? "Group " + juce::String(outermost.size()) + " Tracks into New Folder" : juce::String("Group into New Folder"), [safe]
                  {
                      if (safe != nullptr)
-                         actions::groupSelectedTrackIntoFolder(safe->session_, safe->editor_);
+                         actions::groupSelectedTracksIntoFolder(safe->session_, safe->editor_);
                  });
     if (session::track::isFolder(t))
         menu.addItem(session::track::isCollapsed(t) ? "Expand Folder" : "Collapse Folder",
@@ -2333,10 +2465,10 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
     menu.addItem("Add Bus", [safe] { if (safe != nullptr) actions::addTrack(safe->session_, safe->editor_, session::TrackKind::bus); });
     menu.addItem("Add Folder", [safe] { if (safe != nullptr) actions::addFolder(safe->session_, safe->editor_); });
     menu.addSeparator();
-    menu.addItem("Delete Track", [safe]
+    menu.addItem(outermost.size() > 1 ? "Delete " + juce::String(outermost.size()) + " Tracks" : juce::String("Delete Track"), [safe]
                  {
                      if (safe != nullptr)
-                         actions::deleteSelectedTrack(safe->session_, safe->editor_);
+                         actions::deleteSelectedTracks(safe->session_, safe->editor_);
                  });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());

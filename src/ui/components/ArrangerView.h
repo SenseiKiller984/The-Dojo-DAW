@@ -126,6 +126,16 @@ public:
     /** Where a clip is drawn, in this component's coordinates (empty if its track is not shown). */
     [[nodiscard]] juce::Rectangle<int> getClipArea(const juce::ValueTree& clip) const;
 
+    // --- Track selection (what clicks on track headers do; public for tests) -------------------------
+    /** A click on a track's header: plain selects only it, Ctrl adds or removes it, Shift selects every
+        track shown between the anchor (the last track clicked without Shift) and it; Ctrl+Shift adds
+        that range. */
+    void selectTrackWithModifiers(const juce::ValueTree& track, juce::ModifierKeys mods);
+    /** Where a track's header is drawn, in component coordinates (empty if the track is not shown). */
+    [[nodiscard]] juce::Rectangle<int> getTrackHeaderArea(const juce::ValueTree& track) const;
+    /** A header's toggle, counted from the right: 0 automation (A), 1 solo (S), 2 mute (M), 3 arm (R). */
+    [[nodiscard]] juce::Rectangle<int> getTrackButtonArea(const juce::ValueTree& track, int indexFromRight) const;
+
 private:
     struct Row
     {
@@ -199,6 +209,11 @@ private:
     [[nodiscard]] int rowAt(int y) const; ///< -1 if none
     [[nodiscard]] int rowOfTrack(const juce::ValueTree& track) const;
     [[nodiscard]] std::vector<int> trackRows() const;
+    /** The ids of the tracks shown, top to bottom. */
+    [[nodiscard]] std::vector<std::uint32_t> shownTrackOrder() const;
+    /** The selected tracks in arranger order (all of them, or only the outermost: a selected folder's
+        selected contents left out). */
+    [[nodiscard]] std::vector<juce::ValueTree> selectedTracksInOrder(bool outermostOnly) const;
 
     // Geometry
     [[nodiscard]] juce::Rectangle<int> getRulerArea() const;
@@ -317,6 +332,7 @@ private:
     double dragSourceLength_ = 0.0;
     juce::ValueTree reorderTrack_;
     int reorderTargetRow_ = -1;
+    std::uint32_t pendingTrackClick_ = 0; ///< a click (no drag) on a track of a multi-selection selects only it
     juce::ValueTree dragPoint_;
     int dragPointRow_ = -1;
     double loopDragStart_ = 0.0;

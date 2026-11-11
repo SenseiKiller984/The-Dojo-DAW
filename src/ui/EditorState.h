@@ -39,9 +39,23 @@ public:
     void setSelectedClips(std::set<std::uint32_t> clipIds);
     void clearClipSelection();
 
+    /** The current track (the last one clicked): its devices are shown, new tracks go below it. */
     [[nodiscard]] std::uint32_t getSelectedTrack() const noexcept { return selectedTrack_; }
-    /** Selects a track (and deselects the master). */
+    /** Every selected track (includes the current one). May hold ids of tracks deleted since. */
+    [[nodiscard]] const std::set<std::uint32_t>& getSelectedTracks() const noexcept { return selectedTracks_; }
+    [[nodiscard]] bool isTrackSelected(std::uint32_t trackId) const { return selectedTracks_.count(trackId) > 0; }
+    /** Selects only this track (and deselects the master); it becomes the anchor for Shift ranges. */
     void selectTrack(std::uint32_t trackId);
+    /**
+        Explorer-like track selection; `order` lists the track ids top to bottom as shown.
+        - neither: only `trackId` (as selectTrack)
+        - toggle (Ctrl): adds or removes `trackId`, which becomes the anchor; the last selected
+          track stays selected
+        - range (Shift): the tracks from the anchor to `trackId` replace the selection; the anchor stays
+        - toggle and range (Ctrl+Shift): that range is added to the selection
+        The clicked track becomes the current one, unless Ctrl removed it.
+    */
+    void selectTrackWithModifiers(std::uint32_t trackId, bool toggle, bool range, const std::vector<std::uint32_t>& order);
 
     /** The master bus is selected (its devices are shown in the Devices panel). */
     [[nodiscard]] bool isMasterSelected() const noexcept { return masterSelected_; }
@@ -82,6 +96,8 @@ private:
 
     std::set<std::uint32_t> selectedClips_;
     std::uint32_t selectedTrack_ = 0;
+    std::set<std::uint32_t> selectedTracks_;
+    std::uint32_t trackAnchor_ = 0;
     bool masterSelected_ = false;
     std::uint32_t editedClip_ = 0;
     std::vector<ClipboardEntry> clipboard_;

@@ -223,30 +223,43 @@ juce::ValueTree addFolder(session::Session& session, EditorState& editor)
     return folder;
 }
 
-juce::ValueTree groupSelectedTrackIntoFolder(session::Session& session, EditorState& editor)
+std::vector<juce::ValueTree> getSelectedTracks(const session::Session& session, const EditorState& editor)
 {
-    const auto selected = session.findTrack(editor.getSelectedTrack());
-    if (!selected.isValid())
+    std::vector<juce::ValueTree> selected;
+    for (const auto id : editor.getSelectedTracks())
+        if (const auto t = session.findTrack(id); t.isValid())
+            selected.push_back(t);
+    if (selected.empty()) // e.g. a selection set before multi-selection existed
+        if (const auto t = session.findTrack(editor.getSelectedTrack()); t.isValid())
+            selected.push_back(t);
+    return session.outermostInOrder(selected);
+}
+
+juce::ValueTree groupSelectedTracksIntoFolder(session::Session& session, EditorState& editor)
+{
+    const auto selected = getSelectedTracks(session, editor);
+    if (selected.empty())
         return {};
-    session.beginTransaction("Group into Folder");
-    auto folder = session.groupIntoFolder({selected});
+    session.beginTransaction(selected.size() > 1 ? "Group Tracks into Folder" : "Group into Folder");
+    auto folder = session.groupIntoFolder(selected);
     if (folder.isValid())
         editor.selectTrack(session::track::getId(folder));
     return folder;
 }
 
-bool deleteSelectedTrack(session::Session& session, EditorState& editor)
+bool deleteSelectedTracks(session::Session& session, EditorState& editor)
 {
-    const auto selected = session.findTrack(editor.getSelectedTrack());
-    if (!selected.isValid())
+    const auto selected = getSelectedTracks(session, editor);
+    if (selected.empty())
         return false;
 
-    const int index = session.indexOf(selected);
-    session.beginTransaction("Delete Track");
-    session.removeTrack(selected);
+    const int index = session.indexOf(selected.front());
+    session.beginTransaction(selected.size() > 1 ? "Delete Tracks" : "Delete Track");
+    for (const auto& t : selected)
+        session.removeTrack(t);
     editor.clearClipSelection();
 
-    // Keep a sensible selection: the track that moved into the deleted one's place, or the new last.
+    // Keep a sensible selection: the track that moved into the first deleted one's place, or the new last.
     const int count = session.getNumTracks();
     editor.selectTrack(count > 0 ? session::track::getId(session.getTrack(juce::jmin(index, count - 1)))
                                  : 0u);

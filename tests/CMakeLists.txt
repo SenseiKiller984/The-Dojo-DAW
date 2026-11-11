@@ -28,6 +28,7 @@ add_executable(dojo_tests
     MusicalTimeTests.cpp
     RenderGraphTests.cpp
     SelectionTests.cpp
+    TrackSelectionTests.cpp
     SessionTests.cpp
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
