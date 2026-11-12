@@ -91,7 +91,8 @@ void MainWindow::showPreferences(ui::Preferences::Tab tab)
             {
                 if (mainComponent_ != nullptr)
                     mainComponent_->showShortcutHelp();
-            });
+            },
+            [this] { return static_cast<int>(services_.controller.getLastTelemetry().surroundRendering); });
     preferencesWindow_->showTab(tab);
 }
 

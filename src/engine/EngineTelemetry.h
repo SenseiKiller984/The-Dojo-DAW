@@ -54,6 +54,8 @@ struct EngineTelemetry
     /** Master peaks per channel of the master's layout, max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxChannels)> masterPeaks{};
     std::atomic<int> masterChannels{2};
+    /** How the master reached the device in the last block (a SurroundRendering). */
+    std::atomic<int> surroundRendering{0};
 
     /** Device input peaks per channel, max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxInputChannels)> inputPeaks{};
@@ -65,12 +67,24 @@ struct EngineTelemetry
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 };
 
+/** What the output stage did with the master in the last block. */
+enum class SurroundRendering : int
+{
+    stereo,      ///< a mono or stereo master
+    discrete,    ///< an output per master channel
+    frontPair,   ///< the front left and right only (Standard on a device with fewer outputs)
+    foldDown,    ///< the ITU fold-down to stereo
+    virtualizer, ///< the advanced virtualizer
+    device,      ///< the device's surround channels, in its order
+};
+
 /** A plain copy of the telemetry, taken on the message thread once per UI frame. */
 struct TelemetrySnapshot
 {
     float masterPeakLeft = 0.0f;
     float masterPeakRight = 0.0f;
     int masterChannels = 2;                         ///< channels of the master's layout
+    SurroundRendering surroundRendering = SurroundRendering::stereo;
     std::array<float, kMaxChannels> masterPeaks{}; ///< per master channel
     float dspLoad = 0.0f;
     float dspLoadPeak = 0.0f;

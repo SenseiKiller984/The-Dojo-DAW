@@ -57,6 +57,8 @@ add_library(dojo_ui STATIC
     devices/DeviceEditors.h
     devices/ParameterControl.cpp
     devices/ParameterControl.h
+    devices/TempoDetectPanel.cpp
+    devices/TempoDetectPanel.h
     theme/DojoLookAndFeel.cpp
     theme/DojoLookAndFeel.h
     theme/DojoTheme.h

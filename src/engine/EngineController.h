@@ -49,6 +49,8 @@ public:
     void locateSeconds(double seconds);
     void setLoop(bool enabled, double startSeconds, double endSeconds);
     void setSpeed(double rate);
+    /** How a surround master reaches the device (see command::SetSurroundMonitoring). */
+    void setSurroundMonitoring(command::SurroundMonitoring mode, bool speakers, double room, bool alsaOrder);
     /** Stop when playback reaches the end of the last clip (see command::SetStopAtEnd). */
     void setStopAtEnd(bool enabled);
 

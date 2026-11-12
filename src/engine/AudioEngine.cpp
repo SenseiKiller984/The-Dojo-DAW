@@ -77,6 +77,10 @@ void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutput
     // The only allocations in the engine's life cycle — done here, never on the audio thread.
     masterBus_.setSize(kMaxChannels, maxBlockSize_, false, true, false);
     masterScratch_.setSize(2, maxBlockSize_, false, true, false);
+    virtualizerScratch_.setSize(2, maxBlockSize_, false, true, false);
+    virtualizer_.prepare(sampleRate_);
+    virtualizerDirty_ = true;
+    deviceMatrixOutputs_ = -1;
     inputBus_.setSize(std::max(1, numInputs_), maxBlockSize_, false, true, false);
     masterMidi_.ensureSize(kMidiBufferBytes);
     liveBlock_.ensureSize(kMidiBufferBytes);
@@ -146,6 +150,7 @@ TelemetrySnapshot AudioEngine::collectTelemetry() noexcept
     snapshot.masterPeakLeft = telemetry_.masterPeakLeft.exchange(0.0f, std::memory_order_acq_rel);
     snapshot.masterPeakRight = telemetry_.masterPeakRight.exchange(0.0f, std::memory_order_acq_rel);
     snapshot.masterChannels = telemetry_.masterChannels.load(std::memory_order_relaxed);
+    snapshot.surroundRendering = static_cast<SurroundRendering>(telemetry_.surroundRendering.load(std::memory_order_relaxed));
     for (std::size_t ch = 0; ch < snapshot.masterPeaks.size(); ++ch)
         snapshot.masterPeaks[ch] = telemetry_.masterPeaks[ch].exchange(0.0f, std::memory_order_acq_rel);
     snapshot.dspLoad = telemetry_.dspLoad.load(std::memory_order_relaxed);
@@ -558,6 +563,13 @@ void AudioEngine::handle(const command::SetLoop& cmd) noexcept
 void AudioEngine::handle(const command::SetSpeed& cmd) noexcept
 {
     speed_ = std::clamp(cmd.rate, 0.25, 4.0);
+}
+
+void AudioEngine::handle(const command::SetSurroundMonitoring& cmd) noexcept
+{
+    surround_ = cmd;
+    virtualizerDirty_ = true;
+    deviceMatrixOutputs_ = -1;
 }
 
 void AudioEngine::handle(const command::SetStopAtEnd& cmd) noexcept
@@ -1356,7 +1368,36 @@ void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, in
             std::fill_n(outputs[ch] + offset, numSamples, 0.0f);
     };
 
-    if (numOutputs >= numMaster)
+    // A surround master: as Preferences > Surround says.
+    auto rendering = SurroundRendering::stereo;
+    if (numMaster > 2)
+    {
+        switch (surround_.mode)
+        {
+        case command::SurroundMonitoring::standard:
+            rendering = numOutputs >= numMaster ? SurroundRendering::discrete : SurroundRendering::frontPair;
+            break;
+        case command::SurroundMonitoring::foldDown:
+            rendering = numOutputs >= numMaster ? SurroundRendering::discrete : SurroundRendering::foldDown;
+            break;
+        case command::SurroundMonitoring::virtualizer:
+            rendering = SurroundRendering::virtualizer;
+            break;
+        case command::SurroundMonitoring::device:
+            // (a stereo device has no virtualizer to hand the channels to: ours instead)
+            rendering = numOutputs >= 4 ? SurroundRendering::device : SurroundRendering::virtualizer;
+            break;
+        }
+    }
+    telemetry_.surroundRendering.store(static_cast<int>(rendering), std::memory_order_relaxed);
+
+    if (rendering == SurroundRendering::virtualizer)
+        writeVirtualized(outputs, numOutputs, offset, numSamples);
+    else if (rendering == SurroundRendering::device)
+        writeToDevice(outputs, numOutputs, offset, numSamples);
+    else if (rendering == SurroundRendering::frontPair)
+        writeFrontPair(outputs, numOutputs, offset, numSamples);
+    else if (numOutputs >= numMaster)
     {
         // Every master channel has its own output, in the master's channel order.
         for (int ch = 0; ch < numOutputs; ++ch)
@@ -1419,6 +1460,93 @@ void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, in
 
     if (clipped > 0)
         telemetry_.clippedSamples.fetch_add(clipped, std::memory_order_relaxed);
+}
+
+void AudioEngine::writeVirtualized(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
+{
+    const int numMaster = masterChannels();
+    const auto& layout = graph_->masterLayout;
+    const auto output = surround_.speakers ? dsp::SurroundVirtualizer::Output::speakers : dsp::SurroundVirtualizer::Output::headphones;
+    if (virtualizerDirty_ || virtualizer_.getLayout() != layout)
+    {
+        virtualizer_.configure(layout, output, static_cast<double>(surround_.room));
+        virtualizerDirty_ = false;
+    }
+
+    std::array<const Sample*, kMaxChannels> in{};
+    for (int ch = 0; ch < numMaster; ++ch)
+        in[static_cast<std::size_t>(ch)] = masterBus_.getReadPointer(ch);
+    auto* left = virtualizerScratch_.getWritePointer(0);
+    auto* right = virtualizerScratch_.getWritePointer(1);
+    virtualizer_.process(in.data(), numMaster, left, right, numSamples);
+
+    for (int ch = 0; ch < numOutputs; ++ch)
+    {
+        if (outputs[ch] == nullptr)
+            continue;
+        float* destination = outputs[ch] + offset;
+        if (ch >= 2)
+            std::fill_n(destination, numSamples, 0.0f);
+        else
+            for (int i = 0; i < numSamples; ++i)
+                destination[i] = static_cast<IoSample>(numOutputs == 1 ? 0.5 * (left[i] + right[i]) : (ch == 0 ? left[i] : right[i]));
+    }
+}
+
+void AudioEngine::writeToDevice(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
+{
+    // The device's speakers in its own channel order; the master's are converted to them by speaker.
+    const int numMaster = masterChannels();
+    const auto& layout = graph_->masterLayout;
+    const auto device = dsp::deviceLayout(numOutputs, surround_.alsaOrder);
+    if (deviceMatrixOutputs_ != numOutputs || deviceMatrixAlsa_ != surround_.alsaOrder || deviceMatrixFrom_ != layout)
+    {
+        deviceMatrix_ = conversionMatrix(layout, device);
+        deviceMatrixFrom_ = layout;
+        deviceMatrixOutputs_ = numOutputs;
+        deviceMatrixAlsa_ = surround_.alsaOrder;
+    }
+
+    for (int o = 0; o < numOutputs; ++o)
+    {
+        if (outputs[o] == nullptr)
+            continue;
+        float* destination = outputs[o] + offset;
+        if (o >= device.numChannels)
+        {
+            std::fill_n(destination, numSamples, 0.0f);
+            continue;
+        }
+        const auto& row = deviceMatrix_.gain[static_cast<std::size_t>(o)];
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double sum = 0.0;
+            for (int m = 0; m < std::min(numMaster, deviceMatrix_.numInputs); ++m)
+                sum += row[static_cast<std::size_t>(m)] * masterBus_.getSample(m, i);
+            destination[i] = static_cast<IoSample>(sum);
+        }
+    }
+}
+
+void AudioEngine::writeFrontPair(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
+{
+    // Standard: nothing is mixed - the front left and right speakers, as they are.
+    const auto& layout = graph_->masterLayout;
+    const int leftIndex = std::max(0, layout.indexOf(Speaker::left));
+    const int rightIndex = layout.indexOf(Speaker::right) >= 0 ? layout.indexOf(Speaker::right) : std::min(1, masterChannels() - 1);
+    const Sample* left = masterBus_.getReadPointer(leftIndex);
+    const Sample* right = masterBus_.getReadPointer(rightIndex);
+    for (int ch = 0; ch < numOutputs; ++ch)
+    {
+        if (outputs[ch] == nullptr)
+            continue;
+        float* destination = outputs[ch] + offset;
+        if (ch >= 2)
+            std::fill_n(destination, numSamples, 0.0f);
+        else
+            for (int i = 0; i < numSamples; ++i)
+                destination[i] = static_cast<IoSample>(numOutputs == 1 ? 0.5 * (left[i] + right[i]) : (ch == 0 ? left[i] : right[i]));
+    }
 }
 
 void AudioEngine::publishLoad(Clock::duration elapsed, int numSamples) noexcept

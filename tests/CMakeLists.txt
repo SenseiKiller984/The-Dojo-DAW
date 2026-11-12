@@ -39,6 +39,8 @@ add_executable(dojo_tests
     SessionTests.cpp
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
+    SurroundTests.cpp
+    TempoTests.cpp
     ValueEntryTests.cpp
     WaveformTests.cpp)
 

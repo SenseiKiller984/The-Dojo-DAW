@@ -82,6 +82,7 @@ void DojoApplication::initialise(const juce::String&)
     deviceHost_ = std::make_unique<engine::AudioDeviceHost>(*engine_);
     controller_ = std::make_unique<engine::EngineController>(*engine_, *deviceHost_);
     controller_->setStopAtEnd(preferences_->getStopAtEnd());
+    applySurroundMonitoring();
     preferences_->addChangeListener(this); // engine options follow the preferences
 
     const auto savedDevice = settings_->getUserSettings()->getXmlValue(kAudioDeviceSettingKey);
@@ -230,18 +231,38 @@ void DojoApplication::changeListenerCallback(juce::ChangeBroadcaster* source)
     {
         if (controller_ != nullptr)
             controller_->setStopAtEnd(preferences_->getStopAtEnd());
+        applySurroundMonitoring();
         return;
     }
 
     // The audio device configuration changed (e.g. in Audio Settings): remember it for next launch.
     if (deviceHost_ == nullptr || settings_ == nullptr)
         return;
+    applySurroundMonitoring(); // (the channel order depends on the driver)
 
     if (const auto state = deviceHost_->createStateXml())
     {
         settings_->getUserSettings()->setValue(kAudioDeviceSettingKey, state.get());
         settings_->saveIfNeeded();
     }
+}
+
+void DojoApplication::applySurroundMonitoring()
+{
+    if (controller_ == nullptr || preferences_ == nullptr)
+        return;
+    using Mode = engine::command::SurroundMonitoring;
+    Mode mode = Mode::foldDown;
+    switch (preferences_->getSurroundMode())
+    {
+    case ui::Preferences::SurroundMode::standard:    mode = Mode::standard; break;
+    case ui::Preferences::SurroundMode::foldDown:    mode = Mode::foldDown; break;
+    case ui::Preferences::SurroundMode::virtualizer: mode = Mode::virtualizer; break;
+    case ui::Preferences::SurroundMode::device:      mode = Mode::device; break;
+    }
+    // ALSA orders surround channels its own way; every other driver uses the WAVE order.
+    const bool alsa = deviceHost_ != nullptr && deviceHost_->getStatus().deviceType == "ALSA";
+    controller_->setSurroundMonitoring(mode, preferences_->getVirtualizerSpeakers(), preferences_->getVirtualizerRoom(), alsa);
 }
 
 void DojoApplication::logStartupInformation(const juce::String& deviceError)

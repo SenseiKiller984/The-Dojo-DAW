@@ -78,6 +78,26 @@ struct SetStopAtEnd
     bool enabled = false;
 };
 
+/** How a multichannel (surround) master reaches the device (Preferences > Surround). */
+enum class SurroundMonitoring : std::uint8_t
+{
+    standard,    ///< channel n to output n; a stereo device gets the front left and right only
+    foldDown,    ///< an output per channel if the device has them, else the ITU stereo fold-down
+    virtualizer, ///< the advanced virtualizer (dsp::SurroundVirtualizer) on outputs 1 and 2
+    device,      ///< the device's own surround channels (its or the system's 3D virtualizer renders them)
+};
+
+/** Sets the surround monitoring. `speakers`: the virtualizer renders for speakers (crosstalk
+    cancelled) instead of headphones. `alsaOrder`: the device's channels are in ALSA's order. */
+struct SetSurroundMonitoring
+{
+    static constexpr bool coalescable = true;
+    SurroundMonitoring mode = SurroundMonitoring::foldDown;
+    bool speakers = false;
+    bool alsaOrder = false;
+    float room = 0.5f;
+};
+
 /** Global varispeed: the timeline runs at `rate` x real time (0.25 .. 4). */
 struct SetSpeed
 {
@@ -112,7 +132,7 @@ struct StopCapture
 using EngineCommand =
     std::variant<command::SetPlaying, command::Locate, command::SetMasterGain, command::SetTestTone,
                  command::SetLoop, command::SetSpeed, command::SwapGraph, command::StartCapture, command::StopCapture,
-                 command::SetStopAtEnd>;
+                 command::SetStopAtEnd, command::SetSurroundMonitoring>;
 
 static_assert(std::is_trivially_copyable_v<EngineCommand>,
               "EngineCommand must stay trivially copyable to travel through the lock-free command queue");

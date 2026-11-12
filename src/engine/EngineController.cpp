@@ -4,6 +4,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace dojo::engine
@@ -69,6 +70,16 @@ void EngineController::setLoop(bool enabled, double startSeconds, double endSeco
 void EngineController::setSpeed(double rate)
 {
     send(command::SetSpeed{rate});
+}
+
+void EngineController::setSurroundMonitoring(command::SurroundMonitoring mode, bool speakers, double room, bool alsaOrder)
+{
+    command::SetSurroundMonitoring c;
+    c.mode = mode;
+    c.speakers = speakers;
+    c.room = static_cast<float>(std::clamp(room, 0.0, 1.0));
+    c.alsaOrder = alsaOrder;
+    send(c);
 }
 
 void EngineController::setStopAtEnd(bool enabled)

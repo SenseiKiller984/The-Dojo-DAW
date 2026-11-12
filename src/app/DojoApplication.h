@@ -75,6 +75,8 @@ public:
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    /** Preferences > Surround, to the engine. */
+    void applySurroundMonitoring();
     void logStartupInformation(const juce::String& deviceError);
 
     CommandLineOptions options_;

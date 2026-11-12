@@ -21,7 +21,17 @@ public:
         general,
         themes,
         audio,
+        surround,
         keyboard,
+    };
+
+    /** How a surround master (3.1, 5.1, 7.1, Dolby Digital, DTS) plays (the Surround tab). */
+    enum class SurroundMode
+    {
+        standard,    ///< as it is: an output per channel; a stereo device plays the front pair
+        foldDown,    ///< an output per channel if there are enough, else the ITU stereo fold-down
+        virtualizer, ///< the advanced virtualizer (headphones or speakers)
+        device,      ///< the device's own 3D virtualizer, sent the surround channels
     };
 
     explicit Preferences(juce::PropertiesFile& settings);
@@ -34,6 +44,16 @@ public:
     /** Playback stops at the end of the last clip. Off by default. */
     [[nodiscard]] bool getStopAtEnd() const;
     void setStopAtEnd(bool enabled);
+
+    /** Surround monitoring. Classic fold-down by default (what earlier versions did). */
+    [[nodiscard]] SurroundMode getSurroundMode() const;
+    void setSurroundMode(SurroundMode mode);
+    /** The virtualizer renders for speakers (crosstalk cancelled) instead of headphones. */
+    [[nodiscard]] bool getVirtualizerSpeakers() const;
+    void setVirtualizerSpeakers(bool speakers);
+    /** The virtualizer's room (0..1): reflections and reverberation. 0.5 by default. */
+    [[nodiscard]] double getVirtualizerRoom() const;
+    void setVirtualizerRoom(double room);
 
     /** The theme's name (see theme::getThemes()). */
     [[nodiscard]] juce::String getThemeName() const;

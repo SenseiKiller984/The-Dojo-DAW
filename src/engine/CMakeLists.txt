@@ -23,6 +23,8 @@ add_library(dojo_engine STATIC
     dsp/ClipRenderer.h
     dsp/ClipStretcher.cpp
     dsp/ClipStretcher.h
+    dsp/SurroundVirtualizer.cpp
+    dsp/SurroundVirtualizer.h
     dsp/TestToneGenerator.cpp
     dsp/TestToneGenerator.h
     io/AudioDeviceHost.cpp

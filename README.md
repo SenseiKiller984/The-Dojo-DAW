@@ -29,13 +29,31 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - A multichannel track plays multichannel files and records one input per channel (*In 3-8* for a 5.1 track on input 3).
 - Signals move between formats **by speaker**, so a Dolby Digital track's centre plays from a 5.1 master's centre:
   - A track that feeds a smaller format is folded down (ITU style): the centre and surrounds go to the sides at -3 dB, and the LFE is dropped.
-  - On an audio device with fewer outputs than the master has channels, you hear the master's stereo fold-down.
+  - How a surround master reaches your ears is set in **Preferences > Surround** (see *Surround monitoring* below).
 - **Surround panner**: a mono or stereo track that feeds a surround bus or master gets a panner pad in its mixer strip. Drag to place the track (left/right is its pan, up/down front to rear). Right-click to set how much of a centred signal plays from the centre speaker (dialogue: 100 %). Double-click to reset.
 - **Effects on multichannel tracks**: every device and plug-in runs as linked instances, one per channel group. The speaker pairs (L/R, Ls/Rs, Lrs/Rrs) run as stereo pairs; the centre and LFE run on their own. All instances follow the first one's settings.
 - Meters show one bar per channel, and the arranger draws every channel of a multichannel clip when the track is tall enough.
 - **Export**:
   - A surround master exports as a multichannel WAV or FLAC. Stems have their destination's channels.
-  - MP3 gets the stereo fold-down.
+  - MP3 gets the stereo fold-down. (Surround monitoring never changes what is exported.)
+
+**Surround monitoring** (*Options > Preferences > Surround*): how a surround master plays on stereo headphones or speakers. The meters always show every channel.
+- **Standard**: the channels as they are, one output per channel. On a stereo device you hear only the front left and right.
+- **Classic Fold-Down** (the default, what earlier versions did): an output per channel when the device has enough; otherwise the ITU-R BS.775 stereo fold-down (centre and surrounds at -3 dB, the LFE left out).
+- **Advanced Surround Virtualizer**: binaural rendering of every speaker at its standard place (L/R at ±30°, C at 0°, surrounds at ±110° in 5.1 and ±90° in 7.1, rears at ±150°, 2 m away in a 5 × 6 m room). It plays on outputs 1 and 2, also on a device with more outputs.
+  - Each speaker reaches each ear four ways: directly, and as first reflections off the floor, the nearest side wall and the front or back wall.
+  - Every path uses the Brown–Duda spherical-head model:
+    - The interaural time difference follows Woodworth's formula (0.26 ms for the front speakers, 0.66 ms at the side), as a fractional delay.
+    - The head shadow is a first-order filter: up to +6 dB of treble at the near ear, about -20 dB in the head's shadow.
+  - Sources behind get a pinna cue (a high shelf, down to -8 dB at 4 kHz), and a short four-line feedback-delay-network reverberation (0.35 s) puts the sound outside the head.
+  - The LFE plays on both sides below 120 Hz. A full mix plays at the fold-down's level.
+  - **Headphones** or **Speakers**: for speakers, a recursive crosstalk canceller (for speakers at ±30°, band-limited to 250 Hz – 6 kHz) keeps each ear's signal to that ear.
+  - **Room** (0–100 %): 0 % is anechoic (closer, inside the head); more gives more reflections and reverberation.
+- **Device 3D Virtualizer**: sends the surround channels to the device in its own channel order, so the device's built-in virtualizer renders them. That can be a 7.1 gaming headset, a USB surround card, an AV receiver, or the system's spatial sound (Windows Sonic, Dolby Atmos for Headphones, DTS Headphone:X).
+  - Channel order: WAVE/WASAPI order (L R C LFE BL BR SL SR) for most drivers, ALSA's own (L R RL RR C LFE SL SR) on ALSA.
+  - The tab shows how many outputs the current device has and has on; **Use All of Its Outputs** turns on outputs 1–8.
+  - A stereo-only device gets the Advanced Virtualizer instead. Headsets often offer 7.1 only with their surround mode, or the system's spatial sound, switched on.
+- The tab also says what plays right now (for example "the Advanced Virtualizer, for headphones").
 
 **Track menu**
 - **New...** (Ctrl+Shift+N) adds one or more tracks in one go. Each row is a count, a format (mono or stereo), a type and a name; + and - add and remove rows. The tracks go after the selected track (inside its folder) or at the end. The types:
@@ -141,6 +159,15 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Amp & Cabinet**: seven amp models (Clean to Heavy, and Bass) with 4x-oversampled gain stages, bass/middle/treble/presence, five cabinets and three microphone positions.
 - **Pitch Shift** for live input and instruments.
 - **Click**: a metronome that follows the transport's tempo, bar position and time signature, sample-accurately. It has four sounds (Beep, Woodblock, Rim, Cowbell), volume, an accented downbeat, and quarter, eighth or sixteenth clicks. It plays during playback and recording, or only while recording.
+  - **Tempo detection**: the Click's panel lists the audio tracks. Tick one, or several (kick, snare, overheads...); selecting audio tracks in the arranger ticks them. **Detect Tempo** measures each track to two decimal places (for example Kick 121.12, Snare 121.48) and averages them.
+    - If the average differs from the project tempo, it asks whether to set the project to it. **Set Project Tempo** does that later (one undo step).
+    - The **range** (70–180 BPM by default) decides between half and double time; **/2** and **x2** correct the result afterwards. A track read at half or double the others' tempo is folded to agree before averaging, and shown as such.
+    - How it works:
+      - Onsets come from the spectral flux of the whole spectrum and of the band below 300 Hz (kick and snare body).
+      - A comb over the onsets' autocorrelation, with a tempo prior around 120 BPM, gives the beat.
+      - Each attack is timed to the sample on the energy envelope and numbered on the sixteenth-note grid.
+      - A least-squares line through (number, time), weighted by onset strength and refitted without outliers, gives the tempo. Over 20 s of a steady part it is accurate to well under 0.01 BPM.
+    - Clips count as placed: offsets, stretch and loops included. MIDI tracks follow the project tempo, so they are not measured.
 
 **Instruments**
 - **Wavetable**: two morphing wavetable oscillators (eight band-limited tables), unison up to 8, sub and noise, multimode filter, three envelopes, two LFOs and an 8-slot modulation matrix.
@@ -161,6 +188,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on).
 - **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop). Applied instantly, remembered.
 - **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
+- **Surround**: surround monitoring: Standard, Classic Fold-Down, the Advanced Surround Virtualizer (headphones or speakers, room) or the Device 3D Virtualizer (see *Surround monitoring* above).
 
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 

@@ -3,6 +3,9 @@
 #include "ui/theme/DojoTheme.h"
 #include "ui/theme/Themes.h"
 
+#include <array>
+#include <initializer_list>
+
 namespace dojo::ui
 {
 namespace
@@ -323,6 +326,216 @@ private:
     juce::AudioDeviceSelectorComponent selector_;
 };
 
+//==================================================================================================
+/** Surround monitoring: how a surround master plays on stereo headphones or speakers. */
+class SurroundPage final : public juce::Component, private juce::ChangeListener, private juce::Timer
+{
+public:
+    SurroundPage(Preferences& preferences, juce::AudioDeviceManager& devices, std::function<int()> rendering)
+        : preferences_(preferences)
+        , devices_(devices)
+        , rendering_(std::move(rendering))
+    {
+        const std::array<std::pair<const char*, const char*>, 4> options{{
+            {"Standard",
+             "Plays the channels as they are, one output per channel, and only shows them on the meters: on a stereo "
+             "device you hear just the front left and right."},
+            {"Classic Fold-Down",
+             "An output per channel when the device has enough, otherwise the ITU-R BS.775 stereo fold-down: centre and "
+             "surrounds into left and right at -3 dB, the LFE left out. What The Dojo always did."},
+            {"Advanced Surround Virtualizer",
+             "Every speaker becomes a virtual source around your head: interaural time and level differences of a "
+             "spherical head model (Brown-Duda), a pinna cue for sources behind, first reflections of a room and a short "
+             "reverberation. On speakers, crosstalk cancellation keeps each ear's signal to that ear."},
+            {"Device 3D Virtualizer",
+             "Sends the surround channels to the device, in its own channel order, so that its built-in virtualizer renders "
+             "them: a 7.1 gaming headset, a USB surround card, an AV receiver, or the system's spatial sound (Windows Sonic, "
+             "Dolby Atmos for Headphones, DTS Headphone:X). A stereo-only device gets the Advanced Virtualizer instead."},
+        }};
+        for (std::size_t i = 0; i < options.size(); ++i)
+        {
+            auto& option = options_[i];
+            option.button.setButtonText(options[i].first);
+            option.button.setRadioGroupId(4242);
+            styleToggle(option.button);
+            option.button.onClick = [this, i]
+            {
+                if (options_[i].button.getToggleState())
+                    preferences_.setSurroundMode(static_cast<Preferences::SurroundMode>(i));
+            };
+            addAndMakeVisible(option.button);
+            option.text.setText(options[i].second, juce::dontSendNotification);
+            addAndMakeVisible(styleDescription(option.text));
+        }
+
+        headphones_.setButtonText("Headphones");
+        speakers_.setButtonText("Speakers (crosstalk cancelled, for speakers at +-30 degrees)");
+        for (auto* toggle : {&headphones_, &speakers_})
+        {
+            toggle->setRadioGroupId(4343);
+            styleToggle(*toggle);
+            addAndMakeVisible(*toggle);
+        }
+        headphones_.onClick = [this] { preferences_.setVirtualizerSpeakers(false); };
+        speakers_.onClick = [this] { preferences_.setVirtualizerSpeakers(true); };
+
+        roomLabel_.setText("Room", juce::dontSendNotification);
+        addAndMakeVisible(styleDescription(roomLabel_));
+        room_.setSliderStyle(juce::Slider::LinearHorizontal);
+        room_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 20);
+        room_.setRange(0.0, 100.0, 1.0);
+        room_.setTextValueSuffix(" %");
+        room_.setTooltip("Reflections and reverberation of the virtual room: 0 % is anechoic (sounds closer to the head)");
+        room_.onValueChange = [this] { preferences_.setVirtualizerRoom(room_.getValue() / 100.0); };
+        addAndMakeVisible(room_);
+
+        addAndMakeVisible(styleDescription(device_));
+        useOutputs_.setButtonText("Use All of Its Outputs");
+        useOutputs_.setTooltip("Turns on the device's outputs 1 - 8, so that it receives every surround channel");
+        useOutputs_.onClick = [this] { useAllOutputs(); };
+        addAndMakeVisible(useOutputs_);
+        addAndMakeVisible(styleDescription(status_));
+
+        preferences_.addChangeListener(this);
+        devices_.addChangeListener(this);
+        update();
+        startTimerHz(4);
+    }
+
+    ~SurroundPage() override
+    {
+        devices_.removeChangeListener(this);
+        preferences_.removeChangeListener(this);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(theme::colour::panel);
+        g.setColour(theme::colour::textSecondary);
+        g.setFont(theme::label(11.0f));
+        g.drawText("SURROUND MONITORING", getLocalBounds().reduced(24, 0).removeFromTop(40), juce::Justification::bottomLeft, false);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(24, 0).withTrimmedTop(48);
+        for (std::size_t i = 0; i < options_.size(); ++i)
+        {
+            options_[i].button.setBounds(area.removeFromTop(24));
+            options_[i].text.setBounds(area.removeFromTop(i == 3 ? 46 : 32).withTrimmedLeft(30));
+            if (i == 2)
+            {
+                auto indent = area.removeFromTop(24).withTrimmedLeft(30);
+                headphones_.setBounds(indent.removeFromLeft(130));
+                speakers_.setBounds(indent);
+                auto row = area.removeFromTop(26).withTrimmedLeft(30);
+                roomLabel_.setBounds(row.removeFromLeft(60).withTrimmedTop(4));
+                room_.setBounds(row.removeFromLeft(320));
+            }
+            if (i == 3)
+            {
+                auto row = area.removeFromTop(48).withTrimmedLeft(30);
+                useOutputs_.setBounds(row.removeFromRight(180).withSizeKeepingCentre(180, 26));
+                device_.setBounds(row);
+            }
+            area.removeFromTop(6);
+        }
+        status_.setBounds(area.removeFromTop(36));
+    }
+
+    /** What plays now, in words (also for tests). */
+    [[nodiscard]] juce::String describeRendering(int rendering) const
+    {
+        switch (rendering)
+        {
+        case 0: return "Now: a stereo master (nothing to virtualise).";
+        case 1: return "Now: an output per channel.";
+        case 2: return "Now: the front left and right only.";
+        case 3: return "Now: the classic stereo fold-down.";
+        case 4: return juce::String("Now: the Advanced Virtualizer, for ") + (preferences_.getVirtualizerSpeakers() ? "speakers." : "headphones.");
+        case 5: return "Now: the surround channels go to the device's virtualizer.";
+        default: return {};
+        }
+    }
+
+private:
+    struct Option
+    {
+        juce::ToggleButton button;
+        juce::Label text;
+    };
+
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { update(); }
+    void timerCallback() override
+    {
+        const auto text = rendering_ ? describeRendering(rendering_()) : juce::String();
+        if (text != status_.getText())
+            status_.setText(text, juce::dontSendNotification);
+    }
+
+    void update()
+    {
+        const auto mode = static_cast<std::size_t>(preferences_.getSurroundMode());
+        for (std::size_t i = 0; i < options_.size(); ++i)
+            options_[i].button.setToggleState(i == mode, juce::dontSendNotification);
+        const bool speakers = preferences_.getVirtualizerSpeakers();
+        headphones_.setToggleState(!speakers, juce::dontSendNotification);
+        speakers_.setToggleState(speakers, juce::dontSendNotification);
+        room_.setValue(preferences_.getVirtualizerRoom() * 100.0, juce::dontSendNotification);
+        const bool virtualizing = mode == static_cast<std::size_t>(Preferences::SurroundMode::virtualizer)
+                                  || mode == static_cast<std::size_t>(Preferences::SurroundMode::device);
+        for (juce::Component* c : std::initializer_list<juce::Component*>{&headphones_, &speakers_, &room_, &roomLabel_})
+            c->setEnabled(virtualizing);
+
+        // What the device can take.
+        juce::String text;
+        int available = 0;
+        int active = 0;
+        if (auto* device = devices_.getCurrentAudioDevice())
+        {
+            available = device->getOutputChannelNames().size();
+            active = device->getActiveOutputChannels().countNumberOfSetBits();
+            text << device->getName() << " (" << device->getTypeName() << "): " << active << " of " << available << " outputs on. ";
+            if (active >= 6)
+                text << "It takes surround channels (" << (active >= 8 ? "7.1" : "5.1") << "): its virtualizer renders them.";
+            else if (available >= 6)
+                text << "It can take surround channels: turn its outputs on.";
+            else
+                text << "Stereo only: the Advanced Virtualizer plays instead. Headsets often offer 7.1 only with their surround "
+                        "mode (or the system's spatial sound) on.";
+        }
+        else
+            text = "No audio device is open.";
+        device_.setText(text, juce::dontSendNotification);
+        useOutputs_.setEnabled(available > active && active < 8);
+    }
+
+    void useAllOutputs()
+    {
+        auto setup = devices_.getAudioDeviceSetup();
+        auto* device = devices_.getCurrentAudioDevice();
+        if (device == nullptr)
+            return;
+        setup.useDefaultOutputChannels = false;
+        setup.outputChannels.clear();
+        setup.outputChannels.setRange(0, std::min(8, device->getOutputChannelNames().size()), true);
+        const auto error = devices_.setAudioDeviceSetup(setup, true);
+        if (error.isNotEmpty())
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Surround outputs", error);
+        update();
+    }
+
+    Preferences& preferences_;
+    juce::AudioDeviceManager& devices_;
+    std::function<int()> rendering_;
+    std::array<Option, 4> options_;
+    juce::ToggleButton headphones_, speakers_;
+    juce::Label roomLabel_;
+    juce::Slider room_;
+    juce::Label device_, status_;
+    juce::TextButton useOutputs_;
+};
+
 /** Every command's keyboard shortcuts, editable; saved by the main window. */
 class KeyboardPage final : public juce::Component
 {
@@ -370,7 +583,7 @@ class PreferencesWindow::Content final : public juce::Component
 {
 public:
     Content(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
-            std::function<void()> showTips)
+            std::function<void()> showTips, std::function<int()> surroundRendering)
     {
         using namespace theme;
         tabs_.setTabBarDepth(34);
@@ -385,6 +598,7 @@ public:
         tabs_.addTab("General", colour::panelHeader, new GeneralPage(preferences), true);
         tabs_.addTab("Themes", colour::panelHeader, new ThemesPage(preferences), true);
         tabs_.addTab("Audio", colour::panelHeader, new AudioPage(devices), true);
+        tabs_.addTab("Surround", colour::panelHeader, new SurroundPage(preferences, devices, std::move(surroundRendering)), true);
         tabs_.addTab("Keyboard", colour::panelHeader, new KeyboardPage(commands, std::move(showTips)), true);
         addAndMakeVisible(tabs_);
         setSize(kWidth, kHeight);
@@ -397,12 +611,13 @@ public:
 };
 
 PreferencesWindow::PreferencesWindow(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
-                                     std::function<void()> showEditingTips)
+                                     std::function<void()> showEditingTips, std::function<int()> surroundRendering)
     : juce::DocumentWindow("Preferences", theme::colour::panel, juce::DocumentWindow::closeButton)
     , preferences_(preferences)
     , devices_(devices)
     , commands_(commands)
     , showEditingTips_(std::move(showEditingTips))
+    , surroundRendering_(std::move(surroundRendering))
 {
     setUsingNativeTitleBar(false);
     setTitleBarHeight(30);
@@ -431,7 +646,7 @@ void PreferencesWindow::refreshTheme()
 {
     const auto tab = getCurrentTab();
     setBackgroundColour(theme::colour::panel);
-    auto content = std::make_unique<Content>(preferences_, devices_, commands_, showEditingTips_);
+    auto content = std::make_unique<Content>(preferences_, devices_, commands_, showEditingTips_, surroundRendering_);
     content_ = content.get();
     setContentOwned(content.release(), false);
     content_->tabs_.setCurrentTabIndex(static_cast<int>(tab));

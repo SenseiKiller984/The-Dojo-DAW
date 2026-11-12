@@ -1,5 +1,6 @@
 #include "ui/devices/DeviceEditors.h"
 
+#include "devices/Click.h"
 #include "devices/Dynamics.h"
 #include "devices/Echo.h"
 #include "devices/Equaliser.h"
@@ -11,6 +12,7 @@
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
 #include "ui/devices/ParameterControl.h"
+#include "ui/devices/TempoDetectPanel.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -78,6 +80,33 @@ public:
 private:
     juce::Viewport viewport_;
     ParameterGrid grid_;
+};
+
+/** The Click: its parameters, and tempo detection of the selected tracks beside them. */
+class ClickEditor final : public juce::Component
+{
+public:
+    static constexpr int kParametersWidth = 3 * ParameterControl::kWidth + 16;
+
+    ClickEditor(juce::AudioProcessor& processor, const DeviceEditorContext& context)
+        : parameters_(processor, 16)
+        , tempo_(context.project.getSession(), context.editor)
+    {
+        addAndMakeVisible(parameters_);
+        addAndMakeVisible(tempo_);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        tempo_.setBounds(area.removeFromRight(TempoDetectPanel::kPreferredWidth));
+        area.removeFromRight(6);
+        parameters_.setBounds(area);
+    }
+
+private:
+    GenericEditor parameters_;
+    TempoDetectPanel tempo_;
 };
 
 //==================================================================================================
@@ -1696,6 +1725,11 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
         auto pages = operatorPages(*fm);
         preferredWidth = PagedEditor::preferredWidth(pages);
         return std::make_unique<PagedEditor>(processor, std::move(pages));
+    }
+    if (dynamic_cast<devices::Click*>(&processor) != nullptr)
+    {
+        preferredWidth = ClickEditor::kParametersWidth + 6 + TempoDetectPanel::kPreferredWidth;
+        return std::make_unique<ClickEditor>(processor, context);
     }
     if (dynamic_cast<devices::Echo*>(&processor) != nullptr)
     {

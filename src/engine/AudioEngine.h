@@ -9,6 +9,7 @@
 #include "engine/RealtimeHandoff.h"
 #include "engine/RenderGraph.h"
 #include "engine/WorkerPool.h"
+#include "engine/dsp/SurroundVirtualizer.h"
 #include "engine/dsp/TestToneGenerator.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -219,6 +220,12 @@ private:
     void handle(const command::SetLoop& cmd) noexcept;
     void handle(const command::SetSpeed& cmd) noexcept;
     void handle(const command::SetStopAtEnd& cmd) noexcept;
+    void handle(const command::SetSurroundMonitoring& cmd) noexcept;
+    /** The master on fewer (or other) outputs than its channels: the virtualizer, the device's own
+        surround channels or the front pair. */
+    void writeVirtualized(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
+    void writeToDevice(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
+    void writeFrontPair(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
     void handle(const command::SwapGraph& cmd) noexcept;
     void handle(const command::StartCapture& cmd) noexcept;
     void handle(const command::StopCapture& cmd) noexcept;
@@ -282,6 +289,16 @@ private:
     int numInputs_ = 0;
     juce::AudioBuffer<Sample> masterBus_;   ///< kMaxChannels; the graph's master layout is used
     juce::AudioBuffer<Sample> masterScratch_; ///< a mono master channel group as dual mono
+
+    // Surround monitoring (Preferences > Surround).
+    command::SetSurroundMonitoring surround_{};
+    dsp::SurroundVirtualizer virtualizer_;
+    juce::AudioBuffer<Sample> virtualizerScratch_;
+    bool virtualizerDirty_ = true;
+    ChannelMatrix deviceMatrix_;       ///< master -> the device's surround channels
+    ChannelLayout deviceMatrixFrom_;   ///< (for which master layout,
+    int deviceMatrixOutputs_ = -1;     ///<  how many outputs,
+    bool deviceMatrixAlsa_ = false;    ///<  and channel order)
     juce::AudioBuffer<Sample> inputBus_; ///< device inputs as 64-bit, for monitoring and capture
     juce::MidiBuffer masterMidi_;
     std::vector<SlotState> slots_;
