@@ -6,6 +6,7 @@
 #include "ui/components/ArrangerView.h"
 #include "ui/components/BrowserPanel.h"
 #include "ui/components/ClipEditor.h"
+#include "ui/components/ClipListPanel.h"
 #include "ui/components/DevicePanel.h"
 #include "ui/components/MixerPanel.h"
 #include "ui/EditActions.h"
@@ -71,6 +72,7 @@ public:
         mixer,
         devices,
         editor,
+        clips,
     };
 
     /** Shows one of the bottom panel's tabs. */
@@ -99,6 +101,7 @@ public:
     [[nodiscard]] ArrangerView& getArranger() noexcept { return arranger_; }
     [[nodiscard]] MixerPanel& getMixer() noexcept { return mixer_; }
     [[nodiscard]] EditorState& getEditorState() noexcept { return editor_; }
+    [[nodiscard]] ClipListPanel& getClipList() noexcept { return clipList_; }
     /** Track > Scroll to Track: selects track `number` (1 = first) and brings it to the top of the
         arranger and the left of the mixer. False if there is no such track. */
     bool scrollToTrackNumber(int number);
@@ -145,6 +148,10 @@ private:
     void showNewTracksDialog();
     void showDuplicateTracksDialog();
     void showScrollToTrackDialog();
+    /** Clip menu dialogs. */
+    void showLoopDialog();
+    void showCaptureDialog();
+    void showRenameClipDialog();
     void showMessage(const juce::String& title, const juce::String& message);
     /** Playhead to the start; with the preference on, the view follows. */
     void goToStart();
@@ -166,6 +173,7 @@ private:
     MixerPanel mixer_;
     DevicePanel devicePanel_;
     ClipEditor clipEditor_;
+    ClipListPanel clipList_;
     StatusBar statusBar_;
 
     class Divider;
@@ -173,6 +181,7 @@ private:
     juce::TextButton mixerTab_;
     juce::TextButton devicesTab_;
     juce::TextButton editorTab_;
+    juce::TextButton clipsTab_;
     BottomTab bottomTab_ = BottomTab::mixer;
     int bottomHeight_ = 330;
 

@@ -160,6 +160,33 @@ bool renderClip(const RenderClip& clip, double blockStartSeconds, double seconds
     if (secondsPerSample <= 0.0 || numSamples <= 0 || clip.sourceLength <= 0 || clip.numChannels <= 0 || numOutputs <= 0)
         return false;
 
+    // A looped clip: each iteration plays as a clip of its own (the first gets the fade-in, the last
+    // the fade-out; every iteration edge gets the click-free minimum fade).
+    const double clipLength = clip.endSeconds - clip.startSeconds;
+    if (clip.loopLength > 0.0 && clip.loopLength < clipLength - 1.0e-9)
+    {
+        const double loop = clip.loopLength;
+        const double blockEnd = blockStartSeconds + numSamples * secondsPerSample;
+        const auto firstIteration = static_cast<long long>(std::max(0.0, std::floor((blockStartSeconds - clip.startSeconds) / loop)));
+        const auto lastIteration = static_cast<long long>(std::floor((std::min(blockEnd, clip.endSeconds) - clip.startSeconds) / loop));
+        bool rendered = false;
+        for (auto k = firstIteration; k <= lastIteration; ++k)
+        {
+            RenderClip iteration = clip;
+            iteration.loopLength = 0.0;
+            iteration.startSeconds = clip.startSeconds + static_cast<double>(k) * loop;
+            iteration.endSeconds = std::min(iteration.startSeconds + loop, clip.endSeconds);
+            if (iteration.endSeconds <= iteration.startSeconds)
+                continue;
+            if (k > 0)
+                iteration.fadeInSeconds = 0.0;
+            if (iteration.endSeconds < clip.endSeconds - 1.0e-9)
+                iteration.fadeOutSeconds = 0.0;
+            rendered = renderClip(iteration, blockStartSeconds, secondsPerSample, numSamples, outputs, numOutputs) || rendered;
+        }
+        return rendered;
+    }
+
     // Which samples of this block lie inside [start, end)?
     const double firstExact = (clip.startSeconds - blockStartSeconds) / secondsPerSample;
     const double endExact = (clip.endSeconds - blockStartSeconds) / secondsPerSample;

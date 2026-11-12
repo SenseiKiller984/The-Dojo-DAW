@@ -126,4 +126,31 @@ private:
     juce::TextButton okButton_{"Scroll"}, cancelButton_{"Cancel"};
 };
 
+/** A one-line prompt (Clip > Rename, Capture and Loop): a label, a text field, OK and Cancel. */
+class TextPromptPanel final : public juce::Component
+{
+public:
+    /** `numeric`: only a number above zero is accepted. */
+    TextPromptPanel(const juce::String& label, const juce::String& initial, const juce::String& okText, bool numeric);
+
+    /** What OK (or Return) does (also for tests): calls onConfirm with the trimmed text and closes,
+        unless the text is empty (or not a number above zero for a numeric prompt). */
+    void confirm();
+
+    std::function<void(const juce::String&)> onConfirm;
+
+    juce::TextEditor text;
+
+    void resized() override;
+    void paint(juce::Graphics& g) override;
+
+    static void show(juce::Component* centreAround, const juce::String& title, const juce::String& label, const juce::String& initial,
+                     const juce::String& okText, bool numeric, std::function<void(const juce::String&)> onConfirm);
+
+private:
+    bool numeric_ = false;
+    juce::Label label_;
+    juce::TextButton okButton_, cancelButton_{"Cancel"};
+};
+
 } // namespace dojo::ui

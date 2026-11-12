@@ -64,6 +64,27 @@ enum : juce::CommandID
     toggleTimeLock,
     importVideo,
     showVideo,
+    clipRatingNone, ///< followed by clipRating1 .. clipRating5 (clipRatingNone + n)
+    clipRating1,
+    clipRating2,
+    clipRating3,
+    clipRating4,
+    clipRating5,
+    toggleClipRatings,
+    groupClips,
+    ungroupClips,
+    ungroupAllClips,
+    regroupClips,
+    loopClips,
+    unloopClips,
+    captureClip,
+    renameClip,
+    identifySyncPoint,
+    removeSyncPoint,
+    quantizeClipsToGrid,
+    bypassClipGain,
+    renderClipGain,
+    showClipList,
 };
 
 namespace categories

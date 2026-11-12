@@ -143,6 +143,83 @@ bool setSelectedTracksActive(session::Session& session, EditorState& editor, boo
     the current track (selected). One undo step. */
 juce::ValueTree createClickTrack(session::Session& session, EditorState& editor);
 
+// --- Clip menu: ratings, groups, loops, sync points, clip gain, rename ------------------------------
+
+/** The selected clips, with every clip of their outermost groups (a group is selected as a whole). */
+[[nodiscard]] std::vector<juce::ValueTree> getSelectedClipsWithGroups(const session::Session& session, const EditorState& editor);
+
+/** Clip > Rating: 0 (none) .. 5 on every selected clip. One undo step. False if none selected. */
+bool setSelectedClipsRating(session::Session& session, EditorState& editor, int rating);
+/** The selected clips' rating, or -1 if they differ (or none is selected). */
+[[nodiscard]] int getSelectedClipsRating(const session::Session& session, const EditorState& editor);
+
+/** Clip > Group: one new clip group of the selection (clips and whole groups, on any tracks). */
+std::uint32_t groupSelectedClips(session::Session& session, EditorState& editor);
+/** Clip > Ungroup: removes the top layer of the selected groups (nested groups stay). Remembered
+    for Regroup. */
+bool ungroupSelectedClips(session::Session& session, EditorState& editor);
+/** Clip > Regroup: puts back what the last Ungroup took apart. */
+bool regroupClips(session::Session& session, EditorState& editor);
+/** Clip > Ungroup All: every layer of the selected groups. */
+bool ungroupAllSelectedClips(session::Session& session, EditorState& editor);
+[[nodiscard]] bool selectionHasGroups(const session::Session& session, const EditorState& editor);
+
+/** Clip > Loop: the selected clips repeat `iterations` times (of their length, or loop). */
+bool loopSelectedClips(session::Session& session, EditorState& editor, double iterations);
+/** Clip > Unloop: looped clips become one standard clip per iteration (selected). */
+bool unloopSelectedClips(session::Session& session, EditorState& editor);
+[[nodiscard]] bool selectionHasLoopedClips(const session::Session& session, const EditorState& editor);
+
+/** Clip > Identify Sync Point at `seconds` on the selected clips that hold it. */
+bool identifySyncPoint(session::Session& session, EditorState& editor, double seconds);
+/** Clip > Remove Sync Point from the selected clips. */
+bool removeSyncPoints(session::Session& session, EditorState& editor);
+[[nodiscard]] bool selectionHasSyncPoints(const session::Session& session, const EditorState& editor);
+
+/** Clip > Quantize to Grid: each selected clip moves so that its sync point (or start) sits on the
+    nearest line of a `gridSeconds` grid. Time- and edit-locked clips stay. */
+bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor, double gridSeconds);
+
+/** Clip > Clip Gain > Bypass Clip Gain: toggles the selected audio clips (all on if any is off). */
+bool toggleSelectedClipsGainBypass(session::Session& session, EditorState& editor);
+[[nodiscard]] bool selectedClipsGainBypassed(const session::Session& session, const EditorState& editor);
+/** Clip > Clip Gain > Render Clip Gain: writes each selected audio clip's material with its gain
+    applied to a new file (next to the session), plays that instead and resets the gain to 0 dB.
+    Returns how many clips were rendered; `error` says why none could be. */
+int renderSelectedClipsGain(session::Project& project, EditorState& editor, juce::String& error);
+
+/** Clip > Rename: the clip's new name; it becomes a user-defined clip (listed in the Clip List). */
+bool renameClip(session::Session& session, juce::ValueTree clip, const juce::String& name);
+
+/** What Clip > Capture would capture: the time selection (on the one track in it that has clips), or
+    else the range of the selected clips (all on one track). `track` invalid and `error` set if none. */
+struct CaptureRange
+{
+    juce::ValueTree track;
+    double start = 0.0;
+    double end = 0.0;
+};
+[[nodiscard]] CaptureRange getCaptureRange(const session::Session& session, const EditorState& editor, juce::String& error);
+/** A name for a capture of `range` that no Clip List entry has yet ("<clip> Capture", "... 2"). */
+[[nodiscard]] juce::String suggestCaptureName(const session::Session& session, const CaptureRange& range);
+/** Clip > Capture: the range becomes a Clip List entry called `name`. One undo step. */
+juce::ValueTree captureSelection(session::Session& session, EditorState& editor, const juce::String& name, juce::String& error);
+
+/** One row of the Clip List. */
+struct ClipListItem
+{
+    juce::ValueTree clip; ///< a captured entry, or a clip on a track
+    bool captured = false;
+    bool userDefined = false; ///< captured or renamed; others were created by editing (auto-created)
+};
+/** The Clip List: captured clips, then the clips on tracks that were renamed, then (with
+    `includeAutoCreated`) every other clip; each name, file and range once. */
+[[nodiscard]] std::vector<ClipListItem> getClipListItems(const session::Session& session, bool includeAutoCreated);
+/** Drops a Clip List item on `track` at `seconds` (on a new track of the right kind if `track` cannot
+    hold it). The new clip is selected. One undo step. */
+juce::ValueTree placeClipListItem(session::Session& session, EditorState& editor, const juce::ValueTree& source,
+                                  juce::ValueTree track, double seconds);
+
 /**
     File > Import Video (and video files dropped on the arranger): a video clip of the whole file at
     `seconds`, on `target` if it is a video track, else on the first video track, else on a new one

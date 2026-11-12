@@ -66,6 +66,7 @@ struct RenderClip
     bool fadeInEqualPower = false;  ///< crossfades use equal-power curves, user fades are linear
     bool fadeOutEqualPower = false;
     double gain = 1.0;
+    double loopLength = 0.0;     ///< looped: the first loopLength seconds repeat to the end (0 = not looped)
 
     double stretch = 1.0;        ///< timeline seconds per source second (2 = half speed)
     double pitchSemitones = 0.0; ///< independent of stretch
@@ -109,6 +110,7 @@ struct RenderMidiClip
     double endSeconds = 0.0;
     double contentStartBeat = 0.0; ///< content beat that plays at startSeconds
     double rate = 1.0;             ///< content beats advance `rate` x the tempo (per-track speed)
+    double loopLength = 0.0;       ///< looped: the first loopLength seconds repeat (0 = not looped)
     std::vector<RenderNote> notes; ///< sorted by startBeat
     std::vector<RenderControl> controls; ///< sorted by beat
 };

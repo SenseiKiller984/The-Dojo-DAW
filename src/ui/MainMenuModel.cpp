@@ -71,9 +71,35 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, scrollToTrack);
         break;
     case 3:
+    {
         menu.addCommandItem(cm, toggleEditLock);
         menu.addCommandItem(cm, toggleTimeLock);
+        juce::PopupMenu rating;
+        rating.addCommandItem(cm, clipRatingNone, "None");
+        for (int r = 1; r <= 5; ++r)
+            rating.addCommandItem(cm, clipRatingNone + r, juce::String(r));
+        menu.addSubMenu("Rating", rating);
+        menu.addSeparator();
+        menu.addCommandItem(cm, groupClips);
+        menu.addCommandItem(cm, ungroupClips);
+        menu.addCommandItem(cm, ungroupAllClips);
+        menu.addCommandItem(cm, regroupClips);
+        menu.addSeparator();
+        menu.addCommandItem(cm, loopClips);
+        menu.addCommandItem(cm, unloopClips);
+        menu.addSeparator();
+        menu.addCommandItem(cm, captureClip);
+        menu.addCommandItem(cm, renameClip);
+        menu.addCommandItem(cm, identifySyncPoint);
+        menu.addCommandItem(cm, removeSyncPoint);
+        menu.addCommandItem(cm, quantizeClipsToGrid);
+        menu.addSeparator();
+        juce::PopupMenu gain;
+        gain.addCommandItem(cm, bypassClipGain);
+        gain.addCommandItem(cm, renderClipGain);
+        menu.addSubMenu("Clip Gain", gain);
         break;
+    }
     case 4:
         menu.addCommandItem(cm, playStop);
         menu.addCommandItem(cm, record);
@@ -93,7 +119,9 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, showMixer);
         menu.addCommandItem(cm, showDevices);
         menu.addCommandItem(cm, showEditor);
+        menu.addCommandItem(cm, showClipList);
         menu.addSeparator();
+        menu.addCommandItem(cm, toggleClipRatings);
         menu.addCommandItem(cm, showVideo);
         break;
     case 6:

@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -210,6 +211,8 @@ private:
         double fadeOut = 0.0;
         double stretch = 1.0;
         bool midi = false;
+        bool looped = false;
+        std::optional<double> sync; ///< sync point, seconds from the start
     };
 
     // Rows
@@ -263,6 +266,8 @@ private:
     void paintLanes(juce::Graphics& g) const;
     void paintAutomation(juce::Graphics& g, int rowIndex, const Row& row) const;
     void paintClip(juce::Graphics& g, const juce::ValueTree& clip, int row, juce::Colour colour) const;
+    /** Clip groups on a row: one frame and title bar over each group's clips. */
+    void paintClipGroups(juce::Graphics& g, int row, const juce::ValueTree& track) const;
     /** A video clip's body: a strip of frames along it. */
     void paintVideoFrames(juce::Graphics& g, const juce::ValueTree& clip, juce::Rectangle<float> area, juce::Colour colour) const;
     void changeListenerCallback(juce::ChangeBroadcaster*) override { repaint(getLaneArea()); }

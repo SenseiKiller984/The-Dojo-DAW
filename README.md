@@ -92,10 +92,21 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Long files **stream from disk** instead of being loaded into memory.
 - Loop range (drag in the ruler's top strip, L toggles), snap, zoom, undo/redo for everything.
 
-**Clip menu** (also in the clip's right-click menu; each applies to all selected clips: it locks them, or unlocks them if all are locked)
-- **Edit Lock / Edit Unlock** (Ctrl+Shift+L): an edit-locked clip (padlock in its title bar) can't be cut, deleted, split, trimmed, faded or moved (in time or to another track). Its notes, gain, stretch and pitch are read-only in the editor. Copies of it, pasted to any track or time, are edit-locked too.
+**Clip menu** (also in the clip's right-click menu; each command applies to all selected clips, and selecting a clip of a clip group selects the whole group)
+- **Edit Lock / Edit Unlock** (Ctrl+Shift+L): an edit-locked clip (padlock in its title bar) can't be cut, deleted, split, trimmed, faded or moved (in time or to another track). Its notes, gain, stretch and pitch are read-only in the editor. Copies of it, pasted to any track or time, are edit-locked too. (It locks the selected clips, or unlocks them if all are locked; Time Lock likewise.)
 - **Time Lock / Time Unlock** (Ctrl+Alt+L): a time-locked clip (clock in its title bar) stays at its time location. It can't be moved in time or deleted, but it can be trimmed, split or dragged to another track at the same time. When it is split, both parts stay time-locked.
 - Recording over a locked clip leaves it as it is. Delete and cut skip locked clips, which stay selected.
+- **Rating** (None, 1–5; Ctrl+Alt+0…5): rate takes from 1 (lowest) to 5 (highest); none is the default. Ratings show as stars in the clip's title bar (or on its group's bar), and *View > Clip Ratings* shows or hides them.
+- **Group** (Ctrl+Alt+G): makes a clip group of the selection: audio, MIDI and video clips on one or more tracks, and other clip groups (which nest inside it). A group has one title bar with its name over its clips; it is selected, moved, copied and deleted as a whole, and its clips can't be trimmed or faded until it is ungrouped.
+- **Ungroup** (Ctrl+Alt+U): unpacks the top layer of the selected groups only; nested groups stay. **Regroup** (Ctrl+Alt+R) puts back what the last Ungroup took apart (after you edited its clips). **Ungroup All** removes every layer at once.
+- **Loop...** (Ctrl+Alt+O): an audio, MIDI or video clip repeats a number of times (a loop arrow in its title bar, a notch where each iteration starts). Drag its right edge to draw out more (or fewer) loops; its left edge moves it. **Unloop** turns it back into one standard clip per iteration, which can be edited one by one.
+- **Capture...** (Ctrl+Alt+C): the selection becomes a new clip in the **Clip List**: a range dragged over in an empty part of the lanes (the marquee is also the time selection, shown as a band on the tracks it covers), or else the selected clips. It works on one track, and across clips only when they play contiguous material of the same file (as the parts of a split clip do), or within one loop of a looped clip. Drag the clip from the Clip List onto a track to place it there.
+- **Rename...** (Ctrl+Shift+R): renames the clip. A renamed clip that editing created (a split part, a copy, an import) becomes a user-defined clip, listed in the Clip List even when auto-created clips are hidden.
+- **Identify Sync Point** (Ctrl+Alt+S) at the playhead: a small down arrow at the bottom of the clip with a light grey line, and the sync point's SMPTE time (30 fps) when the clip is selected. Moving the clip snaps the sync point, not the start, to the grid, and trimming the start keeps it on the same audio. **Remove Sync Point** takes it away.
+- **Quantize to Grid** (Ctrl+Alt+Q): moves the selected clips so that their sync point (or start, when there is none) is on the nearest line of the grid chosen in the transport's grid pop-up. Time- and edit-locked clips stay.
+- **Clip Gain** > **Bypass Clip Gain** (Ctrl+Alt+B): the clip plays without its clip gain; the setting is kept (shown as "(bypassed)" next to the gain). **Render Clip Gain** writes the clip's audio with its gain applied to a new file (in "<session> Rendered" next to the session), plays that instead and resets the gain to 0 dB. Undo brings back the original.
+- **Clip List** (the **CLIPS** tab, F6): captured clips, then user-defined (renamed) clips, and with **Auto-Created** every other clip. Drag a row onto a track to place a copy (dropped on a track that can't hold it, a new track of the right kind is made); double-click or right-click to rename; captured clips can be removed from the list. Captured clips are saved with the session.
+- Not available yet: Pro Tools-style **playlists** (alternate takes on a track and its playlist lanes), so there is no showing or hiding of playlist lanes by rating. Ratings are saved with each clip, ready for that.
 
 **MIDI sequencing**
 - **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend); **quantise** with strength and optional note ends.
@@ -145,7 +156,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
 2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop.
-3. The bottom panel has three tabs: **Mixer** (F3), **Devices** of the selected track (F4) and the **Editor** (F5) for the clip you double-clicked. In the mixer, double-click the volume or pan value under a fader (or the master's GAIN) to type it: `-6`, `-inf`, `C`, `L20`, `R35`.
+3. The bottom panel has four tabs: **Mixer** (F3), **Devices** of the selected track (F4), the **Editor** (F5) for the clip you double-clicked and the **Clip List** (F6). In the mixer, double-click the volume or pan value under a fader (or the master's GAIN) to type it: `-6`, `-inf`, `C`, `L20`, `R35`.
 4. The browser lists devices and plug-ins at the top (with search; drag one onto a track or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
 5. Export with **Ctrl+R**; save with **Ctrl+S**.
 
@@ -159,7 +170,11 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Ctrl+I, Ctrl+R | Import audio, export audio |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+X / C / V, Delete, Ctrl+D, Ctrl+E, Ctrl+A | Cut / copy / paste, delete, duplicate, split at playhead, select all clips |
-| F3 / F4 / F5 | Mixer / Devices / Editor |
+| F3 / F4 / F5 / F6 | Mixer / Devices / Editor / Clip List |
+| Ctrl+Alt+G / U / R | Group, ungroup, regroup clips |
+| Ctrl+Alt+O, Ctrl+Alt+C, Ctrl+Shift+R | Loop, capture, rename clips |
+| Ctrl+Alt+S, Ctrl+Alt+Q, Ctrl+Alt+B | Identify sync point, quantize clips to grid, bypass clip gain |
+| Ctrl+Alt+0 … 5 | Clip rating (none, 1–5) |
 | Piano roll: Q, arrows, Delete | Quantise, move / transpose selected notes, delete |
 | Ctrl+G | Toggle snap |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in, out, to fit |
@@ -170,6 +185,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 Mouse:
 - Right-click clips, track headers, automation lanes or empty lanes for context menus.
+- Drag in an empty part of the lanes for a rubber band: it selects the clips it touches and is the time selection (for Capture). Ctrl or Shift add to the selection.
 - Shift+wheel scrolls sideways; Ctrl+wheel zooms (also in the piano roll).
 - Double-click a fader, knob or slider to reset it.
 

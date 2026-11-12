@@ -775,23 +775,19 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
         return std::clamp(offset, 0, numSamples - 1);
     };
 
-    for (const auto& clip : track.midiClips)
+    // One clip (or one iteration of a looped one) from clipStart to clipEnd.
+    const auto schedule = [&](const RenderMidiClip& clip, double clipStart, double clipEnd)
     {
-        if (clip.startSeconds >= t1)
-            break;
-        if (clip.endSeconds <= t0)
-            continue;
-
         const double beatsPerSecond = tempoBeatsPerSecond * (clip.rate > 0.0 ? clip.rate : 1.0);
         const auto beatAt = [&](double seconds)
-        { return clip.contentStartBeat + (seconds - clip.startSeconds) * beatsPerSecond; };
+        { return clip.contentStartBeat + (seconds - clipStart) * beatsPerSecond; };
         const auto timeOf = [&](double beat)
-        { return clip.startSeconds + (beat - clip.contentStartBeat) / beatsPerSecond; };
+        { return clipStart + (beat - clip.contentStartBeat) / beatsPerSecond; };
 
-        const double beginBeat = beatAt(std::max(t0, clip.startSeconds));
-        const double endBeat = beatAt(std::min(t1, clip.endSeconds));
-        const double clipEndBeat = beatAt(clip.endSeconds);
-        const bool clipEndsInBlock = clip.endSeconds <= t1;
+        const double beginBeat = beatAt(std::max(t0, clipStart));
+        const double endBeat = beatAt(std::min(t1, clipEnd));
+        const double clipEndBeat = beatAt(clipEnd);
+        const bool clipEndsInBlock = clipEnd <= t1;
 
         // Note-offs first, so a note re-struck at the same sample is released before it restarts.
         for (const auto& note : clip.notes)
@@ -834,6 +830,30 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
                                                                       juce::jlimit(0, 127, juce::roundToInt(control.value * 127.0f))),
                                    offset);
         }
+    };
+
+    for (const auto& clip : track.midiClips)
+    {
+        if (clip.startSeconds >= t1)
+            break;
+        if (clip.endSeconds <= t0)
+            continue;
+
+        if (clip.loopLength > 0.0 && clip.loopLength < clip.endSeconds - clip.startSeconds - 1.0e-9)
+        {
+            // Looped: every iteration replays the first loopLength seconds of content.
+            const auto first = static_cast<long long>(std::max(0.0, std::floor((t0 - clip.startSeconds) / clip.loopLength)));
+            const auto last = static_cast<long long>(std::floor((std::min(t1, clip.endSeconds) - clip.startSeconds) / clip.loopLength));
+            for (auto k = first; k <= last; ++k)
+            {
+                const double iterationStart = clip.startSeconds + static_cast<double>(k) * clip.loopLength;
+                const double iterationEnd = std::min(iterationStart + clip.loopLength, clip.endSeconds);
+                if (iterationEnd > t0 && iterationStart < t1 && iterationEnd > iterationStart)
+                    schedule(clip, iterationStart, iterationEnd);
+            }
+            continue;
+        }
+        schedule(clip, clip.startSeconds, clip.endSeconds);
     }
 }
 

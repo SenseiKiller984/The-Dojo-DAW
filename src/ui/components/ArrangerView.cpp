@@ -5,6 +5,8 @@
 
 #include "ui/Commands.h"
 #include "ui/EditActions.h"
+#include "ui/components/ClipListPanel.h"
+#include "ui/components/VideoWindow.h"
 #include "ui/theme/DojoTheme.h"
 #include "video/VideoSource.h"
 
@@ -24,6 +26,7 @@ constexpr int kIndent = 14;
 constexpr int kLoopStripHeight = 11;
 constexpr float kEdgeGrabWidth = 6.0f;
 constexpr float kClipTitleHeight = 16.0f;
+constexpr double kSmpteFrameRate = 30.0; ///< the timecode rate of sync point locations
 constexpr float kFadeHandleSize = 8.0f;
 constexpr float kPointRadius = 4.5f;
 constexpr double kMinPixelsPerSecond = 2.0;
@@ -43,6 +46,35 @@ void drawPadlock(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour co
     g.setColour(colour);
     g.strokePath(shackle, juce::PathStrokeType(1.4f));
     g.fillRoundedRectangle(body, 1.2f);
+}
+
+/** Clip rating: `rating` small filled stars (of five). */
+void drawStars(juce::Graphics& g, juce::Rectangle<float> area, int rating, juce::Colour colour)
+{
+    const float size = std::min(9.0f, area.getHeight());
+    for (int k = 0; k < rating; ++k)
+    {
+        juce::Path star;
+        const auto centre = juce::Point<float>(area.getX() + size * 0.5f + static_cast<float>(k) * (size + 1.0f), area.getCentreY());
+        star.addStar(centre, 5, size * 0.22f, size * 0.5f, 0.0f);
+        g.setColour(colour);
+        g.fillPath(star);
+    }
+}
+
+/** Looped clip badge: a circular arrow. */
+void drawLoopBadge(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
+{
+    const auto box = area.withSizeKeepingCentre(10.0f, 10.0f);
+    juce::Path arc;
+    arc.addCentredArc(box.getCentreX(), box.getCentreY(), 4.0f, 4.0f, 0.0f, 0.5f, juce::MathConstants<float>::twoPi - 0.3f, true);
+    g.setColour(colour);
+    g.strokePath(arc, juce::PathStrokeType(1.3f));
+    juce::Path head;
+    const float x = box.getCentreX() + 4.0f * std::sin(0.5f);
+    const float y = box.getCentreY() - 4.0f * std::cos(0.5f);
+    head.addTriangle(x - 2.5f, y - 2.0f, x + 2.0f, y - 2.5f, x + 0.5f, y + 2.0f);
+    g.fillPath(head);
 }
 
 /** Time Lock badge: a clock face. */
@@ -346,6 +378,15 @@ juce::Rectangle<float> ArrangerView::getClipBounds(const juce::ValueTree& clip, 
 void ArrangerView::selectClipWithModifiers(const juce::ValueTree& clip, juce::ModifierKeys mods)
 {
     const auto id = session::clip::getId(clip);
+    // A clip in a group stands for its whole (outermost) group.
+    const auto idsOf = [](const std::vector<juce::ValueTree>& clips)
+    {
+        std::set<std::uint32_t> result;
+        for (const auto& c : clips)
+            result.insert(session::clip::getId(c));
+        return result;
+    };
+    const auto whole = idsOf(session_.withWholeGroups({clip}));
 
     if (mods.isShiftDown())
     {
@@ -360,17 +401,29 @@ void ArrangerView::selectClipWithModifiers(const juce::ValueTree& clip, juce::Mo
         const double from = std::min(session::clip::getStart(anchor), session::clip::getStart(clip));
         const double to = std::max(session::clip::getStart(anchor), session::clip::getStart(clip));
         auto selection = mods.isCommandDown() ? editor_.getSelectedClips() : std::set<std::uint32_t>{};
+        std::vector<juce::ValueTree> range;
         for (const auto& c : clip.getParent())
             if (session::Session::isClip(c) && session::clip::getStart(c) >= from - 1.0e-9 && session::clip::getStart(c) <= to + 1.0e-9)
-                selection.insert(session::clip::getId(c));
+                range.push_back(c);
+        for (const auto rangeId : idsOf(session_.withWholeGroups(range)))
+            selection.insert(rangeId);
         editor_.setSelectedClips(std::move(selection));
         return;
     }
 
     if (mods.isCommandDown())
-        editor_.toggleClip(id);
+    {
+        auto selection = editor_.getSelectedClips();
+        const bool wasSelected = editor_.isClipSelected(id);
+        for (const auto member : whole)
+            if (wasSelected)
+                selection.erase(member);
+            else
+                selection.insert(member);
+        editor_.setSelectedClips(std::move(selection));
+    }
     else if (!editor_.isClipSelected(id)) // a selected clip keeps the selection: it may be dragged
-        editor_.selectClip(id, false);
+        editor_.setSelectedClips(whole);
     selectionAnchor_ = id;
 }
 
@@ -382,6 +435,7 @@ void ArrangerView::selectClipsInArea(juce::Rectangle<int> area, const std::set<s
     const int y1 = area.getBottom() - theme::metrics::rulerHeight + scrollY_;
 
     auto selection = base;
+    std::vector<juce::ValueTree> touched;
     for (const auto& row : rows())
     {
         if (row.kind != Row::Kind::track)
@@ -391,8 +445,10 @@ void ArrangerView::selectClipsInArea(juce::Rectangle<int> area, const std::set<s
             continue;
         for (const auto& c : row.track)
             if (session::Session::isClip(c) && session::clip::getEnd(c) > t0 && session::clip::getStart(c) < t1)
-                selection.insert(session::clip::getId(c));
+                touched.push_back(c);
     }
+    for (const auto& c : session_.withWholeGroups(touched)) // a group is selected as a whole
+        selection.insert(session::clip::getId(c));
     if (selection != editor_.getSelectedClips())
         editor_.setSelectedClips(std::move(selection));
 }
@@ -440,6 +496,17 @@ void ArrangerView::dragMarquee(const juce::MouseEvent& e)
     const int y = juce::jlimit(lanes.getY(), lanes.getBottom(), juce::roundToInt(e.position.y));
     marqueeEnd_ = {xToTime(x), y - theme::metrics::rulerHeight + scrollY_};
     selectClipsInArea(getMarqueeArea(), marqueeBase_);
+
+    // The range dragged over is also the time selection (on the tracks it touches): Clip > Capture.
+    EditorState::TimeSelection selection;
+    selection.start = std::max(0.0, std::min(marqueeAnchor_.seconds, marqueeEnd_.seconds));
+    selection.end = std::max(marqueeAnchor_.seconds, marqueeEnd_.seconds);
+    const int y0 = std::min(marqueeAnchor_.contentY, marqueeEnd_.contentY);
+    const int y1 = std::max(marqueeAnchor_.contentY, marqueeEnd_.contentY);
+    for (const auto& row : rows())
+        if (row.kind == Row::Kind::track && row.top + row.height > y0 && row.top < y1)
+            selection.trackIds.insert(session::track::getId(row.track));
+    editor_.setTimeSelection(std::move(selection));
     repaint();
 }
 
@@ -535,8 +602,8 @@ ArrangerView::ClipHit ArrangerView::hitTestClip(juce::Point<float> position) con
             continue;
 
         ClipHit hit{c, row, ClipZone::body};
-        if (session::clip::isEditLocked(c))
-            return hit; // no trims or fades on an edit-locked clip
+        if (session::clip::isEditLocked(c) || session::clip::isGrouped(c))
+            return hit; // no trims or fades on an edit-locked clip, nor inside a clip group
         const bool audio = !session::clip::isMidi(c);
         const float fadeInX = bounds.getX() + static_cast<float>(session::clip::getFadeIn(c) * pixelsPerSecond_);
         const float fadeOutX = bounds.getRight() - static_cast<float>(session::clip::getFadeOut(c) * pixelsPerSecond_);
@@ -547,8 +614,8 @@ ArrangerView::ClipHit ArrangerView::hitTestClip(juce::Point<float> position) con
             hit.zone = ClipZone::fadeInHandle;
         else if (audio && nearHandleRow && std::abs(position.x - fadeOutX) <= kFadeHandleSize)
             hit.zone = ClipZone::fadeOutHandle;
-        else if (bounds.getWidth() > 3.0f * kEdgeGrabWidth && position.x - bounds.getX() <= kEdgeGrabWidth)
-            hit.zone = ClipZone::leftEdge;
+        else if (bounds.getWidth() > 3.0f * kEdgeGrabWidth && position.x - bounds.getX() <= kEdgeGrabWidth && !session::clip::isLooped(c))
+            hit.zone = ClipZone::leftEdge; // (a looped clip is lengthened or shortened at its end)
         else if (bounds.getWidth() > 3.0f * kEdgeGrabWidth && bounds.getRight() - position.x <= kEdgeGrabWidth)
             hit.zone = ClipZone::rightEdge;
 
@@ -1310,9 +1377,97 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
         for (const auto& c : all[i].track)
             if (session::Session::isClip(c))
                 paintClip(g, c, static_cast<int>(i), trackColour);
+        paintClipGroups(g, static_cast<int>(i), all[i].track);
+    }
+
+    // The time selection.
+    if (const auto& selection = editor_.getTimeSelection(); !selection.isEmpty() && !marqueeActive_)
+    {
+        const float x0 = timeToX(selection.start);
+        const float x1 = timeToX(selection.end);
+        for (std::size_t i = 0; i < all.size(); ++i)
+            if (all[i].kind == Row::Kind::track && selection.trackIds.count(session::track::getId(all[i].track)) > 0)
+            {
+                const auto row = getRowBounds(static_cast<int>(i)).toFloat();
+                const juce::Rectangle<float> band(x0, row.getY() + 1.0f, std::max(1.0f, x1 - x0), row.getHeight() - 2.0f);
+                g.setColour(colour::accent.withAlpha(0.16f));
+                g.fillRect(band);
+                g.setColour(colour::accent.withAlpha(0.7f));
+                g.drawVerticalLine(juce::roundToInt(x0), band.getY(), band.getBottom());
+                g.drawVerticalLine(juce::roundToInt(x1), band.getY(), band.getBottom());
+            }
     }
 
     g.restoreState();
+}
+
+void ArrangerView::paintClipGroups(juce::Graphics& g, int row, const juce::ValueTree& track) const
+{
+    using namespace theme;
+
+    // Each outermost group's extent on this row (its clips may continue on other tracks).
+    struct Extent
+    {
+        std::uint32_t id = 0;
+        juce::Rectangle<float> bounds;
+        bool selected = false;
+        int rating = 0; ///< the members' rating when they share one, else -1
+    };
+    std::vector<Extent> extents;
+    for (const auto& c : track)
+    {
+        if (!session::Session::isClip(c))
+            continue;
+        const auto group = session::clip::getOuterGroup(c);
+        if (group == 0)
+            continue;
+        const auto bounds = getClipBounds(c, row);
+        const bool selected = editor_.isClipSelected(session::clip::getId(c));
+        auto it = std::find_if(extents.begin(), extents.end(), [group](const Extent& x) { return x.id == group; });
+        const int rating = session::clip::getRating(c);
+        if (it == extents.end())
+            extents.push_back({group, bounds, selected, rating});
+        else
+        {
+            it->bounds = it->bounds.getUnion(bounds);
+            it->selected = it->selected || selected;
+            if (it->rating != rating)
+                it->rating = -1;
+        }
+    }
+
+    for (const auto& x : extents)
+    {
+        if (!x.bounds.toNearestInt().intersects(g.getClipBounds()))
+            continue;
+        const auto frame = x.bounds.expanded(1.0f, 0.0f);
+        const auto edge = x.selected ? colour::textPrimary : colour::accent;
+
+        // A title bar across the group, with a group mark and its name.
+        auto title = frame.withHeight(kClipTitleHeight);
+        juce::Path bar;
+        bar.addRoundedRectangle(title.getX(), title.getY(), title.getWidth(), title.getHeight(), 4.0f, 4.0f, true, true, false, false);
+        g.setColour(colour::accent.darker(0.45f));
+        g.fillPath(bar);
+        auto text = title.reduced(5.0f, 0.0f);
+        // (the group bar covers its clips' title bars: their shared rating shows on it)
+        if (x.rating > 0 && editor_.isShowingClipRatings() && text.getWidth() > 40.0f + static_cast<float>(x.rating) * 10.0f)
+            drawStars(g, text.removeFromRight(static_cast<float>(x.rating) * 10.0f + 2.0f), x.rating, colour::textPrimary);
+        if (text.getWidth() > 14.0f)
+        {
+            const auto mark = text.removeFromLeft(10.0f).withSizeKeepingCentre(9.0f, 8.0f);
+            g.setColour(colour::textPrimary);
+            g.drawRect(mark.translated(1.5f, -1.5f), 1.0f);
+            g.fillRect(mark.withTrimmedRight(3.0f).withTrimmedTop(3.0f));
+            text.removeFromLeft(4.0f);
+        }
+        g.setFont(sansBold(11.0f));
+        g.setColour(colour::textPrimary);
+        g.drawText(session_.getGroupName(x.id), text, juce::Justification::centredLeft, true);
+
+        g.setColour(edge);
+        g.drawRoundedRectangle(frame.reduced(0.5f), 4.0f, x.selected ? 2.0f : 1.4f);
+    }
 }
 
 void ArrangerView::paintAutomation(juce::Graphics& g, int rowIndex, const Row& row) const
@@ -1400,7 +1555,10 @@ void ArrangerView::paintVideoFrames(juce::Graphics& g, const juce::ValueTree& c,
     for (float x = body.getX() + std::floor((visible.getX() - body.getX()) / tileWidth) * tileWidth; x < visible.getRight(); x += tileWidth)
     {
         const auto tile = juce::Rectangle<float>(x, body.getY() + 1.0f, tileWidth, static_cast<float>(height));
-        const auto image = videoFrames_->getThumbnail(file, offset + static_cast<double>(x - body.getX()) / pixelsPerSecond_, height);
+        double inClip = static_cast<double>(x - body.getX()) / pixelsPerSecond_;
+        if (session::clip::isLooped(c))
+            inClip = std::fmod(inClip, session::clip::getLoopLength(c));
+        const auto image = videoFrames_->getThumbnail(file, offset + inClip, height);
         if (image.isValid() && image.getWidth() > 1)
             g.drawImage(image, tile.reduced(0.5f, 0.0f), juce::RectanglePlacement::stretchToFit);
         else
@@ -1432,20 +1590,27 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
     g.fillRect(title.withTrimmedTop(6.0f));
 
     juce::String name = session::clip::getName(c);
-    if (!midi)
+    if (!midi && c.hasType(session::ids::clip))
     {
         if (std::abs(session::clip::getStretch(c) - 1.0) > 1.0e-6)
             name << "  x" << juce::String(session::clip::getStretch(c), 2);
         if (std::abs(session::clip::getPitch(c)) > 1.0e-6)
             name << "  " << (session::clip::getPitch(c) > 0 ? "+" : "") << juce::String(session::clip::getPitch(c), 1) << " st";
+        if (const double gainDb = session::clip::getGainDb(c); std::abs(gainDb) > 1.0e-6)
+            name << "  " << (gainDb > 0 ? "+" : "") << juce::String(gainDb, 1) << " dB" << (session::clip::isGainBypassed(c) ? " (bypassed)" : "");
     }
-    // Lock badges on the right of the title bar.
+    // Badges on the right of the title bar: locks, loop, rating.
     auto titleText = title.reduced(6.0f, 0.0f);
     const bool editLocked = session::clip::isEditLocked(c);
+    const bool grouped = session::clip::isGrouped(c);
     if (session::clip::isTimeLocked(c) && titleText.getWidth() > 30.0f)
         drawClockBadge(g, titleText.removeFromRight(12.0f), textOn(colour));
     if (editLocked && titleText.getWidth() > 30.0f)
         drawPadlock(g, titleText.removeFromRight(12.0f), textOn(colour));
+    if (session::clip::isLooped(c) && titleText.getWidth() > 30.0f)
+        drawLoopBadge(g, titleText.removeFromRight(12.0f), textOn(colour));
+    if (const int rating = session::clip::getRating(c); rating > 0 && editor_.isShowingClipRatings() && titleText.getWidth() > 30.0f + static_cast<float>(rating) * 10.0f)
+        drawStars(g, titleText.removeFromRight(static_cast<float>(rating) * 10.0f + 2.0f), rating, textOn(colour));
     g.setColour(textOn(colour));
     g.setFont(sansBold(10.5f));
     g.drawText(name, titleText, juce::Justification::centredLeft, true);
@@ -1500,7 +1665,7 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
             g.drawLine(body.getRight() - fadeOutWidth, body.getY(), body.getRight(), body.getBottom(), 1.2f);
         }
 
-        if (bounds.getWidth() > 4.0f * kFadeHandleSize && !editLocked)
+        if (bounds.getWidth() > 4.0f * kFadeHandleSize && !editLocked && !grouped)
         {
             g.setColour(selected ? colour::textPrimary : colour::textPrimary.withAlpha(0.55f));
             for (const float x : {body.getX() + fadeInWidth, body.getRight() - fadeOutWidth})
@@ -1523,6 +1688,39 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
                 g.drawLine(xa, body.getY(), xb, body.getBottom(), 1.0f);
                 g.drawLine(xa, body.getBottom(), xb, body.getY(), 1.0f);
             }
+        }
+    }
+
+    // A looped clip: a notch where each iteration starts.
+    if (session::clip::isLooped(c))
+    {
+        const double loop = session::clip::getLoopLength(c);
+        g.setColour(colour::textPrimary.withAlpha(0.5f));
+        for (double t = session::clip::getStart(c) + loop; t < session::clip::getEnd(c) - 1.0e-9; t += loop)
+        {
+            const float x = timeToX(t);
+            g.drawLine(x, body.getY(), x, body.getBottom(), 1.0f);
+            juce::Path notch;
+            notch.addTriangle(x - 3.0f, body.getY(), x + 3.0f, body.getY(), x, body.getY() + 4.0f);
+            g.fillPath(notch);
+        }
+    }
+
+    // The sync point: a light grey line and a small down arrow at the bottom of the clip.
+    if (const auto sync = session::clip::getSyncPoint(c))
+    {
+        const float x = timeToX(session::clip::getStart(c) + *sync);
+        g.setColour(juce::Colour(0xffd0d0d0).withAlpha(0.8f));
+        g.drawLine(x, body.getY(), x, bounds.getBottom() - 6.0f, 1.0f);
+        juce::Path arrow;
+        arrow.addTriangle(x - 4.0f, bounds.getBottom() - 7.0f, x + 4.0f, bounds.getBottom() - 7.0f, x, bounds.getBottom() - 1.5f);
+        g.fillPath(arrow);
+        // Its SMPTE location, on a selected clip with room for it.
+        if (selected && bounds.getRight() - x > 90.0f && bounds.getHeight() > 34.0f)
+        {
+            g.setFont(mono(10.0f));
+            g.drawText("SYNC " + formatTimecode(session::clip::getReferenceTime(c), kSmpteFrameRate),
+                       juce::Rectangle<float>(x + 6.0f, bounds.getBottom() - 14.0f, 100.0f, 12.0f), juce::Justification::centredLeft, false);
         }
     }
 
@@ -1549,6 +1747,14 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
     const double offset = session::clip::getOffset(c);
     const double stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
     const double bucketsPerSecond = asset->sampleRate / session::WaveformPeaks::kFramesPerBucket;
+    // A looped clip shows its first loop-length again in every iteration.
+    const bool looped = session::clip::isLooped(c);
+    const double loop = session::clip::getLoopLength(c);
+    const auto inClip = [&](float x)
+    {
+        const double t = xToTime(x) - start;
+        return looped && t >= 0.0 ? std::fmod(t, loop) : t;
+    };
 
     // Stereo files show their two channels (left above right), mono files one; a clip that plays one
     // channel of its file (a track split into mono) shows that channel.
@@ -1559,8 +1765,9 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
                             [&](int lane, int x)
                             {
                                 const int channel = chosen >= 0 ? std::min(chosen, peaks.numChannels - 1) : lane;
-                                const double sourceT0 = offset + (xToTime(static_cast<float>(x)) - start) / stretch;
-                                const double sourceT1 = offset + (xToTime(static_cast<float>(x + 1)) - start) / stretch;
+                                const double t0 = inClip(static_cast<float>(x));
+                                const double sourceT0 = offset + t0 / stretch;
+                                const double sourceT1 = offset + std::max(t0, inClip(static_cast<float>(x + 1))) / stretch;
                                 const int b0 = juce::jlimit(0, numBuckets - 1, static_cast<int>(std::floor(sourceT0 * bucketsPerSecond)));
                                 const int b1 = juce::jlimit(b0 + 1, numBuckets, static_cast<int>(std::ceil(sourceT1 * bucketsPerSecond)));
                                 const auto& minimum = peaks.minimum[static_cast<std::size_t>(channel)];
@@ -1604,19 +1811,30 @@ void ArrangerView::paintMidiNotes(juce::Graphics& g, const juce::ValueTree& c, j
     const double clipStart = session::clip::getStart(c);
     const double contentStart = session::clip::getOffset(c);
 
+    // A looped clip repeats its first loop-length of notes in every iteration.
+    const double loop = session::clip::getLoopLength(c);
+    const double clipEnd = session::clip::getEnd(c);
+    const int iterations = session::clip::isLooped(c) ? std::max(1, static_cast<int>(std::ceil((clipEnd - clipStart) / loop - 1.0e-9))) : 1;
     g.setColour(colour);
-    for (const auto& n : c)
+    for (int k = 0; k < iterations; ++k)
     {
-        if (!n.hasType(session::ids::note))
-            continue;
-        const double startTime = clipStart + (session::note::getStart(n) - contentStart) / beatsPerSecond;
-        const double endTime = clipStart + (session::note::getEnd(n) - contentStart) / beatsPerSecond;
-        const float x0 = std::max(area.getX(), timeToX(startTime));
-        const float x1 = std::min(area.getRight(), timeToX(endTime));
-        if (x1 <= x0)
-            continue;
-        const float y = area.getBottom() - static_cast<float>(session::note::getNote(n) - lowest + 1) * noteHeight;
-        g.fillRect(x0, y, std::max(1.0f, x1 - x0), std::max(1.0f, noteHeight - 0.5f));
+        const double base = clipStart + k * loop;
+        const double windowEnd = iterations > 1 ? std::min(base + loop, clipEnd) : clipEnd;
+        for (const auto& n : c)
+        {
+            if (!n.hasType(session::ids::note))
+                continue;
+            const double startTime = base + (session::note::getStart(n) - contentStart) / beatsPerSecond;
+            const double endTime = std::min(windowEnd, base + (session::note::getEnd(n) - contentStart) / beatsPerSecond);
+            if (startTime >= windowEnd)
+                continue;
+            const float x0 = std::max(area.getX(), timeToX(startTime));
+            const float x1 = std::min(area.getRight(), timeToX(endTime));
+            if (x1 <= x0)
+                continue;
+            const float y = area.getBottom() - static_cast<float>(session::note::getNote(n) - lowest + 1) * noteHeight;
+            g.fillRect(x0, y, std::max(1.0f, x1 - x0), std::max(1.0f, noteHeight - 0.5f));
+        }
     }
 }
 
@@ -1754,6 +1972,8 @@ void ArrangerView::mouseDown(const juce::MouseEvent& e)
     }
 
     const auto hit = hitTestClip(e.position);
+    if (!e.mods.isPopupMenu())
+        editor_.clearTimeSelection(); // a click starts a new selection
     if (hit.clip.isValid())
     {
         const auto clipId = session::clip::getId(hit.clip);
@@ -1949,6 +2169,8 @@ void ArrangerView::beginClipDrag(const ClipHit& hit)
         s.fadeOut = session::clip::getFadeOut(c);
         s.stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
         s.midi = session::clip::isMidi(c);
+        s.looped = session::clip::isLooped(c);
+        s.sync = session::clip::getSyncPoint(c);
         return s;
     };
 
@@ -2129,7 +2351,9 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     {
     case DragMode::moveClips:
     {
-        double delta = snap(anchor.start + deltaSeconds, e.mods) - anchor.start;
+        // The anchor's sync point (else its start) is what snaps to the grid.
+        const double reference = anchor.start + anchor.sync.value_or(0.0);
+        double delta = snap(reference + deltaSeconds, e.mods) - reference;
         int minOrdinal = anchor.trackOrdinal;
         int maxOrdinal = anchor.trackOrdinal;
         for (const auto& o : dragOriginals_)
@@ -2172,15 +2396,24 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
             session::clip::setOffset(anchorClip, anchor.offset + (newStart - anchor.start) / anchor.stretch, um);
             session::clip::setFadeIn(anchorClip, juce::jmin(anchor.fadeIn, end - newStart), um);
         }
+        if (anchor.sync.has_value()) // the sync point stays with the material
+        {
+            const double sync = *anchor.sync - (newStart - anchor.start);
+            session::clip::setSyncPoint(anchorClip, sync >= 0.0 ? std::optional<double>(sync) : std::nullopt, um);
+        }
         break;
     }
 
     case DragMode::trimEnd:
     {
-        const double latest = anchor.midi ? 1.0e9
-                                          : anchor.start + juce::jmax(session::kMinClipLength, (dragSourceLength_ - anchor.offset) * anchor.stretch);
+        // (a looped clip repeats for as long as it is drawn out)
+        const double latest = anchor.midi || anchor.looped
+                                  ? 1.0e9
+                                  : anchor.start + juce::jmax(session::kMinClipLength, (dragSourceLength_ - anchor.offset) * anchor.stretch);
         const double newEnd = juce::jlimit(anchor.start + session::kMinClipLength, latest, snap(anchor.start + anchor.length + deltaSeconds, e.mods));
         session::clip::setLength(anchorClip, newEnd - anchor.start, um);
+        if (anchor.sync.has_value())
+            session::clip::setSyncPoint(anchorClip, *anchor.sync <= newEnd - anchor.start ? anchor.sync : std::nullopt, um);
         if (!anchor.midi)
             session::clip::setFadeOut(anchorClip, juce::jmin(anchor.fadeOut, newEnd - anchor.start), um);
         break;
@@ -2247,9 +2480,15 @@ void ArrangerView::mouseUp(const juce::MouseEvent& e)
         repaint();
     }
 
-    // A plain click on a clip that was part of a multi-selection selects just that clip.
+    // A plain click on a clip that was part of a multi-selection selects just that clip (and its group).
     if (dragMode_ == DragMode::moveClips && !dragMoved_ && !e.mods.isAnyModifierKeyDown())
-        editor_.selectClip(dragAnchorId_, false);
+    {
+        std::set<std::uint32_t> selection{dragAnchorId_};
+        if (const auto anchor = session_.findClip(dragAnchorId_); anchor.isValid())
+            for (const auto& c : session_.withWholeGroups({anchor}))
+                selection.insert(session::clip::getId(c));
+        editor_.setSelectedClips(std::move(selection));
+    }
     // Likewise for a track header.
     if (dragMode_ == DragMode::reorderTrack && !dragMoved_ && pendingTrackClick_ != 0 && !e.mods.isAnyModifierKeyDown())
         editor_.selectTrack(pendingTrackClick_);
@@ -2498,6 +2737,45 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
                              session::clip::setPitch(c, 0.0, &safe->session_.getUndoManager());
                          }
                      });
+    }
+
+    menu.addSeparator();
+    const auto command = [safe](int id)
+    {
+        return [safe, id]
+        {
+            if (safe != nullptr && safe->onCommand)
+                safe->onCommand(id);
+        };
+    };
+    {
+        const int rating = actions::getSelectedClipsRating(session_, editor_);
+        juce::PopupMenu ratings;
+        ratings.addItem("None", true, rating == 0, command(commands::clipRatingNone));
+        for (int r = 1; r <= 5; ++r)
+            ratings.addItem(juce::String(r), true, rating == r, command(commands::clipRatingNone + r));
+        menu.addSubMenu("Rating", ratings);
+    }
+    const bool hasGroups = actions::selectionHasGroups(session_, editor_);
+    menu.addItem("Group", command(commands::groupClips));
+    menu.addItem("Ungroup", hasGroups, false, command(commands::ungroupClips));
+    menu.addItem("Ungroup All", hasGroups, false, command(commands::ungroupAllClips));
+    menu.addItem("Regroup", !editor_.getLastUngroup().empty(), false, command(commands::regroupClips));
+    menu.addSeparator();
+    menu.addItem("Loop...", editable, false, command(commands::loopClips));
+    menu.addItem("Unloop", actions::selectionHasLoopedClips(session_, editor_), false, command(commands::unloopClips));
+    menu.addSeparator();
+    menu.addItem("Capture...", command(commands::captureClip));
+    menu.addItem("Rename...", command(commands::renameClip));
+    menu.addItem("Identify Sync Point", playheadInside && editable, false, command(commands::identifySyncPoint));
+    menu.addItem("Remove Sync Point", actions::selectionHasSyncPoints(session_, editor_), false, command(commands::removeSyncPoint));
+    menu.addItem("Quantize to Grid", session::clip::canMoveInTime(clipTree), false, command(commands::quantizeClipsToGrid));
+    if (clipTree.hasType(session::ids::clip))
+    {
+        juce::PopupMenu gain;
+        gain.addItem("Bypass Clip Gain", editable, session::clip::isGainBypassed(clipTree), command(commands::bypassClipGain));
+        gain.addItem("Render Clip Gain", editable && std::abs(session::clip::getGainDb(clipTree)) > 1.0e-6, false, command(commands::renderClipGain));
+        menu.addSubMenu("Clip Gain", gain);
     }
 
     menu.addSeparator();
@@ -3037,7 +3315,8 @@ void ArrangerView::filesDropped(const juce::StringArray& files, int x, int y)
 bool ArrangerView::isInterestedInDragSource(const SourceDetails& details)
 {
     const auto description = details.description.toString();
-    return browserDrag::isFileDrag(details.description) || description.startsWith(kDeviceDragPrefix);
+    return browserDrag::isFileDrag(details.description) || description.startsWith(kDeviceDragPrefix)
+           || description.startsWith(ClipListPanel::kDragPrefix);
 }
 
 void ArrangerView::itemDragEnter(const SourceDetails& details)
@@ -3065,6 +3344,17 @@ void ArrangerView::itemDropped(const SourceDetails& details)
         const auto target = dropRow_ >= 0 ? rows()[static_cast<std::size_t>(dropRow_)].track : juce::ValueTree();
         if (onDeviceDropped)
             onDeviceDropped(target, description);
+        repaint();
+        return;
+    }
+
+    if (description.startsWith(ClipListPanel::kDragPrefix))
+    {
+        // A clip from the Clip List: a copy at the drop point (on a new track if this one cannot hold it).
+        dropActive_ = false;
+        const auto source = ClipListPanel::findDragged(session_, details.description);
+        const auto target = dropRow_ >= 0 ? rows()[static_cast<std::size_t>(dropRow_)].track : juce::ValueTree();
+        actions::placeClipListItem(session_, editor_, source, target, dropTime_);
         repaint();
         return;
     }

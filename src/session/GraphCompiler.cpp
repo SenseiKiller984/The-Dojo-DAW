@@ -573,7 +573,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 rc.sourceOffsetSeconds = clip::getOffset(c);
                 rc.fadeInSeconds = clip::getFadeIn(c);
                 rc.fadeOutSeconds = clip::getFadeOut(c);
-                rc.gain = dbToGain(clip::getGainDb(c));
+                rc.gain = clip::isGainBypassed(c) ? 1.0 : dbToGain(clip::getGainDb(c)); // (bypassed: the setting is kept)
+                rc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
                 rc.stretch = std::max(kMinStretch, clip::getStretch(c)) / trackSpeed;
                 rc.pitchSemitones = clip::getPitch(c) + trackPitch + globalTranspose + speedCompensation;
                 rc.numChannels = asset->numChannels;
@@ -625,6 +626,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 mc.endSeconds = clip::getEnd(c);
                 mc.contentStartBeat = clip::getOffset(c);
                 mc.rate = trackSpeed;
+                mc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
 
                 for (const auto& n : c)
                 {

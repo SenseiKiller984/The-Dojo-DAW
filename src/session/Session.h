@@ -27,10 +27,12 @@ using engine::TrackKind;
                       volumeDb, pan, muted, soloed, phaseInverted, output, input, inputStereo,
                       monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation,
                       format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre
-            CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, stretch, pitch,
-                        sourceChannel, editLocked, timeLocked
+            CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, gainBypassed, stretch,
+                        pitch, sourceChannel, editLocked, timeLocked, rating (1..5), groups (clip group ids,
+                        outermost first), looped, loopLength, syncPoint (seconds from the start), userNamed
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
-            MIDICLIP    id, name, start, length, offset (beats)
+                        (and rating, groups, looped, loopLength, syncPoint, userNamed)
+            MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above)
               NOTE        start, length (beats, relative to the clip content), note, velocity, channel
               CC          controller (0..127, 128 = pitch bend), beat, value (0..1), channel
             DEVICE      id, type, name, bypassed, state (base64), sidechain (track id), description
@@ -38,6 +40,8 @@ using engine::TrackKind;
             AUTOMATION  id, target ("volume", "pan", "send:<id>", "param:<deviceId>:<index>"), visible
               POINT       time (seconds), value (0..1)
             TRACK ...   (folders contain tracks)
+          CLIPGROUPS    the clip groups: CLIPGROUP id, name
+          CLIPLIST      captured clips (Clip > Capture): CLIP / MIDICLIP / VIDEOCLIP, start 0
 
     Timeline times are in seconds; MIDI content is in beats (quarter notes). A folder is a bus track
     whose child tracks are summed into it.
@@ -100,6 +104,16 @@ inline const juce::Identifier masterFormat {"masterFormat"};
 inline const juce::Identifier panFrontRear {"panFrontRear"};
 inline const juce::Identifier panCentre {"panCentre"};
 inline const juce::Identifier timeLocked {"timeLocked"};
+inline const juce::Identifier rating {"rating"};
+inline const juce::Identifier clipGroups {"groups"};
+inline const juce::Identifier looped {"looped"};
+inline const juce::Identifier loopLength {"loopLength"};
+inline const juce::Identifier syncPoint {"syncPoint"};
+inline const juce::Identifier gainBypassed {"gainBypassed"};
+inline const juce::Identifier userNamed {"userNamed"};
+inline const juce::Identifier clipGroupList {"CLIPGROUPS"};
+inline const juce::Identifier clipGroup {"CLIPGROUP"};
+inline const juce::Identifier clipList {"CLIPLIST"};
 inline const juce::Identifier midiTarget {"midiTarget"};
 inline const juce::Identifier vca {"vca"};
 inline const juce::Identifier controls {"controls"};
@@ -291,6 +305,36 @@ inline bool canEdit(const juce::ValueTree& c) { return !isEditLocked(c); }
 inline bool canMoveInTime(const juce::ValueTree& c) { return !isEditLocked(c) && !isTimeLocked(c); }
 inline bool canChangeTrack(const juce::ValueTree& c) { return !isEditLocked(c); }
 inline bool canRemove(const juce::ValueTree& c) { return !isEditLocked(c) && !isTimeLocked(c); }
+
+/** Rating: 0 = none (the default), 1..5 (5 the best). For choosing between takes. */
+int getRating(const juce::ValueTree& c);
+void setRating(juce::ValueTree c, int rating, juce::UndoManager* um);
+
+/** The clip groups the clip belongs to, outermost (front-most) first; empty if none. */
+std::vector<std::uint32_t> getGroups(const juce::ValueTree& c);
+/** The outermost group, or 0. */
+std::uint32_t getOuterGroup(const juce::ValueTree& c);
+void setGroups(juce::ValueTree c, const std::vector<std::uint32_t>& groups, juce::UndoManager* um);
+inline bool isGrouped(const juce::ValueTree& c) { return getOuterGroup(c) != 0; }
+
+/** A looped clip repeats its first `getLoopLength()` seconds for its whole length. */
+bool isLooped(const juce::ValueTree& c);
+double getLoopLength(const juce::ValueTree& c); ///< one iteration (timeline seconds); the length if not looped
+void setLoop(juce::ValueTree c, bool looped, double iterationLength, juce::UndoManager* um);
+
+/** The sync point: a position in the clip (seconds from its start) used instead of the start for
+    snapping and Quantize to Grid. Absent: none. */
+std::optional<double> getSyncPoint(const juce::ValueTree& c);
+void setSyncPoint(juce::ValueTree c, std::optional<double> secondsFromStart, juce::UndoManager* um);
+/** Where the clip lines up: its sync point, or its start. */
+double getReferenceTime(const juce::ValueTree& c);
+
+/** Bypassed clip gain: the clip plays at 0 dB, the setting is kept. */
+bool isGainBypassed(const juce::ValueTree& c);
+void setGainBypassed(juce::ValueTree c, bool bypassed, juce::UndoManager* um);
+
+/** Renamed by the user (shown in the Clip List as a user-defined clip). */
+bool isUserNamed(const juce::ValueTree& c);
 
 void setStart(juce::ValueTree c, double seconds, juce::UndoManager* um);
 void setLength(juce::ValueTree c, double seconds, juce::UndoManager* um);
@@ -545,6 +589,52 @@ public:
 
     /** End time of the last clip (0 for an empty session). */
     [[nodiscard]] double getEndTime() const;
+
+    // --- Clip groups, loops, sync points -----------------------------------------------------------
+    /** Every clip (on any track) of group `groupId`, at any depth. */
+    [[nodiscard]] std::vector<juce::ValueTree> getGroupMembers(std::uint32_t groupId) const;
+    /** `clips` plus every clip of their outermost groups (what selecting them really selects). */
+    [[nodiscard]] std::vector<juce::ValueTree> withWholeGroups(const std::vector<juce::ValueTree>& clips) const;
+    /** Makes a new clip group of `clips` (each joins it as its outermost group). Returns its id. */
+    std::uint32_t groupClips(const std::vector<juce::ValueTree>& clips, const juce::String& name = {});
+    /** Removes group `groupId` where it is the outermost layer; the clips (and nested groups) inside
+        are free again. Returns them. */
+    std::vector<juce::ValueTree> ungroup(std::uint32_t groupId);
+    /** Removes every layer of grouping from the clips of `groupId`'s outermost group. */
+    std::vector<juce::ValueTree> ungroupAll(std::uint32_t groupId);
+    /** Puts `clips` back into group `groupId` (named `name`) as their outermost layer. */
+    void regroup(std::uint32_t groupId, const std::vector<juce::ValueTree>& clips, const juce::String& name);
+    [[nodiscard]] juce::String getGroupName(std::uint32_t groupId) const;
+    /** Gives the copies in `copies` fresh group ids (consistently), so they form groups of their own. */
+    void renewGroups(const std::vector<juce::ValueTree>& copies);
+
+    /** Loops a clip: `iterations` repeats of its current length (or of its loop if looped already). */
+    void loopClip(juce::ValueTree clip, double iterations);
+    /** Unloops a clip into one standard clip per iteration (the last one partial). Returns them, the
+        original first. */
+    std::vector<juce::ValueTree> unloopClip(juce::ValueTree clip);
+
+    /** Sync point at timeline time `seconds` (inside the clip). False if outside. */
+    bool identifySyncPoint(juce::ValueTree clip, double seconds);
+
+    // --- Clip List: captured clips -------------------------------------------------------------------
+    /** The captured clips (clip trees with start 0, in the order captured). */
+    [[nodiscard]] std::vector<juce::ValueTree> getClipListEntries() const;
+    [[nodiscard]] juce::ValueTree findClipListEntry(std::uint32_t entryId) const;
+    /**
+        Clip > Capture: the material on `track` between `start` and `end` becomes a new Clip List entry
+        called `name`. It must be one clip, or clips that play contiguous material of the same file one
+        after the other (no gaps, same stretch and pitch). Returns the entry, or an invalid tree with
+        `error` saying why.
+    */
+    juce::ValueTree captureClip(const juce::ValueTree& track, double start, double end, const juce::String& name,
+                                juce::String& error);
+    /** Removes a captured clip from the Clip List. */
+    void removeClipListEntry(std::uint32_t entryId);
+    /** A copy of `source` (a Clip List entry or a clip) placed on `track` at `seconds`, with new ids and
+        no groups, locks or sync point carried over beyond what a fresh clip has. Invalid if the
+        track cannot hold that kind of clip. */
+    juce::ValueTree placeClipCopy(const juce::ValueTree& source, juce::ValueTree track, double seconds);
 
     /** Removes everything on `track` between `start` and `end` (seconds): clips inside go, clips across
         the edges are trimmed (or split, when they span the whole range). For recording over. Locked

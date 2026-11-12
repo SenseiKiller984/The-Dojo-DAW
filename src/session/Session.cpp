@@ -412,6 +412,85 @@ void setSourceChannel(juce::ValueTree c, int channel, juce::UndoManager* um)
 {
     c.setProperty(ids::sourceChannel, std::max(-1, channel), um);
 }
+int getRating(const juce::ValueTree& c) { return juce::jlimit(0, 5, static_cast<int>(c.getProperty(ids::rating, 0))); }
+void setRating(juce::ValueTree c, int rating, juce::UndoManager* um)
+{
+    rating = juce::jlimit(0, 5, rating);
+    if (rating == 0)
+        c.removeProperty(ids::rating, um);
+    else
+        c.setProperty(ids::rating, rating, um);
+}
+
+std::vector<std::uint32_t> getGroups(const juce::ValueTree& c)
+{
+    std::vector<std::uint32_t> groups;
+    for (const auto& token : juce::StringArray::fromTokens(c.getProperty(ids::clipGroups).toString(), ",", ""))
+        if (const auto id = static_cast<std::uint32_t>(token.getLargeIntValue()); id != 0)
+            groups.push_back(id);
+    return groups;
+}
+std::uint32_t getOuterGroup(const juce::ValueTree& c)
+{
+    const auto groups = getGroups(c);
+    return groups.empty() ? 0u : groups.front();
+}
+void setGroups(juce::ValueTree c, const std::vector<std::uint32_t>& groups, juce::UndoManager* um)
+{
+    if (groups.empty())
+    {
+        c.removeProperty(ids::clipGroups, um);
+        return;
+    }
+    juce::StringArray tokens;
+    for (const auto id : groups)
+        tokens.add(juce::String(static_cast<juce::int64>(id)));
+    c.setProperty(ids::clipGroups, tokens.joinIntoString(","), um);
+}
+
+bool isLooped(const juce::ValueTree& c) { return c.getProperty(ids::looped, false); }
+double getLoopLength(const juce::ValueTree& c)
+{
+    return isLooped(c) ? std::max(kMinClipLength, static_cast<double>(c.getProperty(ids::loopLength, getLength(c)))) : getLength(c);
+}
+void setLoop(juce::ValueTree c, bool looped, double iterationLength, juce::UndoManager* um)
+{
+    if (!looped)
+    {
+        c.removeProperty(ids::looped, um);
+        c.removeProperty(ids::loopLength, um);
+        return;
+    }
+    c.setProperty(ids::looped, true, um);
+    c.setProperty(ids::loopLength, std::max(kMinClipLength, iterationLength), um);
+}
+
+std::optional<double> getSyncPoint(const juce::ValueTree& c)
+{
+    if (!c.hasProperty(ids::syncPoint))
+        return std::nullopt;
+    return static_cast<double>(c.getProperty(ids::syncPoint));
+}
+void setSyncPoint(juce::ValueTree c, std::optional<double> secondsFromStart, juce::UndoManager* um)
+{
+    if (secondsFromStart.has_value())
+        c.setProperty(ids::syncPoint, std::max(0.0, *secondsFromStart), um);
+    else
+        c.removeProperty(ids::syncPoint, um);
+}
+double getReferenceTime(const juce::ValueTree& c) { return getStart(c) + getSyncPoint(c).value_or(0.0); }
+
+bool isGainBypassed(const juce::ValueTree& c) { return c.getProperty(ids::gainBypassed, false); }
+void setGainBypassed(juce::ValueTree c, bool bypassed, juce::UndoManager* um)
+{
+    if (bypassed)
+        c.setProperty(ids::gainBypassed, true, um);
+    else
+        c.removeProperty(ids::gainBypassed, um);
+}
+
+bool isUserNamed(const juce::ValueTree& c) { return c.getProperty(ids::userNamed, false); }
+
 bool isEditLocked(const juce::ValueTree& c) { return c.getProperty(ids::editLocked, false); }
 bool isTimeLocked(const juce::ValueTree& c) { return c.getProperty(ids::timeLocked, false); }
 void setEditLocked(juce::ValueTree c, bool locked, juce::UndoManager* um)
@@ -1311,7 +1390,7 @@ void Session::clearRange(juce::ValueTree t, double start, double end)
     {
         const double clipStart = clip::getStart(c);
         const double clipEnd = clip::getEnd(c);
-        if (clipEnd <= start || clipStart >= end || clip::isEditLocked(c) || clip::isTimeLocked(c))
+        if (clipEnd <= start || clipStart >= end || clip::isEditLocked(c) || clip::isTimeLocked(c) || clip::isLooped(c))
             continue;
 
         if (clipStart < start)
@@ -1340,8 +1419,8 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
     const double start = clip::getStart(c);
     const double end = clip::getEnd(c);
 
-    if (!parent.isValid() || !clip::canEdit(c) || atSeconds <= start + kMinClipLength || atSeconds >= end - kMinClipLength)
-        return {};
+    if (!parent.isValid() || !clip::canEdit(c) || clip::isLooped(c) || atSeconds <= start + kMinClipLength || atSeconds >= end - kMinClipLength)
+        return {}; // (a looped clip is unlooped first)
 
     auto right = c.createCopy(); // (a time lock carries over to the new part)
     reassignIds(right);
@@ -1370,6 +1449,18 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
         c.setProperty(ids::fadeIn, std::min(clip::getFadeIn(c), leftLength), &undo_);
     }
 
+    // The sync point stays with the part that holds it.
+    if (const auto sync = clip::getSyncPoint(c))
+    {
+        if (*sync < leftLength)
+            right.removeProperty(ids::syncPoint, nullptr);
+        else
+        {
+            right.setProperty(ids::syncPoint, *sync - leftLength, nullptr);
+            clip::setSyncPoint(c, std::nullopt, &undo_);
+        }
+    }
+
     parent.addChild(right, parent.indexOf(c) + 1, &undo_);
     return right;
 }
@@ -1382,6 +1473,396 @@ double Session::getEndTime() const
             if (isClip(c))
                 end = std::max(end, clip::getEnd(c));
     return end;
+}
+
+// --- Clip groups, loops, sync points --------------------------------------------------------------
+
+std::vector<juce::ValueTree> Session::getGroupMembers(std::uint32_t groupId) const
+{
+    std::vector<juce::ValueTree> members;
+    if (groupId == 0)
+        return members;
+    for (const auto& t : getAllTracks())
+        for (const auto& c : t)
+            if (isClip(c))
+            {
+                const auto groups = clip::getGroups(c);
+                if (std::find(groups.begin(), groups.end(), groupId) != groups.end())
+                    members.push_back(c);
+            }
+    return members;
+}
+
+std::vector<juce::ValueTree> Session::withWholeGroups(const std::vector<juce::ValueTree>& clips) const
+{
+    std::vector<juce::ValueTree> result;
+    const auto add = [&](const juce::ValueTree& c)
+    {
+        if (std::find(result.begin(), result.end(), c) == result.end())
+            result.push_back(c);
+    };
+    for (const auto& c : clips)
+    {
+        if (const auto outer = clip::getOuterGroup(c); outer != 0)
+            for (const auto& member : getGroupMembers(outer))
+                add(member);
+        else
+            add(c);
+    }
+    return result;
+}
+
+juce::String Session::getGroupName(std::uint32_t groupId) const
+{
+    const auto list = state_.getChildWithName(ids::clipGroupList);
+    for (const auto& g : list)
+        if (readId(g) == groupId)
+            return g.getProperty(ids::name).toString();
+    return "Clip Group";
+}
+
+std::uint32_t Session::groupClips(const std::vector<juce::ValueTree>& clips, const juce::String& name)
+{
+    const auto members = withWholeGroups(clips);
+    if (members.empty())
+        return 0;
+
+    auto list = state_.getChildWithName(ids::clipGroupList);
+    if (!list.isValid())
+    {
+        list = juce::ValueTree(ids::clipGroupList);
+        state_.addChild(list, -1, &undo_);
+    }
+    const auto id = allocateId();
+    juce::String groupName = name.trim();
+    if (groupName.isEmpty())
+    {
+        int number = list.getNumChildren() + 1;
+        const auto taken = [&](const juce::String& candidate)
+        {
+            for (const auto& g : list)
+                if (g.getProperty(ids::name).toString() == candidate)
+                    return true;
+            return false;
+        };
+        while (taken("Clip Group " + juce::String(number)))
+            ++number;
+        groupName = "Clip Group " + juce::String(number);
+    }
+    juce::ValueTree entry(ids::clipGroup);
+    entry.setProperty(ids::id, static_cast<int>(id), nullptr);
+    entry.setProperty(ids::name, groupName, nullptr);
+    list.addChild(entry, -1, &undo_);
+
+    for (auto c : members)
+    {
+        auto groups = clip::getGroups(c);
+        groups.insert(groups.begin(), id);
+        clip::setGroups(c, groups, &undo_);
+    }
+    return id;
+}
+
+namespace
+{
+void removeGroupEntry(juce::ValueTree& state, std::uint32_t groupId, juce::UndoManager* um)
+{
+    auto list = state.getChildWithName(ids::clipGroupList);
+    for (int i = list.getNumChildren(); --i >= 0;)
+        if (readId(list.getChild(i)) == groupId)
+            list.removeChild(i, um);
+}
+} // namespace
+
+std::vector<juce::ValueTree> Session::ungroup(std::uint32_t groupId)
+{
+    std::vector<juce::ValueTree> freed;
+    for (auto c : getGroupMembers(groupId))
+    {
+        auto groups = clip::getGroups(c);
+        if (groups.empty() || groups.front() != groupId)
+            continue; // (only the top layer)
+        groups.erase(groups.begin());
+        clip::setGroups(c, groups, &undo_);
+        freed.push_back(c);
+    }
+    if (!freed.empty())
+        removeGroupEntry(state_, groupId, &undo_);
+    return freed;
+}
+
+std::vector<juce::ValueTree> Session::ungroupAll(std::uint32_t groupId)
+{
+    const auto members = getGroupMembers(groupId);
+    std::set<std::uint32_t> removed;
+    for (auto c : members)
+    {
+        for (const auto id : clip::getGroups(c))
+            removed.insert(id);
+        clip::setGroups(c, {}, &undo_);
+    }
+    for (const auto id : removed)
+        if (getGroupMembers(id).empty())
+            removeGroupEntry(state_, id, &undo_);
+    return members;
+}
+
+void Session::regroup(std::uint32_t groupId, const std::vector<juce::ValueTree>& clips, const juce::String& name)
+{
+    if (groupId == 0 || clips.empty())
+        return;
+    auto list = state_.getChildWithName(ids::clipGroupList);
+    if (!list.isValid())
+    {
+        list = juce::ValueTree(ids::clipGroupList);
+        state_.addChild(list, -1, &undo_);
+    }
+    bool listed = false;
+    for (const auto& g : list)
+        listed = listed || readId(g) == groupId;
+    if (!listed)
+    {
+        juce::ValueTree entry(ids::clipGroup);
+        entry.setProperty(ids::id, static_cast<int>(groupId), nullptr);
+        entry.setProperty(ids::name, name.isNotEmpty() ? name : juce::String("Clip Group"), nullptr);
+        list.addChild(entry, -1, &undo_);
+    }
+    for (auto c : clips)
+    {
+        if (!c.getParent().isValid())
+            continue; // (deleted since)
+        auto groups = clip::getGroups(c);
+        if (!groups.empty() && groups.front() == groupId)
+            continue;
+        groups.insert(groups.begin(), groupId);
+        clip::setGroups(c, groups, &undo_);
+    }
+}
+
+void Session::renewGroups(const std::vector<juce::ValueTree>& copies)
+{
+    std::map<std::uint32_t, std::uint32_t> renewed;
+    auto list = state_.getChildWithName(ids::clipGroupList);
+    for (auto c : copies)
+    {
+        auto groups = clip::getGroups(c);
+        if (groups.empty())
+            continue;
+        for (auto& id : groups)
+        {
+            auto it = renewed.find(id);
+            if (it == renewed.end())
+            {
+                const auto fresh = allocateId();
+                if (!list.isValid())
+                {
+                    list = juce::ValueTree(ids::clipGroupList);
+                    state_.addChild(list, -1, &undo_);
+                }
+                juce::ValueTree entry(ids::clipGroup);
+                entry.setProperty(ids::id, static_cast<int>(fresh), nullptr);
+                entry.setProperty(ids::name, getGroupName(id), nullptr);
+                list.addChild(entry, -1, &undo_);
+                it = renewed.emplace(id, fresh).first;
+            }
+            id = it->second;
+        }
+        clip::setGroups(c, groups, &undo_);
+    }
+}
+
+void Session::loopClip(juce::ValueTree c, double iterations)
+{
+    if (!c.isValid() || !clip::canEdit(c))
+        return;
+    const double iteration = clip::getLoopLength(c);
+    clip::setLoop(c, true, iteration, &undo_);
+    c.setProperty(ids::length, std::max(kMinClipLength, iteration * std::max(1.0, iterations)), &undo_);
+}
+
+std::vector<juce::ValueTree> Session::unloopClip(juce::ValueTree c)
+{
+    if (!c.isValid() || !clip::isLooped(c) || !clip::canEdit(c))
+        return {c};
+
+    auto parent = c.getParent();
+    const double iteration = clip::getLoopLength(c);
+    const double total = clip::getLength(c);
+    const double start = clip::getStart(c);
+    const double fadeOut = clip::isMidi(c) ? 0.0 : clip::getFadeOut(c);
+    const int count = std::max(1, static_cast<int>(std::ceil(total / iteration - 1.0e-9)));
+
+    clip::setLoop(c, false, 0.0, &undo_);
+    c.setProperty(ids::length, std::min(iteration, total), &undo_);
+    std::vector<juce::ValueTree> pieces{c};
+    for (int k = 1; k < count; ++k)
+    {
+        auto copy = c.createCopy();
+        reassignIds(copy);
+        copy.setProperty(ids::start, start + k * iteration, nullptr);
+        copy.setProperty(ids::length, std::min(iteration, total - k * iteration), nullptr);
+        copy.removeProperty(ids::syncPoint, nullptr); // (the sync point stays on the first)
+        if (!clip::isMidi(c))
+        {
+            copy.setProperty(ids::fadeIn, 0.0, nullptr);
+            copy.setProperty(ids::fadeOut, k == count - 1 ? fadeOut : 0.0, nullptr);
+        }
+        parent.addChild(copy, parent.indexOf(pieces.back()) + 1, &undo_);
+        pieces.push_back(copy);
+    }
+    if (count > 1 && !clip::isMidi(c))
+        c.setProperty(ids::fadeOut, 0.0, &undo_);
+    return pieces;
+}
+
+bool Session::identifySyncPoint(juce::ValueTree c, double seconds)
+{
+    if (!c.isValid() || seconds < clip::getStart(c) || seconds > clip::getEnd(c))
+        return false;
+    clip::setSyncPoint(c, seconds - clip::getStart(c), &undo_);
+    return true;
+}
+
+// --- Clip List ------------------------------------------------------------------------------------
+
+std::vector<juce::ValueTree> Session::getClipListEntries() const
+{
+    std::vector<juce::ValueTree> entries;
+    for (const auto& c : state_.getChildWithName(ids::clipList))
+        if (isClip(c))
+            entries.push_back(c);
+    return entries;
+}
+
+juce::ValueTree Session::findClipListEntry(std::uint32_t entryId) const
+{
+    for (const auto& c : getClipListEntries())
+        if (clip::getId(c) == entryId)
+            return c;
+    return {};
+}
+
+namespace
+{
+/** A clip's own properties as a fresh clip has them: no groups, locks, loop, sync point or rating. */
+void stripClipState(juce::ValueTree c)
+{
+    for (const auto* id : {&ids::clipGroups, &ids::editLocked, &ids::timeLocked, &ids::looped, &ids::loopLength,
+                           &ids::syncPoint, &ids::rating})
+        c.removeProperty(*id, nullptr);
+}
+} // namespace
+
+juce::ValueTree Session::captureClip(const juce::ValueTree& track, double start, double end, const juce::String& name,
+                                     juce::String& error)
+{
+    if (!track.isValid() || end - start < kMinClipLength)
+    {
+        error = "Select a range on a track first.";
+        return {};
+    }
+
+    std::vector<juce::ValueTree> parts;
+    for (const auto& c : track)
+        if (isClip(c) && clip::getEnd(c) > start + 1.0e-9 && clip::getStart(c) < end - 1.0e-9)
+            parts.push_back(c);
+    std::sort(parts.begin(), parts.end(), [](const auto& a, const auto& b) { return clip::getStart(a) < clip::getStart(b); });
+    if (parts.empty())
+    {
+        error = "There is no clip in the selection.";
+        return {};
+    }
+
+    const auto& first = parts.front();
+    const double from = std::max(start, clip::getStart(first));
+    const double to = std::min(end, clip::getEnd(parts.back()));
+
+    // Across clips only when they play one stretch of the same file without gaps.
+    constexpr double tolerance = 1.0e-6;
+    for (std::size_t k = 1; k < parts.size(); ++k)
+    {
+        const auto& a = parts[k - 1];
+        const auto& b = parts[k];
+        const bool media = !clip::isMidi(a) && a.getType() == b.getType();
+        const bool contiguous = media && clip::getFile(a) == clip::getFile(b) && !clip::isLooped(a) && !clip::isLooped(b)
+                                && std::abs(clip::getStretch(a) - clip::getStretch(b)) < tolerance
+                                && std::abs(clip::getPitch(a) - clip::getPitch(b)) < tolerance
+                                && clip::getSourceChannel(a) == clip::getSourceChannel(b)
+                                && std::abs(clip::getEnd(a) - clip::getStart(b)) < tolerance
+                                && std::abs(clip::getOffset(a) + clip::getLength(a) / std::max(kMinStretch, clip::getStretch(a))
+                                            - clip::getOffset(b))
+                                       < tolerance;
+        if (!contiguous)
+        {
+            error = "The selection spans clips that are not contiguous material from the same file.";
+            return {};
+        }
+    }
+
+    // A looped clip: only within one iteration.
+    double into = from - clip::getStart(first); // timeline seconds into the first clip's material
+    if (clip::isLooped(first))
+    {
+        const double loop = clip::getLoopLength(first);
+        const double iteration = std::floor(into / loop + 1.0e-9);
+        if (to - clip::getStart(first) > (iteration + 1.0) * loop + tolerance)
+        {
+            error = "The selection runs over a loop boundary of a looped clip. Unloop the clip first.";
+            return {};
+        }
+        into -= iteration * loop;
+    }
+
+    auto entry = first.createCopy();
+    reassignIds(entry);
+    stripClipState(entry);
+    entry.removeProperty(ids::fadeIn, nullptr);
+    entry.removeProperty(ids::fadeOut, nullptr);
+    entry.setProperty(ids::start, 0.0, nullptr);
+    entry.setProperty(ids::length, to - from, nullptr);
+    if (clip::isMidi(first))
+        entry.setProperty(ids::offset, clip::getOffset(first) + into * getTempo() / 60.0, nullptr);
+    else
+        entry.setProperty(ids::offset, clip::getOffset(first) + into / std::max(kMinStretch, clip::getStretch(first)), nullptr);
+    entry.setProperty(ids::name, name.trim().isNotEmpty() ? name.trim() : clip::getName(first), nullptr);
+    entry.setProperty(ids::userNamed, true, nullptr);
+
+    auto list = state_.getChildWithName(ids::clipList);
+    if (!list.isValid())
+    {
+        list = juce::ValueTree(ids::clipList);
+        state_.addChild(list, -1, &undo_);
+    }
+    list.addChild(entry, -1, &undo_);
+    return entry;
+}
+
+void Session::removeClipListEntry(std::uint32_t entryId)
+{
+    if (auto entry = findClipListEntry(entryId); entry.isValid())
+        entry.getParent().removeChild(entry, &undo_);
+}
+
+juce::ValueTree Session::placeClipCopy(const juce::ValueTree& source, juce::ValueTree track, double seconds)
+{
+    if (!source.isValid() || !isClip(source) || !track.isValid())
+        return {};
+    const auto kind = track::getKind(track);
+    const bool compatible = clip::isMidi(source) ? holdsMidi(kind) : clip::isVideo(source) ? holdsVideo(kind) : holdsAudio(kind);
+    if (!compatible)
+        return {};
+
+    auto copy = source.createCopy();
+    reassignIds(copy);
+    stripClipState(copy);
+    copy.setProperty(ids::start, std::max(0.0, seconds), nullptr);
+    if (clip::isLooped(source)) // keeps playing what it played
+    {
+        copy.setProperty(ids::looped, true, nullptr);
+        copy.setProperty(ids::loopLength, clip::getLoopLength(source), nullptr);
+    }
+    track.addChild(copy, -1, &undo_);
+    return copy;
 }
 
 // --- MIDI -----------------------------------------------------------------------------------------
@@ -1698,7 +2179,7 @@ void forEachMediaClip(juce::ValueTree parent, Fn&& fn)
     {
         if (child.hasType(ids::clip) || child.hasType(ids::videoClip))
             fn(child);
-        else if (child.hasType(ids::track))
+        else if (child.hasType(ids::track) || child.hasType(ids::clipList))
             forEachMediaClip(child, fn);
     }
 }

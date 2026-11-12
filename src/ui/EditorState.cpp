@@ -166,6 +166,28 @@ void EditorState::setGrid(Grid grid)
     }
 }
 
+void EditorState::setShowingClipRatings(bool show)
+{
+    if (show == showClipRatings_)
+        return;
+    showClipRatings_ = show;
+    notify();
+}
+
+void EditorState::setTimeSelection(TimeSelection selection)
+{
+    timeSelection_ = std::move(selection);
+    notify();
+}
+
+void EditorState::clearTimeSelection()
+{
+    if (timeSelection_.isEmpty())
+        return;
+    timeSelection_ = {};
+    notify();
+}
+
 double EditorState::getGridBeats() const noexcept
 {
     switch (grid_)

@@ -27,6 +27,8 @@ add_library(dojo_ui STATIC
     components/BrowserPanel.h
     components/ClipEditor.cpp
     components/ClipEditor.h
+    components/ClipListPanel.cpp
+    components/ClipListPanel.h
     components/DevicePanel.cpp
     components/DevicePanel.h
     components/ExportDialog.cpp

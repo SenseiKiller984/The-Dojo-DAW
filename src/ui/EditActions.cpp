@@ -3,6 +3,8 @@
 #include "session/Project.h"
 #include "video/VideoSource.h"
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace dojo::ui::actions
@@ -54,9 +56,14 @@ bool duplicateSelectedClips(session::Session& session, EditorState& editor)
 
     session.beginTransaction(clips.size() == 1 ? "Duplicate Clip" : "Duplicate Clips");
     std::set<std::uint32_t> copies;
-    for (const auto& c : clips)
+    std::vector<juce::ValueTree> copyTrees;
+    for (const auto& c : session.withWholeGroups(clips))
         if (auto copy = session.duplicateClip(c); copy.isValid())
+        {
             copies.insert(session::clip::getId(copy));
+            copyTrees.push_back(copy);
+        }
+    session.renewGroups(copyTrees); // (copies of a group form a group of their own)
 
     editor.setSelectedClips(std::move(copies));
     return true;
@@ -167,6 +174,7 @@ bool pasteClips(session::Session& session, EditorState& editor, double seconds)
 
     session.beginTransaction("Paste");
     std::set<std::uint32_t> pasted;
+    std::vector<juce::ValueTree> pastedTrees;
     for (const auto& e : entries)
     {
         const bool midi = session::clip::isMidi(e.clip);
@@ -182,8 +190,12 @@ bool pasteClips(session::Session& session, EditorState& editor, double seconds)
 
         auto copy = session.pasteClip(e.clip, target, seconds + (session::clip::getStart(e.clip) - earliest));
         if (copy.isValid())
+        {
             pasted.insert(session::clip::getId(copy));
+            pastedTrees.push_back(copy);
+        }
     }
+    session.renewGroups(pastedTrees); // (pasted groups are groups of their own)
 
     editor.setSelectedClips(std::move(pasted));
     return true;
@@ -601,6 +613,471 @@ juce::ValueTree createClickTrack(session::Session& session, EditorState& editor)
     return created.empty() ? juce::ValueTree() : created.front();
 }
 
+// --- Clip menu: ratings, groups, loops, sync points, clip gain, rename ------------------------------
+
+std::vector<juce::ValueTree> getSelectedClipsWithGroups(const session::Session& session, const EditorState& editor)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto id : editor.getSelectedClips())
+        if (auto c = session.findClip(id); c.isValid())
+            clips.push_back(c);
+    return session.withWholeGroups(clips);
+}
+
+namespace
+{
+std::set<std::uint32_t> idsOf(const std::vector<juce::ValueTree>& clips)
+{
+    std::set<std::uint32_t> ids;
+    for (const auto& c : clips)
+        ids.insert(session::clip::getId(c));
+    return ids;
+}
+} // namespace
+
+bool setSelectedClipsRating(session::Session& session, EditorState& editor, int rating)
+{
+    const auto clips = getSelectedClipsWithGroups(session, editor);
+    if (clips.empty())
+        return false;
+    session.beginTransaction(rating == 0 ? juce::String("Clear Rating") : "Rate " + juce::String(rating));
+    for (auto c : clips)
+        session::clip::setRating(c, rating, &session.getUndoManager());
+    return true;
+}
+
+int getSelectedClipsRating(const session::Session& session, const EditorState& editor)
+{
+    int rating = -1;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+    {
+        const int r = session::clip::getRating(c);
+        if (rating >= 0 && r != rating)
+            return -1;
+        rating = r;
+    }
+    return rating;
+}
+
+std::uint32_t groupSelectedClips(session::Session& session, EditorState& editor)
+{
+    const auto clips = getSelectedClipsWithGroups(session, editor);
+    if (clips.empty())
+        return 0;
+    session.beginTransaction("Group Clips");
+    const auto id = session.groupClips(clips);
+    editor.setSelectedClips(idsOf(clips));
+    return id;
+}
+
+bool ungroupSelectedClips(session::Session& session, EditorState& editor)
+{
+    std::set<std::uint32_t> groups;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (const auto outer = session::clip::getOuterGroup(c); outer != 0)
+            groups.insert(outer);
+    if (groups.empty())
+        return false;
+
+    session.beginTransaction("Ungroup Clips");
+    std::vector<EditorState::UngroupedGroup> memory;
+    for (const auto id : groups)
+    {
+        const auto name = session.getGroupName(id);
+        const auto freed = idsOf(session.ungroup(id));
+        memory.push_back({id, name, std::vector<std::uint32_t>(freed.begin(), freed.end())});
+    }
+    editor.setLastUngroup(std::move(memory));
+    return true;
+}
+
+bool regroupClips(session::Session& session, EditorState& editor)
+{
+    const auto memory = editor.getLastUngroup();
+    if (memory.empty())
+        return false;
+    session.beginTransaction("Regroup Clips");
+    std::set<std::uint32_t> selection;
+    for (const auto& group : memory)
+    {
+        std::vector<juce::ValueTree> clips;
+        for (const auto id : group.clipIds)
+            if (auto c = session.findClip(id); c.isValid())
+                clips.push_back(c);
+        session.regroup(group.groupId, clips, group.name);
+        for (const auto& c : clips)
+            selection.insert(session::clip::getId(c));
+    }
+    editor.setLastUngroup({});
+    editor.setSelectedClips(std::move(selection));
+    return true;
+}
+
+bool ungroupAllSelectedClips(session::Session& session, EditorState& editor)
+{
+    std::set<std::uint32_t> groups;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (const auto outer = session::clip::getOuterGroup(c); outer != 0)
+            groups.insert(outer);
+    if (groups.empty())
+        return false;
+    session.beginTransaction("Ungroup All");
+    for (const auto id : groups)
+        session.ungroupAll(id);
+    editor.setLastUngroup({});
+    return true;
+}
+
+bool selectionHasGroups(const session::Session& session, const EditorState& editor)
+{
+    for (const auto id : editor.getSelectedClips())
+        if (const auto c = session.findClip(id); c.isValid() && session::clip::isGrouped(c))
+            return true;
+    return false;
+}
+
+bool loopSelectedClips(session::Session& session, EditorState& editor, double iterations)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::canEdit(c))
+            clips.push_back(c);
+    if (clips.empty() || iterations < 1.0)
+        return false;
+    session.beginTransaction("Loop Clips");
+    for (auto c : clips)
+        session.loopClip(c, iterations);
+    return true;
+}
+
+bool unloopSelectedClips(session::Session& session, EditorState& editor)
+{
+    std::vector<juce::ValueTree> looped;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::isLooped(c) && session::clip::canEdit(c))
+            looped.push_back(c);
+    if (looped.empty())
+        return false;
+    session.beginTransaction("Unloop Clips");
+    std::set<std::uint32_t> selection = editor.getSelectedClips();
+    for (auto c : looped)
+        for (const auto& piece : session.unloopClip(c))
+            selection.insert(session::clip::getId(piece));
+    editor.setSelectedClips(std::move(selection));
+    return true;
+}
+
+bool selectionHasLoopedClips(const session::Session& session, const EditorState& editor)
+{
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::isLooped(c))
+            return true;
+    return false;
+}
+
+bool identifySyncPoint(session::Session& session, EditorState& editor, double seconds)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::canEdit(c) && seconds >= session::clip::getStart(c) && seconds <= session::clip::getEnd(c))
+            clips.push_back(c);
+    if (clips.empty())
+        return false;
+    session.beginTransaction("Identify Sync Point");
+    for (auto c : clips)
+        session.identifySyncPoint(c, seconds);
+    return true;
+}
+
+bool removeSyncPoints(session::Session& session, EditorState& editor)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::getSyncPoint(c).has_value() && session::clip::canEdit(c))
+            clips.push_back(c);
+    if (clips.empty())
+        return false;
+    session.beginTransaction("Remove Sync Point");
+    for (auto c : clips)
+        session::clip::setSyncPoint(c, std::nullopt, &session.getUndoManager());
+    return true;
+}
+
+bool selectionHasSyncPoints(const session::Session& session, const EditorState& editor)
+{
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::getSyncPoint(c).has_value())
+            return true;
+    return false;
+}
+
+bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor, double gridSeconds)
+{
+    if (gridSeconds <= 0.0)
+        return false;
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (session::clip::canMoveInTime(c))
+            clips.push_back(c);
+    if (clips.empty())
+        return false;
+    session.beginTransaction("Quantize Clips to Grid");
+    for (auto c : clips)
+    {
+        // The sync point (or the start) goes to the nearest grid line.
+        const double reference = session::clip::getReferenceTime(c);
+        const double target = std::round(reference / gridSeconds) * gridSeconds;
+        session.moveClip(c, c.getParent(), std::max(0.0, session::clip::getStart(c) + (target - reference)));
+    }
+    return true;
+}
+
+bool toggleSelectedClipsGainBypass(session::Session& session, EditorState& editor)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (c.hasType(session::ids::clip) && session::clip::canEdit(c))
+            clips.push_back(c);
+    if (clips.empty())
+        return false;
+    const bool bypass = !std::all_of(clips.begin(), clips.end(), [](const juce::ValueTree& c) { return session::clip::isGainBypassed(c); });
+    session.beginTransaction(bypass ? "Bypass Clip Gain" : "Enable Clip Gain");
+    for (auto c : clips)
+        session::clip::setGainBypassed(c, bypass, &session.getUndoManager());
+    return true;
+}
+
+bool selectedClipsGainBypassed(const session::Session& session, const EditorState& editor)
+{
+    bool any = false;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+    {
+        if (!c.hasType(session::ids::clip))
+            continue;
+        if (!session::clip::isGainBypassed(c))
+            return false;
+        any = true;
+    }
+    return any;
+}
+
+int renderSelectedClipsGain(session::Project& project, EditorState& editor, juce::String& error)
+{
+    auto& session = project.getSession();
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (c.hasType(session::ids::clip) && session::clip::canEdit(c) && !session::clip::isGainBypassed(c)
+            && std::abs(session::clip::getGainDb(c)) > 1.0e-6)
+            clips.push_back(c);
+    if (clips.empty())
+    {
+        error = "Select audio clips that have clip gain (and are not bypassed or edit-locked).";
+        return 0;
+    }
+
+    const auto folder = project.getFile() != juce::File()
+                            ? project.getFile().getParentDirectory().getChildFile(project.getFile().getFileNameWithoutExtension() + " Rendered")
+                            : juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("The Dojo").getChildFile("Rendered");
+    if (!folder.createDirectory())
+    {
+        error = "Could not create " + folder.getFullPathName();
+        return 0;
+    }
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    int rendered = 0;
+    auto* um = &session.getUndoManager();
+    session.beginTransaction("Render Clip Gain");
+    for (auto c : clips)
+    {
+        const auto file = session::clip::getFile(c);
+        std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+        if (reader == nullptr)
+        {
+            error = "Could not read " + file.getFileName();
+            continue;
+        }
+
+        // The part of the file the clip plays (one iteration of a looped clip).
+        const double stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
+        const double rate = reader->sampleRate;
+        const auto first = static_cast<juce::int64>(std::floor(session::clip::getOffset(c) * rate));
+        const auto count = static_cast<int>(std::min<juce::int64>(reader->lengthInSamples - first,
+                                                                  static_cast<juce::int64>(std::ceil(session::clip::getLoopLength(c) / stretch * rate)) + 1));
+        if (count <= 0)
+            continue;
+        const int channels = static_cast<int>(reader->numChannels);
+        juce::AudioBuffer<float> audio(channels, count);
+        reader->read(&audio, 0, count, first, true, true);
+        audio.applyGain(juce::Decibels::decibelsToGain(static_cast<float>(session::clip::getGainDb(c)), -100.0f));
+
+        const auto target = folder.getNonexistentChildFile(juce::File::createLegalFileName(session::clip::getName(c) + " (clip gain)"), ".wav", false);
+        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(target);
+        juce::WavAudioFormat wav;
+        auto writer = wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                      .withSampleRate(rate)
+                                                      .withNumChannels(channels)
+                                                      .withBitsPerSample(32)
+                                                      .withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
+        if (writer == nullptr || !writer->writeFromAudioSampleBuffer(audio, 0, count))
+        {
+            error = "Could not write " + target.getFullPathName();
+            continue;
+        }
+        writer.reset();
+
+        // The clip now plays the rendered file from its start, at 0 dB.
+        c.setProperty(session::ids::file, target.getFullPathName(), um);
+        session::clip::setOffset(c, 0.0, um);
+        session::clip::setGainDb(c, 0.0, um);
+        ++rendered;
+    }
+    return rendered;
+}
+
+bool renameClip(session::Session& session, juce::ValueTree clip, const juce::String& name)
+{
+    if (!clip.isValid() || name.trim().isEmpty())
+        return false;
+    session.beginTransaction("Rename Clip");
+    session::clip::setName(clip, name.trim(), &session.getUndoManager());
+    clip.setProperty(session::ids::userNamed, true, &session.getUndoManager());
+    return true;
+}
+
+CaptureRange getCaptureRange(const session::Session& session, const EditorState& editor, juce::String& error)
+{
+    const auto hasMaterial = [](const juce::ValueTree& track, double start, double end)
+    {
+        for (const auto& c : track)
+            if (session::Session::isClip(c) && session::clip::getEnd(c) > start + 1.0e-9 && session::clip::getStart(c) < end - 1.0e-9)
+                return true;
+        return false;
+    };
+
+    if (const auto& selection = editor.getTimeSelection(); !selection.isEmpty())
+    {
+        std::vector<juce::ValueTree> tracks;
+        for (const auto id : selection.trackIds)
+            if (const auto t = session.findTrack(id); t.isValid() && hasMaterial(t, selection.start, selection.end))
+                tracks.push_back(t);
+        if (tracks.size() == 1)
+            return {tracks.front(), selection.start, selection.end};
+        error = tracks.empty() ? "There is no clip in the selection." : "Capture works on one track at a time: select a range on one track.";
+        return {};
+    }
+
+    juce::ValueTree track;
+    double start = 1.0e12;
+    double end = 0.0;
+    for (const auto id : editor.getSelectedClips())
+    {
+        const auto c = session.findClip(id);
+        if (!c.isValid())
+            continue;
+        if (track.isValid() && c.getParent() != track)
+        {
+            error = "Capture works on one track at a time: select clips on one track.";
+            return {};
+        }
+        track = c.getParent();
+        start = std::min(start, session::clip::getStart(c));
+        end = std::max(end, session::clip::getEnd(c));
+    }
+    if (!track.isValid())
+    {
+        error = "Select a clip, or drag over a range of a track, to capture.";
+        return {};
+    }
+    return {track, start, end};
+}
+
+juce::String suggestCaptureName(const session::Session& session, const CaptureRange& range)
+{
+    juce::String base = "Capture";
+    for (const auto& c : range.track)
+        if (session::Session::isClip(c) && session::clip::getEnd(c) > range.start + 1.0e-9 && session::clip::getStart(c) < range.end - 1.0e-9)
+        {
+            base = session::clip::getName(c) + " Capture";
+            break;
+        }
+    const auto taken = [&](const juce::String& name)
+    {
+        const auto entries = session.getClipListEntries();
+        return std::any_of(entries.begin(), entries.end(), [&](const juce::ValueTree& e) { return session::clip::getName(e) == name; });
+    };
+    juce::String name = base;
+    for (int n = 2; taken(name); ++n)
+        name = base + " " + juce::String(n);
+    return name;
+}
+
+juce::ValueTree captureSelection(session::Session& session, EditorState& editor, const juce::String& name, juce::String& error)
+{
+    const auto range = getCaptureRange(session, editor, error);
+    if (!range.track.isValid())
+        return {};
+    session.beginTransaction("Capture Clip");
+    return session.captureClip(range.track, range.start, range.end, name.trim().isNotEmpty() ? name : suggestCaptureName(session, range), error);
+}
+
+std::vector<ClipListItem> getClipListItems(const session::Session& session, bool includeAutoCreated)
+{
+    std::vector<ClipListItem> items;
+    const auto same = [](const juce::ValueTree& a, const juce::ValueTree& b)
+    {
+        return a.getType() == b.getType() && session::clip::getName(a) == session::clip::getName(b)
+               && session::clip::getFile(a) == session::clip::getFile(b)
+               && std::abs(session::clip::getOffset(a) - session::clip::getOffset(b)) < 1.0e-6
+               && std::abs(session::clip::getLength(a) - session::clip::getLength(b)) < 1.0e-6;
+    };
+    const auto add = [&](const juce::ValueTree& c, bool captured, bool userDefined)
+    {
+        if (std::none_of(items.begin(), items.end(), [&](const ClipListItem& item) { return same(item.clip, c); }))
+            items.push_back({c, captured, userDefined});
+    };
+
+    for (const auto& entry : session.getClipListEntries())
+        add(entry, true, true);
+    const auto tracks = session.getAllTracks();
+    for (const auto& t : tracks)
+        for (const auto& c : t)
+            if (session::Session::isClip(c) && session::clip::isUserNamed(c))
+                add(c, false, true);
+    if (includeAutoCreated)
+        for (const auto& t : tracks)
+            for (const auto& c : t)
+                if (session::Session::isClip(c) && !session::clip::isUserNamed(c))
+                    add(c, false, false);
+    return items;
+}
+
+juce::ValueTree placeClipListItem(session::Session& session, EditorState& editor, const juce::ValueTree& source,
+                                  juce::ValueTree track, double seconds)
+{
+    if (!source.isValid() || !session::Session::isClip(source))
+        return {};
+    session.beginTransaction("Place Clip");
+    auto clip = session.placeClipCopy(source, track, seconds);
+    if (!clip.isValid())
+    {
+        // A new track of the kind the clip needs.
+        const auto kind = session::clip::isMidi(source)    ? session::TrackKind::instrument
+                          : session::clip::isVideo(source) ? session::TrackKind::video
+                                                           : session::TrackKind::audio;
+        auto newTrack = session.addTrack(kind, session::clip::getName(source));
+        clip = session.placeClipCopy(source, newTrack, seconds);
+    }
+    if (clip.isValid())
+    {
+        editor.selectTrack(session::track::getId(clip.getParent()));
+        editor.setSelectedClips({session::clip::getId(clip)});
+        editor.clearTimeSelection();
+    }
+    return clip;
+}
+
 juce::ValueTree importVideo(session::Session& session, EditorState& editor, const juce::File& file, double seconds,
                             const juce::ValueTree& target, juce::String& error)
 {
@@ -640,7 +1117,13 @@ VideoAtTime findVideoAt(const session::Session& session, double seconds)
         {
             const auto c = t.getChild(i);
             if (c.hasType(session::ids::videoClip) && seconds >= session::clip::getStart(c) && seconds < session::clip::getEnd(c))
-                return {c, session::clip::getFile(c), session::clip::getOffset(c) + (seconds - session::clip::getStart(c))};
+            {
+                // (a looped clip shows its first loop-length again and again)
+                double inClip = seconds - session::clip::getStart(c);
+                if (session::clip::isLooped(c))
+                    inClip = std::fmod(inClip, session::clip::getLoopLength(c));
+                return {c, session::clip::getFile(c), session::clip::getOffset(c) + inClip};
+            }
         }
     }
     return {};

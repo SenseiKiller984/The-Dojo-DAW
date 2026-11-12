@@ -78,6 +78,34 @@ public:
     [[nodiscard]] std::uint32_t getEditedClip() const noexcept { return editedClip_; }
     void setEditedClip(std::uint32_t clipId);
 
+    // --- Clip groups --------------------------------------------------------------------------------
+    /** What the last Clip > Ungroup undid, for Clip > Regroup. */
+    struct UngroupedGroup
+    {
+        std::uint32_t groupId = 0;
+        juce::String name;
+        std::vector<std::uint32_t> clipIds;
+    };
+    [[nodiscard]] const std::vector<UngroupedGroup>& getLastUngroup() const noexcept { return lastUngroup_; }
+    void setLastUngroup(std::vector<UngroupedGroup> groups) { lastUngroup_ = std::move(groups); }
+
+    // --- Display ----------------------------------------------------------------------------------
+    /** Clip ratings (stars) drawn on clips. */
+    [[nodiscard]] bool isShowingClipRatings() const noexcept { return showClipRatings_; }
+    void setShowingClipRatings(bool show);
+
+    // --- Time selection (the range a marquee drag covers; Clip > Capture uses it) ------------------
+    struct TimeSelection
+    {
+        double start = 0.0;
+        double end = 0.0;
+        std::set<std::uint32_t> trackIds;
+        [[nodiscard]] bool isEmpty() const noexcept { return end <= start || trackIds.empty(); }
+    };
+    [[nodiscard]] const TimeSelection& getTimeSelection() const noexcept { return timeSelection_; }
+    void setTimeSelection(TimeSelection selection);
+    void clearTimeSelection();
+
     // --- Grid ------------------------------------------------------------------------------------
     [[nodiscard]] bool isSnapEnabled() const noexcept { return snapEnabled_; }
     void setSnapEnabled(bool enabled);
@@ -103,6 +131,9 @@ private:
     bool masterSelected_ = false;
     std::uint32_t editedClip_ = 0;
     std::vector<ClipboardEntry> clipboard_;
+    std::vector<UngroupedGroup> lastUngroup_;
+    bool showClipRatings_ = true;
+    TimeSelection timeSelection_;
     bool snapEnabled_ = true;
     Grid grid_ = Grid::beat;
     juce::ListenerList<Listener> listeners_;

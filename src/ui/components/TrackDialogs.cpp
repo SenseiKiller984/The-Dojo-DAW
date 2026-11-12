@@ -457,4 +457,77 @@ void ScrollToTrackPanel::show(juce::Component* centreAround, juce::StringArray n
     raw->number.selectAll();
 }
 
+//==================================================================================================
+// Text prompt
+
+TextPromptPanel::TextPromptPanel(const juce::String& label, const juce::String& initial, const juce::String& okText, bool numeric)
+    : numeric_(numeric)
+    , okButton_(okText)
+{
+    styleLabel(label_, label);
+    addAndMakeVisible(label_);
+
+    if (numeric_)
+    {
+        text.setInputRestrictions(8, "0123456789.");
+        text.setJustification(juce::Justification::centred);
+    }
+    text.setText(initial, juce::dontSendNotification);
+    text.onReturnKey = [this] { confirm(); };
+    addAndMakeVisible(text);
+
+    okButton_.onClick = [this] { confirm(); };
+    cancelButton_.onClick = [this] { closeDialog(*this); };
+    okButton_.setWantsKeyboardFocus(false);
+    cancelButton_.setWantsKeyboardFocus(false);
+    addAndMakeVisible(okButton_);
+    addAndMakeVisible(cancelButton_);
+
+    setSize(360, 130);
+}
+
+void TextPromptPanel::confirm()
+{
+    const auto value = text.getText().trim();
+    const bool valid = numeric_ ? value.containsOnly("0123456789.") && value.getDoubleValue() > 0.0 : value.isNotEmpty();
+    if (!valid)
+    {
+        text.setColour(juce::TextEditor::outlineColourId, theme::colour::record);
+        text.repaint();
+        return;
+    }
+    auto callback = onConfirm;
+    closeDialog(*this);
+    if (callback)
+        callback(value);
+}
+
+void TextPromptPanel::resized()
+{
+    auto area = getLocalBounds().reduced(kMargin);
+    label_.setBounds(area.removeFromTop(20));
+    area.removeFromTop(4);
+    text.setBounds(area.removeFromTop(28));
+    auto buttons = area.removeFromBottom(30);
+    okButton_.setBounds(buttons.removeFromRight(100));
+    buttons.removeFromRight(8);
+    cancelButton_.setBounds(buttons.removeFromRight(90));
+}
+
+void TextPromptPanel::paint(juce::Graphics& g)
+{
+    g.fillAll(theme::colour::panel);
+}
+
+void TextPromptPanel::show(juce::Component* centreAround, const juce::String& title, const juce::String& label, const juce::String& initial,
+                           const juce::String& okText, bool numeric, std::function<void(const juce::String&)> onConfirm)
+{
+    auto panel = std::make_unique<TextPromptPanel>(label, initial, okText, numeric);
+    panel->onConfirm = std::move(onConfirm);
+    auto* raw = panel.get();
+    launch(std::move(panel), title, centreAround);
+    raw->text.grabKeyboardFocus();
+    raw->text.selectAll();
+}
+
 } // namespace dojo::ui

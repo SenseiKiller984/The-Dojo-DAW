@@ -71,6 +71,7 @@ MainComponent::MainComponent(AppServices& services)
     , mixer_(services.project, services.controller, editor_)
     , devicePanel_(services.project, services.plugins, editor_)
     , clipEditor_(services.project, editor_)
+    , clipList_(services.project.getSession(), editor_)
     , vblank_(this, [this](double timestampSeconds) { onDisplayRefresh(timestampSeconds); })
 {
     setOpaque(true);
@@ -82,6 +83,7 @@ MainComponent::MainComponent(AppServices& services)
     addAndMakeVisible(mixer_);
     addChildComponent(devicePanel_);
     addChildComponent(clipEditor_);
+    addChildComponent(clipList_);
     addAndMakeVisible(statusBar_);
 
     divider_ = std::make_unique<Divider>([this](int delta)
@@ -94,10 +96,12 @@ MainComponent::MainComponent(AppServices& services)
     mixerTab_.setButtonText("MIXER");
     devicesTab_.setButtonText("DEVICES");
     editorTab_.setButtonText("EDITOR");
+    clipsTab_.setButtonText("CLIPS");
     mixerTab_.setTooltip("Mixer (F3)");
     devicesTab_.setTooltip("Devices of the selected track (F4)");
     editorTab_.setTooltip("Piano roll / step sequencer / clip properties (F5)");
-    for (auto* b : {&mixerTab_, &devicesTab_, &editorTab_})
+    clipsTab_.setTooltip("Clip List: captured and user-defined clips, drag them onto tracks (F6)");
+    for (auto* b : {&mixerTab_, &devicesTab_, &editorTab_, &clipsTab_})
     {
         b->setRadioGroupId(9191);
         b->setClickingTogglesState(true);
@@ -108,6 +112,7 @@ MainComponent::MainComponent(AppServices& services)
     mixerTab_.onClick = [this] { showBottomTab(BottomTab::mixer); };
     devicesTab_.onClick = [this] { showBottomTab(BottomTab::devices); };
     editorTab_.onClick = [this] { showBottomTab(BottomTab::editor); };
+    clipsTab_.onClick = [this] { showBottomTab(BottomTab::clips); };
     mixerTab_.setToggleState(true, juce::dontSendNotification);
 
     transport_.onRecordClicked = [this] { toggleRecording(); };
@@ -212,10 +217,10 @@ void MainComponent::resized()
     const int bottom = juce::jlimit(160, juce::jmax(160, area.getHeight() - 220), bottomHeight_);
     auto bottomArea = area.removeFromBottom(bottom);
     auto tabs = bottomArea.removeFromTop(kBottomTabHeight).reduced(6, 2);
-    for (auto* b : {&mixerTab_, &devicesTab_, &editorTab_})
+    for (auto* b : {&mixerTab_, &devicesTab_, &editorTab_, &clipsTab_})
         b->setBounds(tabs.removeFromLeft(86));
     divider_->setBounds(area.removeFromBottom(kDividerHeight));
-    for (auto* panel : std::initializer_list<juce::Component*>{&mixer_, &devicePanel_, &clipEditor_})
+    for (auto* panel : std::initializer_list<juce::Component*>{&mixer_, &devicePanel_, &clipEditor_, &clipList_})
         panel->setBounds(bottomArea);
     arranger_.setBounds(area);
 }
@@ -331,7 +336,28 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    toggleEditLock,
                                    toggleTimeLock,
                                    importVideo,
-                                   showVideo};
+                                   showVideo,
+                                   clipRatingNone,
+                                   clipRating1,
+                                   clipRating2,
+                                   clipRating3,
+                                   clipRating4,
+                                   clipRating5,
+                                   toggleClipRatings,
+                                   groupClips,
+                                   ungroupClips,
+                                   ungroupAllClips,
+                                   regroupClips,
+                                   loopClips,
+                                   unloopClips,
+                                   captureClip,
+                                   renameClip,
+                                   identifySyncPoint,
+                                   removeSyncPoint,
+                                   quantizeClipsToGrid,
+                                   bypassClipGain,
+                                   renderClipGain,
+                                   showClipList};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -340,6 +366,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     using namespace commands;
     constexpr auto cmd = juce::ModifierKeys::commandModifier;
     constexpr auto shift = juce::ModifierKeys::shiftModifier;
+    constexpr auto alt = juce::ModifierKeys::altModifier;
     auto& session = project_.getSession();
     auto& undoManager = session.getUndoManager();
     const bool hasClipSelection = !editor_.getSelectedClips().empty();
@@ -508,6 +535,95 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress('l', cmd | juce::ModifierKeys::altModifier);
         break;
     }
+    case clipRatingNone:
+    case clipRating1:
+    case clipRating2:
+    case clipRating3:
+    case clipRating4:
+    case clipRating5:
+    {
+        const int rating = static_cast<int>(id - clipRatingNone);
+        info.setInfo(rating == 0 ? juce::String("Rating: None") : "Rating: " + juce::String(rating),
+                     rating == 0 ? juce::String("Remove the rating of the selected clips")
+                                 : "Rate the selected clips " + juce::String(rating) + " (of 5)",
+                     categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.setTicked(hasClipSelection && actions::getSelectedClipsRating(session, editor_) == rating);
+        info.addDefaultKeypress('0' + rating, cmd | alt);
+        break;
+    }
+    case toggleClipRatings:
+        info.setInfo("Clip Ratings", "Show the rating (stars) of clips in their title bars", categories::view, 0);
+        info.setTicked(editor_.isShowingClipRatings());
+        break;
+    case groupClips:
+        info.setInfo("Group", "Make a clip group of the selected clips (and groups), on any tracks", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('g', cmd | alt);
+        break;
+    case ungroupClips:
+        info.setInfo("Ungroup", "Take the top layer of the selected clip groups apart (nested groups stay)", categories::clip, 0);
+        info.setActive(actions::selectionHasGroups(session, editor_));
+        info.addDefaultKeypress('u', cmd | alt);
+        break;
+    case ungroupAllClips:
+        info.setInfo("Ungroup All", "Remove every layer of grouping from the selected clip groups", categories::clip, 0);
+        info.setActive(actions::selectionHasGroups(session, editor_));
+        break;
+    case regroupClips:
+        info.setInfo("Regroup", "Put back the clip groups the last Ungroup took apart", categories::clip, 0);
+        info.setActive(!editor_.getLastUngroup().empty());
+        info.addDefaultKeypress('r', cmd | alt);
+        break;
+    case loopClips:
+        info.setInfo("Loop...", "Repeat the selected clips a number of times", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('o', cmd | alt);
+        break;
+    case unloopClips:
+        info.setInfo("Unloop", "Turn looped clips back into standard clips, one per iteration", categories::clip, 0);
+        info.setActive(actions::selectionHasLoopedClips(session, editor_));
+        break;
+    case captureClip:
+        info.setInfo("Capture...", "Make the selection a new clip in the Clip List", categories::clip, 0);
+        info.setActive(hasClipSelection || !editor_.getTimeSelection().isEmpty());
+        info.addDefaultKeypress('c', cmd | alt);
+        break;
+    case renameClip:
+        info.setInfo("Rename...", "Rename the selected clip (it becomes a user-defined clip in the Clip List)", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('r', cmd | shift);
+        break;
+    case identifySyncPoint:
+        info.setInfo("Identify Sync Point", "Mark the playhead position in the selected clips as their sync point", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('s', cmd | alt);
+        break;
+    case removeSyncPoint:
+        info.setInfo("Remove Sync Point", "Remove the sync point of the selected clips", categories::clip, 0);
+        info.setActive(actions::selectionHasSyncPoints(session, editor_));
+        break;
+    case quantizeClipsToGrid:
+        info.setInfo("Quantize to Grid", "Move the selected clips so that their sync point (or start) is on the nearest grid line",
+                     categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('q', cmd | alt);
+        break;
+    case bypassClipGain:
+        info.setInfo("Bypass Clip Gain", "Play the selected clips without their clip gain (the setting is kept)", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.setTicked(actions::selectedClipsGainBypassed(session, editor_));
+        info.addDefaultKeypress('b', cmd | alt);
+        break;
+    case renderClipGain:
+        info.setInfo("Render Clip Gain", "Apply the clip gain to the audio of the selected clips and reset it to 0 dB", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        break;
+    case showClipList:
+        info.setInfo("Clip List", "Show the Clip List", categories::view, 0);
+        info.setTicked(bottomTab_ == BottomTab::clips);
+        info.addDefaultKeypress(juce::KeyPress::F6Key, 0);
+        break;
     case togglePunchIn:
         info.setInfo("Punch In", "Recording starts at the loop start", categories::transport, 0);
         info.setTicked(session.isPunchInEnabled());
@@ -726,6 +842,64 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case toggleTimeLock:
         actions::toggleSelectedClipsLock(session, editor_, actions::ClipLock::time);
+        break;
+    case clipRatingNone:
+    case clipRating1:
+    case clipRating2:
+    case clipRating3:
+    case clipRating4:
+    case clipRating5:
+        actions::setSelectedClipsRating(session, editor_, static_cast<int>(invocation.commandID - clipRatingNone));
+        break;
+    case toggleClipRatings:
+        editor_.setShowingClipRatings(!editor_.isShowingClipRatings());
+        break;
+    case groupClips:
+        actions::groupSelectedClips(session, editor_);
+        break;
+    case ungroupClips:
+        actions::ungroupSelectedClips(session, editor_);
+        break;
+    case ungroupAllClips:
+        actions::ungroupAllSelectedClips(session, editor_);
+        break;
+    case regroupClips:
+        actions::regroupClips(session, editor_);
+        break;
+    case loopClips:
+        showLoopDialog();
+        break;
+    case unloopClips:
+        actions::unloopSelectedClips(session, editor_);
+        break;
+    case captureClip:
+        showCaptureDialog();
+        break;
+    case renameClip:
+        showRenameClipDialog();
+        break;
+    case identifySyncPoint:
+        if (!actions::identifySyncPoint(session, editor_, arranger_.getPlayheadSeconds()))
+            showMessage("Identify Sync Point", "Place the playhead inside a selected clip (that is not edit-locked).");
+        break;
+    case removeSyncPoint:
+        actions::removeSyncPoints(session, editor_);
+        break;
+    case quantizeClipsToGrid:
+        actions::quantizeSelectedClipsToGrid(session, editor_, editor_.getGridBeats() * 60.0 / session.getTempo());
+        break;
+    case bypassClipGain:
+        actions::toggleSelectedClipsGainBypass(session, editor_);
+        break;
+    case renderClipGain:
+    {
+        juce::String error;
+        if (actions::renderSelectedClipsGain(project_, editor_, error) == 0)
+            showMessage("Render Clip Gain", error);
+        break;
+    }
+    case showClipList:
+        showBottomTab(BottomTab::clips);
         break;
     case togglePunchOut:
         session.setPunchOutEnabled(!session.isPunchOutEnabled());
@@ -1060,9 +1234,11 @@ void MainComponent::showBottomTab(BottomTab tab)
     mixer_.setVisible(tab == BottomTab::mixer);
     devicePanel_.setVisible(tab == BottomTab::devices);
     clipEditor_.setVisible(tab == BottomTab::editor);
+    clipList_.setVisible(tab == BottomTab::clips);
     mixerTab_.setToggleState(tab == BottomTab::mixer, juce::dontSendNotification);
     devicesTab_.setToggleState(tab == BottomTab::devices, juce::dontSendNotification);
     editorTab_.setToggleState(tab == BottomTab::editor, juce::dontSendNotification);
+    clipsTab_.setToggleState(tab == BottomTab::clips, juce::dontSendNotification);
     commandManager_.commandStatusChanged();
 }
 
@@ -1116,6 +1292,62 @@ void MainComponent::showAudioSettings()
     options.resizable = false;
     options.componentToCentreAround = this;
     settingsWindow_ = options.launchAsync();
+}
+
+void MainComponent::showLoopDialog()
+{
+    if (editor_.getSelectedClips().empty())
+        return;
+    juce::Component::SafePointer<MainComponent> safe(this);
+    TextPromptPanel::show(this, "Loop", "Number of loops (the clip plays this many times)", "4", "Loop", true,
+                          [safe](const juce::String& text)
+                          {
+                              if (safe != nullptr)
+                                  actions::loopSelectedClips(safe->project_.getSession(), safe->editor_, text.getDoubleValue());
+                          });
+}
+
+void MainComponent::showCaptureDialog()
+{
+    auto& session = project_.getSession();
+    juce::String error;
+    const auto range = actions::getCaptureRange(session, editor_, error);
+    if (!range.track.isValid())
+    {
+        showMessage("Capture", error);
+        return;
+    }
+    juce::Component::SafePointer<MainComponent> safe(this);
+    TextPromptPanel::show(this, "Capture", "Name of the new clip", actions::suggestCaptureName(session, range), "Capture", false,
+                          [safe](const juce::String& name)
+                          {
+                              if (safe == nullptr)
+                                  return;
+                              juce::String problem;
+                              if (actions::captureSelection(safe->project_.getSession(), safe->editor_, name, problem).isValid())
+                                  safe->showBottomTab(BottomTab::clips);
+                              else
+                                  safe->showMessage("Capture", problem);
+                          });
+}
+
+void MainComponent::showRenameClipDialog()
+{
+    auto& session = project_.getSession();
+    juce::ValueTree clip;
+    for (const auto id : editor_.getSelectedClips())
+        if (clip = session.findClip(id); clip.isValid())
+            break;
+    if (!clip.isValid())
+        return;
+    const auto clipId = session::clip::getId(clip);
+    juce::Component::SafePointer<MainComponent> safe(this);
+    TextPromptPanel::show(this, "Rename Clip", "Name", session::clip::getName(clip), "Rename", false,
+                          [safe, clipId](const juce::String& name)
+                          {
+                              if (safe != nullptr)
+                                  actions::renameClip(safe->project_.getSession(), safe->project_.getSession().findClip(clipId), name);
+                          });
 }
 
 void MainComponent::showMessage(const juce::String& title, const juce::String& message)
