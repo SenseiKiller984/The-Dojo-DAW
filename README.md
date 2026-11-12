@@ -20,11 +20,13 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **MIDI track**: MIDI clips (and live MIDI when armed) that play the instrument track picked in its menu (*MIDI Output*). Muting it silences its notes; soloing the instrument keeps it playing.
   - **VCA Master**: no audio of its own. Its fader (and volume automation) scales its member tracks, its mute mutes them and its solo solos them; VCAs can be nested. Assign tracks with *VCA* in the track menu (it applies to the whole selection).
   - **Master Fader**: one last fader, with mute, volume automation and post-fader devices, on the main output or on a bus (*Controls* in its menu; one per path).
+  - **Click Track**: a mono aux input with the **Click** device already inserted (also *Track > Create Click Track*).
 - **Duplicate...** (Alt+Shift+D) makes any number of copies of the selected tracks. You choose whether the copies get the clips, automation, devices (with their current settings) and sends. Each copy goes right after its source, or all of them after the last selected track. A folder is copied with its contents; routing inside it points at the copies.
 - **Delete** removes the selected tracks (undoable). Deleting a VCA Master coalesces it: its fader and automation are added into each member's own volume (and a muted VCA mutes them), so they sound exactly as before.
 - Duplicating a VCA member without *VCA assignment* bakes the VCA's gain into the copy the same way.
 - **Split into Mono** gives each selected stereo audio track one mono track per channel ("Name.L", "Name.R"). They are panned hard left and right, play and record that channel, and get the source's devices, sends and automation; the source track stays.
 - **Make Inactive / Make Active**: an inactive track (or everything in an inactive folder) is not played and its devices use no CPU. Tracks routed into an inactive bus are silent. Inactive tracks are dimmed and can't be soloed, muted or recorded.
+- **Clear All Clip Indicators** (Alt+C) clears the red clip lights of every meter, in the mixer and on the master. They light when a signal goes over 0 dBFS and stay lit until cleared.
 - **Scroll to Track...** takes a track number (or a pick from the list), selects that track and brings it to the top of the arranger (opening collapsed folders) and the left of the mixer.
 
 **Recording and MIDI**
@@ -51,6 +53,11 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Long files **stream from disk** instead of being loaded into memory.
 - Loop range (drag in the ruler's top strip, L toggles), snap, zoom, undo/redo for everything.
 
+**Clip menu** (also in the clip's right-click menu; each applies to all selected clips: it locks them, or unlocks them if all are locked)
+- **Edit Lock / Edit Unlock** (Ctrl+Shift+L): an edit-locked clip (padlock in its title bar) can't be cut, deleted, split, trimmed, faded or moved (in time or to another track). Its notes, gain, stretch and pitch are read-only in the editor. Copies of it, pasted to any track or time, are edit-locked too.
+- **Time Lock / Time Unlock** (Ctrl+Alt+L): a time-locked clip (clock in its title bar) stays at its time location. It can't be moved in time or deleted, but it can be trimmed, split or dragged to another track at the same time. When it is split, both parts stay time-locked.
+- Recording over a locked clip leaves it as it is. Delete and cut skip locked clips, which stay selected.
+
 **MIDI sequencing**
 - **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend); **quantise** with strength and optional note ends.
 - **Step sequencer** view of the same clip: rows are the Drum Rack's pads or Impulse's slots (or 16 notes), click or paint steps, right-click for velocity.
@@ -71,6 +78,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Utility**: gain ±35 dB, width 0–200 % and Mono, Bass Mono (below a crossover), phase invert left/right, channel mode (left, right, swap), balance, mute, DC filter.
 - **Amp & Cabinet**: seven amp models (Clean to Heavy, and Bass) with 4x-oversampled gain stages, bass/middle/treble/presence, five cabinets and three microphone positions.
 - **Pitch Shift** for live input and instruments.
+- **Click**: a metronome that follows the transport's tempo, bar position and time signature, sample-accurately. It has four sounds (Beep, Woodblock, Rim, Cowbell), volume, an accented downbeat, and quarter, eighth or sixteenth clicks. It plays during playback and recording, or only while recording.
 
 **Instruments**
 - **Wavetable**: two morphing wavetable oscillators (eight band-limited tables), unison up to 8, sub and noise, multimode filter, three envelopes, two LFOs and an 8-slot modulation matrix.
@@ -203,7 +211,7 @@ src/engine    AudioEngine (audio thread + worker pool), render graph, routing, d
               clip playback / time-stretch / disk streaming, capture, file preview, device host,
               MP3 encoder
 src/devices   native devices: EQ, compressor, limiter, reverb, delay, Echo, Utility, Amp & Cabinet,
-              pitch shift; instruments: Wavetable, Operator, Sampler, Drum Rack, Impulse
+              pitch shift, Click; instruments: Wavetable, Operator, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/session   the document (tracks, clips, MIDI, devices, sends, automation) with undo, audio

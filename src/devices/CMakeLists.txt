@@ -22,6 +22,8 @@ add_library(dojo_devices STATIC
     TimeEffects.cpp
     TimeEffects.h
     Utility.cpp
+    Click.cpp
+    Click.h
     Utility.h
     WavetableSynth.cpp
     WavetableSynth.h

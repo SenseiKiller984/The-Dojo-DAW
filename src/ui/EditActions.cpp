@@ -24,11 +24,24 @@ bool deleteSelectedClips(session::Session& session, EditorState& editor)
     if (clips.empty())
         return false;
 
-    session.beginTransaction(clips.size() == 1 ? "Delete Clip" : "Delete Clips");
+    // Locked clips stay (and stay selected).
+    std::set<std::uint32_t> kept;
+    std::vector<juce::ValueTree> removable;
     for (const auto& c : clips)
+    {
+        if (session::clip::canRemove(c))
+            removable.push_back(c);
+        else
+            kept.insert(session::clip::getId(c));
+    }
+    if (removable.empty())
+        return false;
+
+    session.beginTransaction(removable.size() == 1 ? "Delete Clip" : "Delete Clips");
+    for (const auto& c : removable)
         session.removeClip(c);
 
-    editor.clearClipSelection();
+    editor.setSelectedClips(std::move(kept));
     return true;
 }
 
@@ -52,7 +65,8 @@ bool splitAt(session::Session& session, EditorState& editor, double seconds)
 {
     const auto covers = [seconds](const juce::ValueTree& c)
     {
-        return seconds > session::clip::getStart(c) && seconds < session::clip::getEnd(c);
+        // (edit-locked clips are not split; time-locked ones are)
+        return seconds > session::clip::getStart(c) && seconds < session::clip::getEnd(c) && session::clip::canEdit(c);
     };
 
     std::vector<juce::ValueTree> targets;
@@ -104,12 +118,30 @@ bool copySelectedClips(session::Session& session, EditorState& editor)
 
 bool cutSelectedClips(session::Session& session, EditorState& editor)
 {
-    if (!copySelectedClips(session, editor))
-        return false;
-    session.beginTransaction("Cut");
+    // Only the clips that may be removed are cut; locked ones stay where they are (and selected).
+    std::vector<EditorState::ClipboardEntry> entries;
+    std::vector<juce::ValueTree> removable;
+    std::set<std::uint32_t> kept;
     for (const auto& c : selectedClips(session, editor))
+    {
+        if (session::clip::canRemove(c))
+        {
+            entries.push_back({c.createCopy(), session.indexOf(c.getParent())});
+            removable.push_back(c);
+        }
+        else
+        {
+            kept.insert(session::clip::getId(c));
+        }
+    }
+    if (removable.empty())
+        return false;
+
+    editor.setClipboard(std::move(entries));
+    session.beginTransaction("Cut");
+    for (const auto& c : removable)
         session.removeClip(c);
-    editor.clearClipSelection();
+    editor.setSelectedClips(std::move(kept));
     return true;
 }
 
@@ -287,6 +319,7 @@ juce::String getName(NewTrackType type)
     case NewTrackType::midi:        return "MIDI Track";
     case NewTrackType::vcaMaster:   return "VCA Master";
     case NewTrackType::masterFader: return "Master Fader";
+    case NewTrackType::clickTrack:  return "Click Track";
     case NewTrackType::folder:      return "Folder";
     case NewTrackType::audio:       break;
     }
@@ -346,6 +379,11 @@ std::vector<juce::ValueTree> addNewTracks(session::Session& session, EditorState
                 session::track::setControlledBus(t, path, nullptr);
                 break;
             }
+            case NewTrackType::clickTrack:
+                t = session.addTrack(session::TrackKind::bus, name.isNotEmpty() ? name : session.uniqueTrackName("Click"));
+                session::track::setFormat(t, session::TrackFormat::mono, nullptr);
+                session.addDevice(t, "builtin:click", "Click");
+                break;
             case NewTrackType::folder:     t = session.addFolder(name); break;
             }
             if (!t.isValid())
@@ -483,6 +521,54 @@ bool setSelectedTracksActive(session::Session& session, EditorState& editor, boo
     for (auto t : selected)
         session::track::setActive(t, active, &session.getUndoManager());
     return true;
+}
+
+namespace
+{
+bool hasLock(const juce::ValueTree& c, ClipLock lock)
+{
+    return lock == ClipLock::edit ? session::clip::isEditLocked(c) : session::clip::isTimeLocked(c);
+}
+} // namespace
+
+bool selectedClipsLocked(const session::Session& session, const EditorState& editor, ClipLock lock)
+{
+    bool any = false;
+    for (const auto id : editor.getSelectedClips())
+        if (const auto c = session.findClip(id); c.isValid())
+        {
+            if (!hasLock(c, lock))
+                return false;
+            any = true;
+        }
+    return any;
+}
+
+bool toggleSelectedClipsLock(session::Session& session, EditorState& editor, ClipLock lock)
+{
+    const auto clips = selectedClips(session, editor);
+    if (clips.empty())
+        return false;
+
+    const bool locking = !selectedClipsLocked(session, editor, lock);
+    const bool edit = lock == ClipLock::edit;
+    session.beginTransaction(juce::String(edit ? "Edit " : "Time ") + (locking ? "Lock" : "Unlock"));
+    for (const auto& c : clips)
+    {
+        if (edit)
+            session::clip::setEditLocked(c, locking, &session.getUndoManager());
+        else
+            session::clip::setTimeLocked(c, locking, &session.getUndoManager());
+    }
+    return true;
+}
+
+juce::ValueTree createClickTrack(session::Session& session, EditorState& editor)
+{
+    NewTracks row;
+    row.type = NewTrackType::clickTrack;
+    const auto created = addNewTracks(session, editor, {row});
+    return created.empty() ? juce::ValueTree() : created.front();
 }
 
 juce::ValueTree getTrackByNumber(const session::Session& session, int number)

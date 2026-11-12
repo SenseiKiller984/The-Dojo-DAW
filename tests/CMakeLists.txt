@@ -14,6 +14,8 @@ add_executable(dojo_tests
     TestSupport.h
     AudioEngineTests.cpp
     BrowserTests.cpp
+    ClickTests.cpp
+    ClipLockTests.cpp
     DeviceTests.cpp
     EditorDropTests.cpp
     EffectTests.cpp

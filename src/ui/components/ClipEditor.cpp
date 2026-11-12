@@ -190,7 +190,7 @@ void PianoRoll::valueTreeChildRemoved(juce::ValueTree&, juce::ValueTree& child, 
 
 void PianoRoll::deleteSelection()
 {
-    if (selection_.empty())
+    if (selection_.empty() || isLocked())
         return;
     session_.beginTransaction(selection_.size() == 1 ? "Delete Note" : "Delete Notes");
     const auto notes = selection_;
@@ -201,7 +201,7 @@ void PianoRoll::deleteSelection()
 
 void PianoRoll::moveSelection(double beats, int semitones)
 {
-    if (selection_.empty())
+    if (selection_.empty() || isLocked())
         return;
     session_.beginTransaction("Move Notes");
     auto* um = &session_.getUndoManager();
@@ -212,9 +212,14 @@ void PianoRoll::moveSelection(double beats, int semitones)
     }
 }
 
+bool PianoRoll::isLocked() const
+{
+    return clip_.isValid() && session::clip::isEditLocked(clip_);
+}
+
 void PianoRoll::quantiseSelection(double strength, bool ends)
 {
-    if (!clip_.isValid())
+    if (!clip_.isValid() || isLocked())
         return;
     session_.beginTransaction("Quantise");
     session_.quantise(clip_, selection_, gridBeats(), strength, ends);
@@ -376,12 +381,19 @@ void PianoRoll::paint(juce::Graphics& g)
         }
     }
     g.restoreState();
+
+    if (isLocked())
+    {
+        g.setColour(colour::textMuted);
+        g.setFont(sansBold(12.0f));
+        g.drawText("Edit-locked (Clip > Edit Unlock to change it)", grid.reduced(10, 6).removeFromTop(18), juce::Justification::topRight, true);
+    }
 }
 
 void PianoRoll::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
-    if (!clip_.isValid())
+    if (!clip_.isValid() || isLocked()) // an edit-locked clip is read-only
         return;
 
     drag_ = Drag::none;
@@ -552,6 +564,8 @@ void PianoRoll::mouseMove(const juce::MouseEvent& e)
 
 void PianoRoll::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (isLocked())
+        return;
     bool rightEdge = false;
     if (auto note = noteAt(e.position, rightEdge); note.isValid())
     {
@@ -831,7 +845,7 @@ void StepSequencer::mouseDown(const juce::MouseEvent& e)
 {
     int row = 0;
     int step = 0;
-    if (!clip_.isValid() || !cellAt(e.getPosition(), row, step))
+    if (!clip_.isValid() || session::clip::isEditLocked(clip_) || !cellAt(e.getPosition(), row, step))
         return;
 
     auto& session = project_.getSession();
@@ -982,6 +996,11 @@ void AudioClipInspector::sync()
         fields_[5].slider.setValue(session::track::getSpeed(track_), juce::dontSendNotification);
         fields_[6].slider.setValue(session::track::getPitch(track_), juce::dontSendNotification);
     }
+    // An edit-locked clip is read-only (the track's own speed and pitch stay editable).
+    const bool editable = session::clip::canEdit(clip_);
+    for (std::size_t i = 0; i < 5; ++i)
+        fields_[i].slider.setEnabled(editable);
+    matchTempo_.setEnabled(editable);
     repaint();
 }
 
@@ -1010,7 +1029,12 @@ void AudioClipInspector::paint(juce::Graphics& g)
         return;
     g.setColour(colour::textPrimary);
     g.setFont(sansBold(14.0f));
-    g.drawText(session::clip::getName(clip_), getLocalBounds().reduced(14, 6).removeFromTop(20), juce::Justification::centredLeft, true);
+    juce::String title = session::clip::getName(clip_);
+    if (session::clip::isEditLocked(clip_))
+        title << "  (edit-locked)";
+    else if (session::clip::isTimeLocked(clip_))
+        title << "  (time-locked)";
+    g.drawText(title, getLocalBounds().reduced(14, 6).removeFromTop(20), juce::Justification::centredLeft, true);
     g.setColour(colour::textMuted);
     g.setFont(sans(11.5f));
     g.drawText(session::clip::getFile(clip_).getFullPathName() + "   start " + juce::String(session::clip::getStart(clip_), 3) + " s   length " +

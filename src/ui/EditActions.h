@@ -13,7 +13,8 @@ namespace dojo::ui::actions
 
 /** Clip/track edits shared by menus, context menus and keyboard shortcuts. Each call is one undo step. */
 
-/** Deletes the selected clips. Returns false if nothing was selected. */
+/** Deletes the selected clips (except locked ones, which stay selected). Returns false if nothing was
+    deleted. */
 bool deleteSelectedClips(session::Session& session, EditorState& editor);
 
 /** Duplicates the selected clips (each copy right after its original) and selects the copies. */
@@ -28,7 +29,8 @@ bool splitAt(session::Session& session, EditorState& editor, double seconds);
 /** Copies the selected clips to the editor's clipboard. Returns false if nothing was selected. */
 bool copySelectedClips(session::Session& session, EditorState& editor);
 
-/** Copies, then deletes the selected clips (one undo step). */
+/** Copies, then deletes the selected clips (one undo step). Locked clips are left out (and stay
+    selected); returns false if every selected clip is locked. */
 bool cutSelectedClips(session::Session& session, EditorState& editor);
 
 /**
@@ -40,6 +42,18 @@ bool pasteClips(session::Session& session, EditorState& editor, double seconds);
 
 /** Selects every clip in the session. */
 void selectAllClips(session::Session& session, EditorState& editor);
+
+/** Clip locks of the selection (Clip > Edit Lock / Time Lock). */
+enum class ClipLock
+{
+    edit,
+    time,
+};
+/** True if every selected clip has the lock (so the command unlocks); false if none is selected. */
+bool selectedClipsLocked(const session::Session& session, const EditorState& editor, ClipLock lock);
+/** Locks the selected clips, or unlocks them if every one is already locked. One undo step. Returns
+    false if no clip is selected. */
+bool toggleSelectedClipsLock(session::Session& session, EditorState& editor, ClipLock lock);
 
 /** Adds a track of `kind` below the selected one (or at the end) and selects it. */
 juce::ValueTree addTrack(session::Session& session, EditorState& editor,
@@ -74,6 +88,7 @@ enum class NewTrackType
     midi,        ///< MIDI clips sent to an instrument track
     vcaMaster,   ///< controls the fader, mute and solo of its member tracks
     masterFader, ///< a last fader (and post-fader devices) on the main output or a bus
+    clickTrack,  ///< a mono aux input with the Click device: a metronome that follows the transport
     folder,
 };
 [[nodiscard]] juce::String getName(NewTrackType type);
@@ -121,6 +136,10 @@ std::vector<juce::ValueTree> splitSelectedIntoMono(session::Project& project, Ed
 [[nodiscard]] bool anySelectedTrackActive(const session::Session& session, const EditorState& editor);
 /** Track > Make Inactive / Make Active for every selected track. One undo step. */
 bool setSelectedTracksActive(session::Session& session, EditorState& editor, bool active);
+
+/** Track > Create Click Track: a mono aux input named "Click" with the Click device inserted, after
+    the current track (selected). One undo step. */
+juce::ValueTree createClickTrack(session::Session& session, EditorState& editor);
 
 /** Track numbers (Scroll to Track): 1 = the first track in the arranger, counting tracks inside folders. */
 [[nodiscard]] juce::ValueTree getTrackByNumber(const session::Session& session, int number);

@@ -21,11 +21,16 @@ public:
     static constexpr float kMaxDb = 6.0f;
 
     LevelMeter();
+    ~LevelMeter() override;
 
     /** `peakLeft` / `peakRight` are linear; `elapsedSeconds` is the time since the previous update. */
     void update(float peakLeft, float peakRight, double elapsedSeconds);
 
     void resetClipIndicators();
+    /** True while the clip indicator of either channel is lit. */
+    [[nodiscard]] bool isClipLit() const noexcept;
+    /** Track > Clear All Clip Indicators: every meter in the application. Message thread only. */
+    static void clearAllClipIndicators();
 
     /** Maps a level in dBFS onto [0, 1] meter travel. Shared with the scale drawn beside the meter. */
     [[nodiscard]] static float decibelsToProportion(float decibels) noexcept;

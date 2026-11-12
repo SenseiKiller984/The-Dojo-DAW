@@ -9,6 +9,7 @@
 #include "devices/Operator.h"
 #include "devices/TimeEffects.h"
 #include "devices/Utility.h"
+#include "devices/Click.h"
 #include "devices/WavetableSynth.h"
 
 namespace dojo::devices
@@ -31,6 +32,7 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Echo::kTypeId, "Echo", "Space", false},
         {Utility::kTypeId, "Utility", "Utility", false},
         {AmpCabinet::kTypeId, "Amp & Cabinet", "Drive", false},
+        {Click::kTypeId, "Click", "Utility", false},
     };
     return devices;
 }
@@ -66,6 +68,8 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<Echo>();
     if (type == Utility::kTypeId)
         return std::make_unique<Utility>();
+    if (type == Click::kTypeId)
+        return std::make_unique<Click>();
     if (type == AmpCabinet::kTypeId)
         return std::make_unique<AmpCabinet>();
     if (type == Sampler::kTypeId)

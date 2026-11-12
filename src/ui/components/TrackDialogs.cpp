@@ -45,10 +45,10 @@ void styleLabel(juce::Label& label, const juce::String& text)
     label.setColour(juce::Label::textColourId, theme::colour::textMuted);
 }
 
-constexpr std::array<actions::NewTrackType, 7> kNewTrackTypes{actions::NewTrackType::audio,     actions::NewTrackType::auxInput,
-                                                             actions::NewTrackType::instrument, actions::NewTrackType::midi,
-                                                             actions::NewTrackType::vcaMaster,  actions::NewTrackType::masterFader,
-                                                             actions::NewTrackType::folder};
+constexpr std::array<actions::NewTrackType, 8> kNewTrackTypes{actions::NewTrackType::audio,       actions::NewTrackType::auxInput,
+                                                             actions::NewTrackType::instrument,  actions::NewTrackType::midi,
+                                                             actions::NewTrackType::vcaMaster,   actions::NewTrackType::masterFader,
+                                                             actions::NewTrackType::clickTrack,  actions::NewTrackType::folder};
 } // namespace
 
 //==================================================================================================

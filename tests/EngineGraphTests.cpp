@@ -990,3 +990,33 @@ TEST_CASE("Master Faders: a last fader and post-fader devices on a bus or the ma
     for (const auto& rt : graph->tracks)
         CHECK(isRendered(rt.kind));
 }
+
+TEST_CASE("A click track ticks in time with the transport", "[engine][click][tracks]")
+{
+    Rig rig;
+    auto click = rig.session.addTrack(TrackKind::bus, "Click");
+    track::setFormat(click, TrackFormat::mono, nullptr);
+    rig.session.addDevice(click, "builtin:click", "Click");
+
+    rig.publish();
+    rig.render(0.3); // stopped: silent
+    CHECK(test::peak(rig.left) < 1e-9);
+
+    rig.left.clear();
+    rig.play(1.0); // from beat 2 (1 s = 2 beats at 120 bpm)
+    rig.render(1.2);
+    std::vector<std::size_t> starts;
+    std::size_t quiet = 1000;
+    for (std::size_t i = 0; i < rig.left.size(); ++i)
+    {
+        const bool loud = std::abs(rig.left[i]) > 1.0e-3;
+        if (loud && quiet >= 200)
+            starts.push_back(i);
+        quiet = loud ? 0 : quiet + 1;
+    }
+    REQUIRE(starts.size() >= 3);
+    CHECK(starts[0] <= 1);                   // beat 2 at 1.0 s
+    CHECK(starts[1] - at(0.5) <= 1);         // beat 3 at 1.5 s
+    CHECK(starts[2] - at(1.0) <= 1);         // beat 4 at 2.0 s
+    CHECK(std::abs(rig.right[at(0.5) + 20]) > 0.0); // a mono bus: both sides
+}

@@ -13,7 +13,7 @@ MainMenuModel::MainMenuModel(juce::ApplicationCommandManager& commandManager)
 
 juce::StringArray MainMenuModel::getMenuBarNames()
 {
-    return {"File", "Edit", "Track", "Transport", "View", "Options"};
+    return {"File", "Edit", "Track", "Clip", "Transport", "View", "Options"};
 }
 
 juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce::String&)
@@ -56,6 +56,7 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, addInstrumentTrack);
         menu.addCommandItem(cm, addBusTrack);
         menu.addCommandItem(cm, addFolder);
+        menu.addCommandItem(cm, createClickTrack);
         menu.addSeparator();
         menu.addCommandItem(cm, duplicateTracks);
         menu.addCommandItem(cm, deleteTrack);
@@ -64,10 +65,15 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, toggleTrackActive);
         menu.addSeparator();
         menu.addCommandItem(cm, toggleRecordMonitoring);
+        menu.addCommandItem(cm, clearClipIndicators);
         menu.addSeparator();
         menu.addCommandItem(cm, scrollToTrack);
         break;
     case 3:
+        menu.addCommandItem(cm, toggleEditLock);
+        menu.addCommandItem(cm, toggleTimeLock);
+        break;
+    case 4:
         menu.addCommandItem(cm, playStop);
         menu.addCommandItem(cm, record);
         menu.addCommandItem(cm, returnToStart);
@@ -76,7 +82,7 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, togglePunchIn);
         menu.addCommandItem(cm, togglePunchOut);
         break;
-    case 4:
+    case 5:
         menu.addCommandItem(cm, zoomIn);
         menu.addCommandItem(cm, zoomOut);
         menu.addCommandItem(cm, zoomToFit);
@@ -87,7 +93,7 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, showDevices);
         menu.addCommandItem(cm, showEditor);
         break;
-    case 5:
+    case 6:
         menu.addCommandItem(cm, preferences);
         menu.addSeparator();
         menu.addCommandItem(cm, audioSettings);

@@ -91,6 +91,8 @@ inline const juce::Identifier showAutomation {"showAutomation"};
 inline const juce::Identifier format {"format"};
 inline const juce::Identifier active {"active"};
 inline const juce::Identifier sourceChannel {"sourceChannel"};
+inline const juce::Identifier editLocked {"editLocked"};
+inline const juce::Identifier timeLocked {"timeLocked"};
 inline const juce::Identifier midiTarget {"midiTarget"};
 inline const juce::Identifier vca {"vca"};
 inline const juce::Identifier controls {"controls"};
@@ -234,6 +236,18 @@ double getPitch(const juce::ValueTree& c);   ///< semitones
 /** The source file channel an audio clip plays (on both sides), or -1 for all of them. */
 int getSourceChannel(const juce::ValueTree& c);
 
+/** Edit Lock: the clip cannot be edited (trimmed, split, faded, its content changed), moved or
+    deleted. Copies of it are edit-locked too. */
+bool isEditLocked(const juce::ValueTree& c);
+/** Time Lock: the clip stays at its time location; it cannot be moved in time or deleted, but it can
+    be trimmed, split (the parts stay time-locked) or moved to another track at the same time. */
+bool isTimeLocked(const juce::ValueTree& c);
+/** What the locks allow. */
+inline bool canEdit(const juce::ValueTree& c) { return !isEditLocked(c); }
+inline bool canMoveInTime(const juce::ValueTree& c) { return !isEditLocked(c) && !isTimeLocked(c); }
+inline bool canChangeTrack(const juce::ValueTree& c) { return !isEditLocked(c); }
+inline bool canRemove(const juce::ValueTree& c) { return !isEditLocked(c) && !isTimeLocked(c); }
+
 void setStart(juce::ValueTree c, double seconds, juce::UndoManager* um);
 void setLength(juce::ValueTree c, double seconds, juce::UndoManager* um);
 void setOffset(juce::ValueTree c, double value, juce::UndoManager* um);
@@ -244,6 +258,8 @@ void setStretch(juce::ValueTree c, double ratio, juce::UndoManager* um);
 void setPitch(juce::ValueTree c, double semitones, juce::UndoManager* um);
 void setName(juce::ValueTree c, const juce::String& name, juce::UndoManager* um);
 void setSourceChannel(juce::ValueTree c, int channel, juce::UndoManager* um);
+void setEditLocked(juce::ValueTree c, bool locked, juce::UndoManager* um);
+void setTimeLocked(juce::ValueTree c, bool locked, juce::UndoManager* um);
 } // namespace clip
 
 /** NOTE accessors (times in beats relative to the clip's content). */
@@ -460,9 +476,11 @@ public:
         return tree.hasType(ids::clip) || tree.hasType(ids::midiClip);
     }
 
-    /** Moves a clip in time and (optionally) to another track of a compatible kind. */
+    /** Moves a clip in time and (optionally) to another track of a compatible kind. An edit-locked
+        clip does not move; a time-locked one only changes track (it keeps its start). */
     void moveClip(juce::ValueTree clip, juce::ValueTree targetTrack, double newStart);
-    void removeClip(juce::ValueTree clip);
+    /** Removes a clip, unless it is edit- or time-locked. Returns true if it was removed. */
+    bool removeClip(juce::ValueTree clip);
 
     /** Copies a clip and places the copy directly after the original. Returns the copy. */
     juce::ValueTree duplicateClip(const juce::ValueTree& clip);
@@ -471,14 +489,16 @@ public:
     juce::ValueTree pasteClip(const juce::ValueTree& clip, juce::ValueTree track, double start);
 
     /** Splits a clip at timeline time `atSeconds`. Returns the new right-hand part, or an invalid
-        tree if the split point is not inside the clip. */
+        tree if the split point is not inside the clip or the clip is edit-locked. The parts of a
+        time-locked clip are time-locked too. */
     juce::ValueTree splitClip(juce::ValueTree clip, double atSeconds);
 
     /** End time of the last clip (0 for an empty session). */
     [[nodiscard]] double getEndTime() const;
 
     /** Removes everything on `track` between `start` and `end` (seconds): clips inside go, clips across
-        the edges are trimmed (or split, when they span the whole range). For recording over. */
+        the edges are trimmed (or split, when they span the whole range). For recording over. Locked
+        clips are left as they are. */
     void clearRange(juce::ValueTree track, double start, double end);
 
     // --- MIDI --------------------------------------------------------------------------------------

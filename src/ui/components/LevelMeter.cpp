@@ -1,5 +1,7 @@
 #include "ui/components/LevelMeter.h"
 
+#include <set>
+
 #include "ui/theme/DojoTheme.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -15,10 +17,37 @@ constexpr double kHoldSeconds = 1.2;
 constexpr float kClipIndicatorHeight = 5.0f;
 } // namespace
 
+namespace
+{
+/** Every meter alive (message thread only), so one command can clear all their clip indicators. */
+std::set<LevelMeter*>& allMeters()
+{
+    static std::set<LevelMeter*> meters;
+    return meters;
+}
+} // namespace
+
 LevelMeter::LevelMeter()
 {
     setOpaque(false);
     setTooltip("Master output peak level. Click to reset the clip indicators.");
+    allMeters().insert(this);
+}
+
+LevelMeter::~LevelMeter()
+{
+    allMeters().erase(this);
+}
+
+bool LevelMeter::isClipLit() const noexcept
+{
+    return channels_[0].clipped || channels_[1].clipped;
+}
+
+void LevelMeter::clearAllClipIndicators()
+{
+    for (auto* meter : allMeters())
+        meter->resetClipIndicators();
 }
 
 float LevelMeter::decibelsToProportion(float decibels) noexcept

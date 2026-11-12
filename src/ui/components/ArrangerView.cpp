@@ -31,6 +31,30 @@ constexpr int kBeatsPerBar = 4;
 
 const char* const kColourNames[] = {"Vermilion", "Persimmon", "Gold", "Matcha", "Jade", "Indigo", "Wisteria", "Sakura"};
 
+/** Edit Lock badge: a padlock. */
+void drawPadlock(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
+{
+    const auto box = area.withSizeKeepingCentre(8.0f, 10.0f);
+    const auto body = box.withTrimmedTop(4.0f);
+    juce::Path shackle;
+    shackle.addCentredArc(box.getCentreX(), body.getY(), 2.6f, 3.4f, 0.0f, -juce::MathConstants<float>::halfPi,
+                          juce::MathConstants<float>::halfPi, true);
+    g.setColour(colour);
+    g.strokePath(shackle, juce::PathStrokeType(1.4f));
+    g.fillRoundedRectangle(body, 1.2f);
+}
+
+/** Time Lock badge: a clock face. */
+void drawClockBadge(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
+{
+    const auto face = area.withSizeKeepingCentre(10.0f, 10.0f);
+    const auto centre = face.getCentre();
+    g.setColour(colour);
+    g.drawEllipse(face.reduced(0.6f), 1.3f);
+    g.drawLine(centre.x, centre.y, centre.x, face.getY() + 2.4f, 1.3f);
+    g.drawLine(centre.x, centre.y, face.getRight() - 2.6f, centre.y, 1.3f);
+}
+
 juce::String formatDb(double db)
 {
     if (db <= session::kMinusInfinityDb + 0.001)
@@ -498,6 +522,8 @@ ArrangerView::ClipHit ArrangerView::hitTestClip(juce::Point<float> position) con
             continue;
 
         ClipHit hit{c, row, ClipZone::body};
+        if (session::clip::isEditLocked(c))
+            return hit; // no trims or fades on an edit-locked clip
         const bool audio = !session::clip::isMidi(c);
         const float fadeInX = bounds.getX() + static_cast<float>(session::clip::getFadeIn(c) * pixelsPerSecond_);
         const float fadeOutX = bounds.getRight() - static_cast<float>(session::clip::getFadeOut(c) * pixelsPerSecond_);
@@ -1322,9 +1348,16 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
         if (std::abs(session::clip::getPitch(c)) > 1.0e-6)
             name << "  " << (session::clip::getPitch(c) > 0 ? "+" : "") << juce::String(session::clip::getPitch(c), 1) << " st";
     }
+    // Lock badges on the right of the title bar.
+    auto titleText = title.reduced(6.0f, 0.0f);
+    const bool editLocked = session::clip::isEditLocked(c);
+    if (session::clip::isTimeLocked(c) && titleText.getWidth() > 30.0f)
+        drawClockBadge(g, titleText.removeFromRight(12.0f), textOn(colour));
+    if (editLocked && titleText.getWidth() > 30.0f)
+        drawPadlock(g, titleText.removeFromRight(12.0f), textOn(colour));
     g.setColour(textOn(colour));
     g.setFont(sansBold(10.5f));
-    g.drawText(name, title.reduced(6.0f, 0.0f), juce::Justification::centredLeft, true);
+    g.drawText(name, titleText, juce::Justification::centredLeft, true);
 
     const auto body = bounds.withTrimmedTop(kClipTitleHeight);
 
@@ -1371,7 +1404,7 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
             g.drawLine(body.getRight() - fadeOutWidth, body.getY(), body.getRight(), body.getBottom(), 1.2f);
         }
 
-        if (bounds.getWidth() > 4.0f * kFadeHandleSize)
+        if (bounds.getWidth() > 4.0f * kFadeHandleSize && !editLocked)
         {
             g.setColour(selected ? colour::textPrimary : colour::textPrimary.withAlpha(0.55f));
             for (const float x : {body.getX() + fadeInWidth, body.getRight() - fadeOutWidth})
@@ -1992,7 +2025,7 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     const double deltaSeconds = static_cast<double>(e.position.x - dragStart_.x) / pixelsPerSecond_;
     const auto& anchor = dragOriginals_.front();
     auto anchorClip = session_.findClip(anchor.id);
-    if (!anchorClip.isValid())
+    if (!anchorClip.isValid() || (dragMode_ != DragMode::moveClips && !session::clip::canEdit(anchorClip)))
         return;
     const double beatsPerSecond = getTempo() / 60.0;
 
@@ -2168,7 +2201,11 @@ void ArrangerView::mouseMove(const juce::MouseEvent& e)
         case ClipZone::rightEdge: newCursor = juce::MouseCursor::RightEdgeResizeCursor; break;
         case ClipZone::fadeInHandle:
         case ClipZone::fadeOutHandle: newCursor = juce::MouseCursor::LeftRightResizeCursor; break;
-        case ClipZone::body: newCursor = juce::MouseCursor::DraggingHandCursor; break;
+        case ClipZone::body:
+            newCursor = session::clip::isEditLocked(hit.clip)   ? juce::MouseCursor::NormalCursor
+                        : session::clip::isTimeLocked(hit.clip) ? juce::MouseCursor::UpDownResizeCursor
+                                                                : juce::MouseCursor::DraggingHandCursor;
+            break;
         }
     }
 
@@ -2308,6 +2345,7 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
     const double playhead = playheadSeconds_;
     const bool playheadInside = playhead > session::clip::getStart(clipTree) && playhead < session::clip::getEnd(clipTree);
     const bool midi = session::clip::isMidi(clipTree);
+    const bool editable = session::clip::canEdit(clipTree);
 
     juce::PopupMenu menu;
     menu.addSectionHeader(session::clip::getName(clipTree));
@@ -2316,7 +2354,7 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
                      if (safe != nullptr && safe->onOpenClip)
                          safe->onOpenClip(clipId);
                  });
-    menu.addItem("Split at Playhead", playheadInside, false, [safe, playhead]
+    menu.addItem("Split at Playhead", playheadInside && editable, false, [safe, playhead]
                  {
                      if (safe != nullptr)
                          actions::splitAt(safe->session_, safe->editor_, playhead);
@@ -2329,7 +2367,7 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
 
     if (midi)
     {
-        menu.addItem("Quantise to Grid", [safe, clipId]
+        menu.addItem("Quantise to Grid", editable, false, [safe, clipId]
                      {
                          if (safe == nullptr)
                              return;
@@ -2342,7 +2380,7 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
     }
     else
     {
-        menu.addItem("Remove Fades", [safe, clipId]
+        menu.addItem("Remove Fades", editable, false, [safe, clipId]
                      {
                          if (safe == nullptr)
                              return;
@@ -2353,7 +2391,7 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
                              session::clip::setFadeOut(c, 0.0, &safe->session_.getUndoManager());
                          }
                      });
-        menu.addItem("Reset Stretch and Pitch", [safe, clipId]
+        menu.addItem("Reset Stretch and Pitch", editable, false, [safe, clipId]
                      {
                          if (safe == nullptr)
                              return;
@@ -2367,7 +2405,21 @@ void ArrangerView::showClipMenu(const juce::ValueTree& clipTree)
     }
 
     menu.addSeparator();
-    menu.addItem("Delete", [safe]
+    const bool editLocked = actions::selectedClipsLocked(session_, editor_, actions::ClipLock::edit);
+    const bool timeLocked = actions::selectedClipsLocked(session_, editor_, actions::ClipLock::time);
+    menu.addItem(editLocked ? "Edit Unlock" : "Edit Lock", true, editLocked, [safe]
+                 {
+                     if (safe != nullptr)
+                         actions::toggleSelectedClipsLock(safe->session_, safe->editor_, actions::ClipLock::edit);
+                 });
+    menu.addItem(timeLocked ? "Time Unlock" : "Time Lock", true, timeLocked, [safe]
+                 {
+                     if (safe != nullptr)
+                         actions::toggleSelectedClipsLock(safe->session_, safe->editor_, actions::ClipLock::time);
+                 });
+
+    menu.addSeparator();
+    menu.addItem("Delete", session::clip::canRemove(clipTree), false, [safe]
                  {
                      if (safe != nullptr)
                          actions::deleteSelectedClips(safe->session_, safe->editor_);

@@ -324,6 +324,22 @@ void setSourceChannel(juce::ValueTree c, int channel, juce::UndoManager* um)
 {
     c.setProperty(ids::sourceChannel, std::max(-1, channel), um);
 }
+bool isEditLocked(const juce::ValueTree& c) { return c.getProperty(ids::editLocked, false); }
+bool isTimeLocked(const juce::ValueTree& c) { return c.getProperty(ids::timeLocked, false); }
+void setEditLocked(juce::ValueTree c, bool locked, juce::UndoManager* um)
+{
+    if (locked)
+        c.setProperty(ids::editLocked, true, um);
+    else
+        c.removeProperty(ids::editLocked, um);
+}
+void setTimeLocked(juce::ValueTree c, bool locked, juce::UndoManager* um)
+{
+    if (locked)
+        c.setProperty(ids::timeLocked, true, um);
+    else
+        c.removeProperty(ids::timeLocked, um);
+}
 } // namespace clip
 
 //==================================================================================================
@@ -1109,10 +1125,11 @@ juce::ValueTree Session::findClip(std::uint32_t clipId) const
 
 void Session::moveClip(juce::ValueTree c, juce::ValueTree targetTrack, double newStart)
 {
-    if (!c.isValid())
+    if (!c.isValid() || !clip::canChangeTrack(c))
         return;
 
-    clip::setStart(c, newStart, &undo_);
+    if (clip::canMoveInTime(c))
+        clip::setStart(c, newStart, &undo_);
 
     auto currentTrack = c.getParent();
     if (!targetTrack.isValid() || targetTrack == currentTrack || !currentTrack.isValid())
@@ -1128,11 +1145,13 @@ void Session::moveClip(juce::ValueTree c, juce::ValueTree targetTrack, double ne
     targetTrack.addChild(c, -1, &undo_);
 }
 
-void Session::removeClip(juce::ValueTree c)
+bool Session::removeClip(juce::ValueTree c)
 {
     auto parent = c.getParent();
-    if (parent.isValid())
-        parent.removeChild(c, &undo_);
+    if (!parent.isValid() || !clip::canRemove(c))
+        return false;
+    parent.removeChild(c, &undo_);
+    return true;
 }
 
 juce::ValueTree Session::duplicateClip(const juce::ValueTree& original)
@@ -1174,7 +1193,7 @@ void Session::clearRange(juce::ValueTree t, double start, double end)
     {
         const double clipStart = clip::getStart(c);
         const double clipEnd = clip::getEnd(c);
-        if (clipEnd <= start || clipStart >= end)
+        if (clipEnd <= start || clipStart >= end || clip::isEditLocked(c) || clip::isTimeLocked(c))
             continue;
 
         if (clipStart < start)
@@ -1203,10 +1222,10 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
     const double start = clip::getStart(c);
     const double end = clip::getEnd(c);
 
-    if (!parent.isValid() || atSeconds <= start + kMinClipLength || atSeconds >= end - kMinClipLength)
+    if (!parent.isValid() || !clip::canEdit(c) || atSeconds <= start + kMinClipLength || atSeconds >= end - kMinClipLength)
         return {};
 
-    auto right = c.createCopy();
+    auto right = c.createCopy(); // (a time lock carries over to the new part)
     reassignIds(right);
     const double leftLength = atSeconds - start;
 

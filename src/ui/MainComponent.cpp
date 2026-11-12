@@ -7,6 +7,7 @@
 #include "engine/AudioEngine.h"
 #include "ui/DemoProject.h"
 #include "ui/components/ExportDialog.h"
+#include "ui/components/LevelMeter.h"
 #include "ui/components/TrackDialogs.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -319,7 +320,11 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    scrollToTrack,
                                    togglePunchIn,
                                    togglePunchOut,
-                                   toggleRecordMonitoring};
+                                   toggleRecordMonitoring,
+                                   clearClipIndicators,
+                                   createClickTrack,
+                                   toggleEditLock,
+                                   toggleTimeLock};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -458,6 +463,35 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.setInfo("Scroll to Track...", "Bring a track (by its number) into view", categories::track, 0);
         info.setActive(session.getNumTracks() > 0);
         break;
+    case createClickTrack:
+        info.setInfo("Create Click Track", "Add an aux input with the Click (metronome) device", categories::track, 0);
+        break;
+    case clearClipIndicators:
+        info.setInfo("Clear All Clip Indicators", "Clear the clip indication of every meter", categories::track, 0);
+        info.addDefaultKeypress('c', juce::ModifierKeys::altModifier);
+        break;
+    case toggleEditLock:
+    {
+        const bool locked = actions::selectedClipsLocked(session, editor_, actions::ClipLock::edit);
+        info.setInfo(locked ? "Edit Unlock" : "Edit Lock",
+                     "Edit-locked clips cannot be edited, moved or deleted; copies of them stay edit-locked", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.setTicked(locked);
+        info.addDefaultKeypress('l', cmd | shift);
+        break;
+    }
+    case toggleTimeLock:
+    {
+        const bool locked = actions::selectedClipsLocked(session, editor_, actions::ClipLock::time);
+        info.setInfo(locked ? "Time Unlock" : "Time Lock",
+                     "Time-locked clips stay at their time location: they can be trimmed, split or moved to another track, "
+                     "but not moved in time or deleted",
+                     categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.setTicked(locked);
+        info.addDefaultKeypress('l', cmd | juce::ModifierKeys::altModifier);
+        break;
+    }
     case togglePunchIn:
         info.setInfo("Punch In", "Recording starts at the loop start", categories::transport, 0);
         info.setTicked(session.isPunchInEnabled());
@@ -658,6 +692,18 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case togglePunchIn:
         session.setPunchInEnabled(!session.isPunchInEnabled());
+        break;
+    case clearClipIndicators:
+        LevelMeter::clearAllClipIndicators();
+        break;
+    case createClickTrack:
+        actions::createClickTrack(session, editor_);
+        break;
+    case toggleEditLock:
+        actions::toggleSelectedClipsLock(session, editor_, actions::ClipLock::edit);
+        break;
+    case toggleTimeLock:
+        actions::toggleSelectedClipsLock(session, editor_, actions::ClipLock::time);
         break;
     case togglePunchOut:
         session.setPunchOutEnabled(!session.isPunchOutEnabled());

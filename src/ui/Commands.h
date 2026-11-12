@@ -58,12 +58,17 @@ enum : juce::CommandID
     togglePunchIn,
     togglePunchOut,
     toggleRecordMonitoring,
+    clearClipIndicators,
+    createClickTrack,
+    toggleEditLock,
+    toggleTimeLock,
 };
 
 namespace categories
 {
 inline constexpr const char* file = "File";
 inline constexpr const char* edit = "Edit";
+inline constexpr const char* clip = "Clip";
 inline constexpr const char* track = "Track";
 inline constexpr const char* transport = "Transport";
 inline constexpr const char* view = "View";

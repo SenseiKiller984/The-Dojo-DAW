@@ -1127,7 +1127,7 @@ void AudioEngine::updatePlayHead() noexcept
     info.setPpqPosition(ppq);
     info.setPpqPositionOfLastBarStart(std::floor(ppq / 4.0) * 4.0);
     info.setIsPlaying(playing_);
-    info.setIsRecording(capture_ != nullptr && !capture_->inputs.empty());
+    info.setIsRecording(capture_ != nullptr && (!capture_->inputs.empty() || capture_->captureMidi));
     info.setIsLooping(loopEnabled_);
     info.setLoopPoints(juce::AudioPlayHead::LoopPoints{loopStart_ * beatsPerSecond, loopEnd_ * beatsPerSecond});
     playHead_.info = info;

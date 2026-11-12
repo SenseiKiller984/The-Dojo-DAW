@@ -66,6 +66,7 @@ private:
         int pitch;
     };
 
+    [[nodiscard]] bool isLocked() const; ///< the clip is edit-locked (read-only)
     [[nodiscard]] juce::Rectangle<int> gridArea() const;
     [[nodiscard]] juce::Rectangle<int> laneArea() const;
     [[nodiscard]] juce::Rectangle<int> keyboardArea() const;
