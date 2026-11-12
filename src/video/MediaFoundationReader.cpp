@@ -56,6 +56,7 @@ struct Reader::Impl
     LONG stride = 0;
     double frameRate = 25.0;
     double duration = 0.0;
+    double startTime = 0.0; ///< the first frame's timestamp: time zero (some sources start later)
     GUID subtype{};
 
     ~Impl() { release(reader); }
@@ -146,6 +147,19 @@ bool Reader::open(const std::wstring& path, std::string& error)
         && duration.vt == VT_UI8)
         impl_->duration = static_cast<double>(duration.uhVal.QuadPart) / 1.0e7;
     PropVariantClear(&duration);
+
+    // Times count from the first frame: some media sources stamp it later than zero.
+    std::vector<std::uint8_t> pixels;
+    int w = 0;
+    int h = 0;
+    double first = 0.0;
+    if (readNext(pixels, w, h, first))
+    {
+        impl_->startTime = std::max(0.0, first); // (readNext subtracted the start time, still 0 here)
+        if (impl_->duration > impl_->startTime)
+            impl_->duration -= impl_->startTime;
+    }
+    seek(0.0);
     return true;
 }
 
@@ -180,7 +194,7 @@ void Reader::seek(double seconds)
     PROPVARIANT position;
     PropVariantInit(&position);
     position.vt = VT_I8;
-    position.hVal.QuadPart = static_cast<LONGLONG>(std::max(0.0, seconds) * 1.0e7);
+    position.hVal.QuadPart = static_cast<LONGLONG>((std::max(0.0, seconds) + impl_->startTime) * 1.0e7);
     const GUID timeFormat{}; // GUID_NULL: 100-nanosecond units
     impl_->reader->SetCurrentPosition(timeFormat, position);
     PropVariantClear(&position);
@@ -240,7 +254,7 @@ bool Reader::readNext(std::vector<std::uint8_t>& bgra, int& width, int& height, 
                     for (std::size_t x = 3; x < rowBytes; x += 4)
                         out[x] = 0xff; // RGB32 has no alpha
                 }
-                time = static_cast<double>(timestamp) / 1.0e7;
+                time = static_cast<double>(timestamp) / 1.0e7 - impl_->startTime;
                 ok = true;
             }
             buffer->Unlock();
