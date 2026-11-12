@@ -133,6 +133,9 @@ bool Reader::open(const std::wstring& path, std::string& error)
         return false;
     rgb->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     rgb->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    // Progressive frames out: otherwise the video processor may treat material of unknown
+    // interlacing as interlaced and deinterlace it, which delays every picture by one frame.
+    rgb->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
     const HRESULT set = reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, rgb);
     release(rgb);
     if (FAILED(set) || !impl_->readFormat())

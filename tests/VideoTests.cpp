@@ -130,8 +130,8 @@ TEST_CASE("Media Foundation decodes video files frame by frame (where it can rea
                 for (int k = 0; k < 6 && reader.readNext(pixels, width, height, time); ++k)
                 {
                     const auto centre = (static_cast<std::size_t>(height / 2) * static_cast<std::size_t>(width) + static_cast<std::size_t>(width / 2)) * 4;
-                    UNSCOPED_INFO(what << " sample " << k << ": time " << time << " s, picture of frame "
-                                       << juce::roundToInt(pixels[centre + 2] / 12.0));
+                    WARN(what << " sample " << k << ": time " << time << " s, picture of frame "
+                              << juce::roundToInt(pixels[centre + 2] / 12.0));
                 }
             };
             dump("from the start,");
