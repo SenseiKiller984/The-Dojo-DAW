@@ -24,15 +24,19 @@ namespace dojo::engine
 class ClipStretcher final
 {
 public:
+    /** `numChannels`: the source channels the clip plays (1..8; one chosen channel = 1). */
     ClipStretcher(int numChannels, double sampleRate, int maximumBlockSize);
     ~ClipStretcher();
 
     ClipStretcher(const ClipStretcher&) = delete;
     ClipStretcher& operator=(const ClipStretcher&) = delete;
 
-    /** Audio thread: adds output samples [first, last) of the current block into left/right. */
+    /** Audio thread: adds output samples [first, last) of the current block into `outputs`; output o
+        plays source channel sourceOf[o] (-1 = none). */
     bool render(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int first, int last,
-                Sample* left, Sample* right) noexcept;
+                Sample* const* outputs, const int* sourceOf, int numOutputs) noexcept;
+
+    [[nodiscard]] int getNumChannels() const noexcept;
 
     [[nodiscard]] double getConfiguredSampleRate() const noexcept { return sampleRate_; }
     [[nodiscard]] int getMaximumBlockSize() const noexcept { return maxBlock_; }

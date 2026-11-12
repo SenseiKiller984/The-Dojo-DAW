@@ -1095,11 +1095,18 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
         paintToggle(getHeaderButton(rowIndex, 3), "R", session::track::isArmed(t), colour::record);
 
     // Second line: routing summary.
-    const bool mono = !folder && kind != session::TrackKind::instrument && session::track::getFormat(t) == session::TrackFormat::mono;
-    juce::String info = kindLabel(t) + (mono ? " mono" : "") + "  " + formatDb(session::track::getVolumeDb(t)) + "  "
-                        + formatPan(session::track::getPan(t));
+    const auto format = session::track::getFormat(t);
+    const bool mono = kind != session::TrackKind::instrument && format == session::TrackFormat::mono;
+    juce::String info = kindLabel(t) + (mono ? " mono" : session::isMultichannel(format) ? " " + session::getDisplayName(format) : juce::String())
+                        + "  " + formatDb(session::track::getVolumeDb(t)) + "  " + formatPan(session::track::getPan(t));
     if (kind == session::TrackKind::audio && session::track::getInput(t) >= 0)
-        info << "  In " << (session::track::getInput(t) + 1) << (session::track::isInputStereo(t) ? "/" + juce::String(session::track::getInput(t) + 2) : juce::String());
+    {
+        const int first = session::track::getInput(t) + 1;
+        if (session::isMultichannel(format))
+            info << "  In " << first << "-" << (first + session::getNumChannels(format) - 1);
+        else
+            info << "  In " << first << (session::track::isInputStereo(t) ? "/" + juce::String(first + 1) : juce::String());
+    }
     if (const auto dest = session_.getDestination(t); dest.isValid() && !folder && session::track::getOutput(t) != 0)
         info << "  > " << session::track::getName(dest);
     if (kind == session::TrackKind::midi)
@@ -1459,7 +1466,7 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
     const int chosen = session::clip::getSourceChannel(c);
     const auto firstX = static_cast<int>(std::floor(visible.getX()));
     const auto lastX = static_cast<int>(std::ceil(visible.getRight()));
-    waveform::paintChannels(g, area, chosen >= 0 ? 1 : std::min(peaks.numChannels, 2), firstX, lastX, colour.withAlpha(0.85f),
+    waveform::paintChannels(g, area, chosen >= 0 ? 1 : peaks.numChannels, firstX, lastX, colour.withAlpha(0.85f),
                             [&](int lane, int x)
                             {
                                 const int channel = chosen >= 0 ? std::min(chosen, peaks.numChannels - 1) : lane;
@@ -2604,6 +2611,30 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
     const auto kind = session::track::getKind(t);
     if (kind != session::TrackKind::midi && kind != session::TrackKind::vca && kind != session::TrackKind::masterFader)
         menu.addSubMenu("Output", output);
+
+    // Audio tracks and busses (folders too): mono, stereo or a multichannel format.
+    if (kind == session::TrackKind::audio || kind == session::TrackKind::bus)
+    {
+        juce::PopupMenu formats;
+        const auto current = session::track::getFormat(t);
+        for (const auto format : session::getAllTrackFormats())
+            formats.addItem(session::getDisplayName(format), true, current == format,
+                            withTracks(idsOf(selection), [format](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                       {
+                                           self.session_.beginTransaction("Track Format");
+                                           for (auto tree : trees)
+                                           {
+                                               const auto k = session::track::getKind(tree);
+                                               if (k != session::TrackKind::audio && k != session::TrackKind::bus)
+                                                   continue;
+                                               session::track::setFormat(tree, format, &self.session_.getUndoManager());
+                                               if (k == session::TrackKind::audio)
+                                                   session::track::setInput(tree, session::track::getInput(tree), format != session::TrackFormat::mono,
+                                                                            &self.session_.getUndoManager());
+                                           }
+                                       }));
+        menu.addSubMenu("Format", formats);
+    }
 
     // MIDI tracks: the instrument track their MIDI plays.
     if (kind == session::TrackKind::midi)

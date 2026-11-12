@@ -92,7 +92,8 @@ enum class NewTrackType
     folder,
 };
 [[nodiscard]] juce::String getName(NewTrackType type);
-/** Whether the type has a mono / stereo choice (instrument tracks and folders are stereo). */
+/** Whether the type has a format choice (mono, stereo or a multichannel format): audio tracks, aux
+    inputs and folders. Instrument and MIDI tracks are stereo. */
 [[nodiscard]] bool hasFormatChoice(NewTrackType type);
 
 /** One row of the New Tracks dialog. */

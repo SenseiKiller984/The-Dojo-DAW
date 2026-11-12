@@ -102,7 +102,17 @@ juce::String Recorder::start()
         if (!folder.createDirectory())
             return "Could not create the recordings folder " + folder.getFullPathName();
 
+        // Mono: one input; stereo: a pair; multichannel: one input per channel, consecutive.
+        const auto format = track::getFormat(t);
         const bool stereo = track::isInputStereo(t) && input + 1 < numInputs;
+        const int channels = isMultichannel(format) ? getNumChannels(format) : (stereo ? 2 : 1);
+        if (input + channels > numInputs)
+        {
+            problems.add(track::getName(t) + ": a " + getDisplayName(format) + " track records " + juce::String(channels)
+                         + " inputs (In " + juce::String(input + 1) + "-" + juce::String(input + channels) + "); this audio device has "
+                         + juce::String(numInputs) + ".");
+            continue;
+        }
         const auto name = juce::File::createLegalFileName(track::getName(t) + " " + stamp);
         const auto file = folder.getNonexistentChildFile(name, ".wav", false);
 
@@ -110,7 +120,7 @@ juce::String Recorder::start()
         juce::WavAudioFormat wav;
         auto writer = wav.createWriterFor(out, juce::AudioFormatWriterOptions{}
                                                    .withSampleRate(sampleRate)
-                                                   .withNumChannels(stereo ? 2 : 1)
+                                                   .withNumChannels(channels)
                                                    .withBitsPerSample(24));
         if (writer == nullptr)
         {
@@ -121,8 +131,8 @@ juce::String Recorder::start()
         AudioTake take;
         take.trackId = track::getId(t);
         take.file = file;
-        take.stream = std::make_shared<engine::CaptureStream>(std::move(writer), stereo ? 2 : 1, sampleRate, 10.0);
-        capture->inputs.push_back({input, stereo ? 2 : 1, take.stream});
+        take.stream = std::make_shared<engine::CaptureStream>(std::move(writer), channels, sampleRate, 10.0);
+        capture->inputs.push_back({input, channels, take.stream});
         takes.push_back(std::move(take));
     }
 

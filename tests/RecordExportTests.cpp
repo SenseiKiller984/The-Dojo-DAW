@@ -404,3 +404,106 @@ TEST_CASE("Record-enabled tracks: Auto Input, Input Only, and punch recording", 
     REQUIRE(clipsOf(t).size() == 1);
     CHECK_THAT(clip::getEnd(clipsOf(t)[0]), WithinAbs(4.0, 1e-9));
 }
+
+TEST_CASE("Recording a 5.1 track writes one channel per input", "[record][multichannel]")
+{
+    test::TempFolder temp;
+    App app;
+    app.engine.prepare(kRate, kBlock, 6, 8);
+    auto& session = app.project.getSession();
+    REQUIRE(app.project.saveAs(temp.dir.getChildFile("surround.dojo")).wasOk());
+
+    auto t = session.addTrack("Room");
+    track::setFormat(t, TrackFormat::surround51, nullptr);
+    track::setInput(t, 2, true, nullptr); // In 3-8
+    track::setArmed(t, true, nullptr);
+    app.project.getCompiler().rebuildNow();
+
+    Recorder recorder(app.project, app.controller);
+    REQUIRE(recorder.start().isEmpty());
+
+    // Input k carries the constant 0.05 * k.
+    std::vector<std::vector<float>> in(8, std::vector<float>(kBlock));
+    std::vector<std::vector<float>> out(6, std::vector<float>(kBlock));
+    std::vector<const float*> inputs;
+    std::vector<float*> outputs;
+    for (std::size_t k = 0; k < in.size(); ++k)
+    {
+        std::fill(in[k].begin(), in[k].end(), 0.05f * static_cast<float>(k));
+        inputs.push_back(in[k].data());
+    }
+    for (auto& o : out)
+        outputs.push_back(o.data());
+    for (int block = 0; block < static_cast<int>(kRate) / (2 * kBlock); ++block)
+        app.engine.process(inputs.data(), 8, outputs.data(), 6, kBlock);
+
+    recorder.stop();
+    app.engine.process(inputs.data(), 8, outputs.data(), 6, kBlock);
+    REQUIRE(test::pumpMessagesUntil([&] { return !recorder.isBusy(); }));
+
+    const auto clipTree = t.getChildWithName(ids::clip);
+    REQUIRE(clipTree.isValid());
+    const auto recorded = decode(clip::getFile(clipTree));
+    REQUIRE(recorded.audio.getNumChannels() == 6);
+    for (int ch = 0; ch < 6; ++ch)
+        CHECK_THAT(recorded.audio.getSample(ch, recorded.audio.getNumSamples() / 2), WithinAbs(0.05 * (ch + 2), 1e-4));
+}
+
+TEST_CASE("A 5.1 mix exports as six channels (stems too); MP3 gets the stereo fold-down", "[export][multichannel]")
+{
+    test::TempFolder temp;
+    App app;
+    auto& session = app.project.getSession();
+    std::vector<std::vector<float>> steps;
+    for (int k = 0; k < 6; ++k)
+        steps.emplace_back(static_cast<std::size_t>(2 * kRate), 0.1f * static_cast<float>(k + 1));
+    const auto file = test::writeMultichannelWav(temp.dir.getChildFile("six.wav"), steps, kRate);
+    juce::String error;
+    REQUIRE(app.project.getAssets().loadNow(file, error) != nullptr);
+
+    session.setMasterFormat(TrackFormat::surround51);
+    auto t = session.addTrack("Surround");
+    track::setFormat(t, TrackFormat::surround51, nullptr);
+    session.addClip(t, file, 0.0, 2.0);
+
+    Exporter exporter(app.project, app.controller);
+    std::optional<juce::Result> result;
+    exporter.onFinished = [&](const juce::Result& r, const juce::Array<juce::File>&) { result = r; };
+
+    ExportSettings settings;
+    settings.startSeconds = 0.0;
+    settings.endSeconds = 2.0;
+
+    SECTION("WAV: one channel per speaker")
+    {
+        settings.destination = temp.dir.getChildFile("mix.wav");
+        settings.bitDepth = 32;
+        settings.includeStems = true;
+        REQUIRE(exporter.start(settings).isEmpty());
+        REQUIRE(test::pumpMessagesUntil([&] { return result.has_value(); }, 30'000));
+        INFO(result->getErrorMessage());
+        REQUIRE(result->wasOk());
+
+        const auto mix = decode(settings.destination);
+        REQUIRE(mix.audio.getNumChannels() == 6);
+        for (int ch = 0; ch < 6; ++ch)
+            CHECK_THAT(mix.audio.getSample(ch, static_cast<int>(kRate)), WithinAbs(0.1 * (ch + 1), 1e-4));
+        const auto stem = decode(Exporter::getStemFile(settings, "Surround"));
+        REQUIRE(stem.audio.getNumChannels() == 6);
+        CHECK_THAT(stem.audio.getSample(4, static_cast<int>(kRate)), WithinAbs(0.5, 1e-4));
+    }
+
+    SECTION("MP3: stereo")
+    {
+        settings.destination = temp.dir.getChildFile("mix.mp3");
+        settings.format = ExportSettings::Format::mp3;
+        REQUIRE(exporter.start(settings).isEmpty());
+        REQUIRE(test::pumpMessagesUntil([&] { return result.has_value(); }, 30'000));
+        REQUIRE(result->wasOk());
+        const auto mix = decode(settings.destination);
+        REQUIRE(mix.audio.getNumChannels() == 2);
+        const double third = 0.70710678118654752;
+        CHECK_THAT(mix.audio.getSample(0, static_cast<int>(kRate)), WithinAbs(0.1 + third * 0.3 + third * 0.5, 0.03));
+        CHECK_THAT(mix.audio.getSample(1, static_cast<int>(kRate)), WithinAbs(0.2 + third * 0.3 + third * 0.6, 0.03));
+    }
+}

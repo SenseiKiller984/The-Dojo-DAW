@@ -18,9 +18,9 @@ namespace dojo::engine
 struct ClipStretcher::Impl
 {
     signalsmith::stretch::SignalsmithStretch<float> stretch;
-    std::vector<float> input[2];
-    std::vector<float> output[2];
-    std::vector<float> seekBuffer[2];
+    std::array<std::vector<float>, kMaxChannels> input;
+    std::array<std::vector<float>, kMaxChannels> output;
+    std::array<std::vector<float>, kMaxChannels> seekBuffer;
     double expectedTimeInClip = -1.0;
     double feedPosition = 0.0; ///< next source frame to feed (fractional)
     int numChannels = 2;
@@ -31,20 +31,27 @@ ClipStretcher::ClipStretcher(int numChannels, double sampleRate, int maximumBloc
     , sampleRate_(sampleRate)
     , maxBlock_(std::max(64, maximumBlockSize))
 {
-    impl_->numChannels = 2; // always stereo out; mono sources are duplicated
-    juce::ignoreUnused(numChannels);
-    impl_->stretch.presetDefault(2, static_cast<float>(sampleRate));
+    // One stretcher channel per source channel the clip plays (stereo at least, so a mono source
+    // simply runs on both).
+    impl_->numChannels = std::clamp(numChannels, 2, kMaxChannels);
+    impl_->stretch.presetDefault(impl_->numChannels, static_cast<float>(sampleRate));
 
     // Worst case input per block: 4x varispeed, 0.25x stretch -> 16x the block, plus latency slack.
     const auto inputCapacity = static_cast<std::size_t>(maxBlock_) * 16 + 16;
     const auto seekCapacity = static_cast<std::size_t>(impl_->stretch.seekLength() + impl_->stretch.inputLatency() + 16);
 
-    for (int ch = 0; ch < 2; ++ch)
+    for (int ch = 0; ch < impl_->numChannels; ++ch)
     {
-        impl_->input[ch].assign(inputCapacity, 0.0f);
-        impl_->output[ch].assign(static_cast<std::size_t>(maxBlock_), 0.0f);
-        impl_->seekBuffer[ch].assign(seekCapacity, 0.0f);
+        const auto index = static_cast<std::size_t>(ch);
+        impl_->input[index].assign(inputCapacity, 0.0f);
+        impl_->output[index].assign(static_cast<std::size_t>(maxBlock_), 0.0f);
+        impl_->seekBuffer[index].assign(seekCapacity, 0.0f);
     }
+}
+
+int ClipStretcher::getNumChannels() const noexcept
+{
+    return impl_->numChannels;
 }
 
 ClipStretcher::~ClipStretcher() = default;
@@ -64,16 +71,17 @@ float sourceSample(const RenderClip& clip, int channel, SampleCount index) noexc
     return 0.0f;
 }
 
-void fillFromSource(const RenderClip& clip, SampleCount start, int count, std::vector<float>* dest) noexcept
+void fillFromSource(const RenderClip& clip, SampleCount start, int count, int numChannels,
+                    std::array<std::vector<float>, kMaxChannels>& dest) noexcept
 {
-    for (int ch = 0; ch < 2; ++ch)
+    for (int ch = 0; ch < numChannels; ++ch)
         for (int i = 0; i < count; ++i)
-            dest[ch][static_cast<std::size_t>(i)] = sourceSample(clip, ch, start + i);
+            dest[static_cast<std::size_t>(ch)][static_cast<std::size_t>(i)] = sourceSample(clip, ch, start + i);
 }
 } // namespace
 
 bool ClipStretcher::render(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int first,
-                           int last, Sample* left, Sample* right) noexcept
+                           int last, Sample* const* outputs, const int* sourceOf, int numOutputs) noexcept
 {
     auto& s = *impl_;
     const int numOut = std::min(last - first, maxBlock_);
@@ -99,9 +107,11 @@ bool ClipStretcher::render(const RenderClip& clip, double blockStartSeconds, dou
         const int seekLength = std::min(static_cast<int>(s.seekBuffer[0].size()), s.stretch.seekLength() + inputLatency);
         const auto seekStart = static_cast<SampleCount>(std::floor(processingFrame)) + inputLatency - seekLength;
 
-        fillFromSource(clip, seekStart, seekLength, s.seekBuffer);
-        float* seekChannels[2] = {s.seekBuffer[0].data(), s.seekBuffer[1].data()};
-        s.stretch.seek(seekChannels, seekLength, inputPerOutput);
+        fillFromSource(clip, seekStart, seekLength, s.numChannels, s.seekBuffer);
+        std::array<float*, kMaxChannels> seekChannels{};
+        for (int ch = 0; ch < s.numChannels; ++ch)
+            seekChannels[static_cast<std::size_t>(ch)] = s.seekBuffer[static_cast<std::size_t>(ch)].data();
+        s.stretch.seek(seekChannels.data(), seekLength, inputPerOutput);
         s.feedPosition = std::floor(processingFrame) + inputLatency;
     }
 
@@ -110,19 +120,31 @@ bool ClipStretcher::render(const RenderClip& clip, double blockStartSeconds, dou
     const int numIn = std::clamp(static_cast<int>(std::floor(feedEnd) - static_cast<double>(feedStartFrame)), 0,
                                  static_cast<int>(s.input[0].size()));
 
-    fillFromSource(clip, feedStartFrame, numIn, s.input);
+    fillFromSource(clip, feedStartFrame, numIn, s.numChannels, s.input);
     s.feedPosition = static_cast<double>(feedStartFrame + numIn);
 
-    float* inputs[2] = {s.input[0].data(), s.input[1].data()};
-    float* outputs[2] = {s.output[0].data(), s.output[1].data()};
-    s.stretch.process(inputs, numIn, outputs, numOut);
-
-    for (int i = 0; i < numOut; ++i)
+    std::array<float*, kMaxChannels> inputs{};
+    std::array<float*, kMaxChannels> stretched{};
+    for (int ch = 0; ch < s.numChannels; ++ch)
     {
-        const double clipTime = timeInClip + i * secondsPerSample;
-        const double gain = clip.gain * dsp::clipEdgeGain(clip, clipTime);
-        left[first + i] += s.output[0][static_cast<std::size_t>(i)] * gain;
-        right[first + i] += s.output[1][static_cast<std::size_t>(i)] * gain;
+        inputs[static_cast<std::size_t>(ch)] = s.input[static_cast<std::size_t>(ch)].data();
+        stretched[static_cast<std::size_t>(ch)] = s.output[static_cast<std::size_t>(ch)].data();
+    }
+    s.stretch.process(inputs.data(), numIn, stretched.data(), numOut);
+
+    for (int o = 0; o < numOutputs; ++o)
+    {
+        // Stretcher channel c holds source channel c (or the chosen one, in channel 0).
+        const int source = sourceOf[o];
+        if (source < 0 || outputs[o] == nullptr)
+            continue;
+        const auto& channel = s.output[static_cast<std::size_t>(std::min(clip.sourceChannel >= 0 ? 0 : source, s.numChannels - 1))];
+        Sample* out = outputs[o] + first;
+        for (int i = 0; i < numOut; ++i)
+        {
+            const double clipTime = timeInClip + i * secondsPerSample;
+            out[i] += channel[static_cast<std::size_t>(i)] * clip.gain * dsp::clipEdgeGain(clip, clipTime);
+        }
     }
 
     s.expectedTimeInClip = timeInClip + numOut * secondsPerSample;
@@ -134,13 +156,13 @@ bool ClipStretcher::render(const RenderClip& clip, double blockStartSeconds, dou
 
 struct StreamedAudio::Chunk
 {
-    std::vector<float> data[2];
+    std::array<std::vector<float>, kMaxChannels> data;
 };
 
 StreamedAudio::StreamedAudio(std::unique_ptr<juce::AudioFormatReader> reader)
     : reader_(std::move(reader))
 {
-    numChannels_ = reader_ != nullptr ? std::min(2, static_cast<int>(reader_->numChannels)) : 0;
+    numChannels_ = reader_ != nullptr ? std::min(kMaxChannels, static_cast<int>(reader_->numChannels)) : 0;
     length_ = reader_ != nullptr ? reader_->lengthInSamples : 0;
     sampleRate_ = reader_ != nullptr ? reader_->sampleRate : 48000.0;
     numChunks_ = static_cast<int>((length_ + kChunkFrames - 1) / kChunkFrames);
@@ -179,7 +201,7 @@ const float* StreamedAudio::chunkFor(int channel, SampleCount index) const noexc
         return nullptr;
     }
 
-    return data->data[std::min(channel, numChannels_ - 1)].data();
+    return data->data[static_cast<std::size_t>(std::clamp(channel, 0, numChannels_ - 1))].data();
 }
 
 float StreamedAudio::sample(int channel, SampleCount index) const noexcept
@@ -202,11 +224,12 @@ void StreamedAudio::load(int chunkIndex)
     juce::AudioBuffer<float> buffer(std::max(1, numChannels_), frames);
     reader_->read(&buffer, 0, frames, start, true, numChannels_ > 1);
 
-    for (int ch = 0; ch < 2; ++ch)
+    for (int ch = 0; ch < std::max(1, numChannels_); ++ch)
     {
-        chunk->data[ch].assign(static_cast<std::size_t>(kChunkFrames), 0.0f);
+        auto& data = chunk->data[static_cast<std::size_t>(ch)];
+        data.assign(static_cast<std::size_t>(kChunkFrames), 0.0f);
         const float* source = buffer.getReadPointer(std::min(ch, buffer.getNumChannels() - 1));
-        std::copy_n(source, frames, chunk->data[ch].begin());
+        std::copy_n(source, frames, data.begin());
     }
 
     chunks_[static_cast<std::size_t>(chunkIndex)].store(chunk.release(), std::memory_order_release);

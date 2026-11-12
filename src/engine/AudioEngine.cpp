@@ -75,18 +75,28 @@ void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutput
     numInputs_ = std::clamp(numInputChannels, 0, kMaxInputChannels);
 
     // The only allocations in the engine's life cycle — done here, never on the audio thread.
-    masterBus_.setSize(2, maxBlockSize_, false, true, false);
+    masterBus_.setSize(kMaxChannels, maxBlockSize_, false, true, false);
+    masterScratch_.setSize(2, maxBlockSize_, false, true, false);
     inputBus_.setSize(std::max(1, numInputs_), maxBlockSize_, false, true, false);
     masterMidi_.ensureSize(kMidiBufferBytes);
     liveBlock_.ensureSize(kMidiBufferBytes);
 
-    for (auto& slot : slots_)
+    for (std::size_t index = 0; index < slots_.size(); ++index)
     {
-        slot.main.setSize(2, maxBlockSize_, false, true, false);
-        slot.pre.setSize(2, maxBlockSize_, false, true, false);
+        auto& slot = slots_[index];
+        const bool wide = static_cast<int>(index) >= kFirstWideSlot;
+        const int channels = wide ? kMaxChannels : 2;
+        slot.main.setSize(channels, maxBlockSize_, false, true, false);
+        slot.pre.setSize(channels, maxBlockSize_, false, true, false);
         slot.midi.ensureSize(kMidiBufferBytes);
-        if (slot.delay.getNumSamples() != kMaxCompensationSamples)
-            slot.delay.setSize(2, kMaxCompensationSamples, false, true, false);
+        if (slot.delay.getNumSamples() != kMaxCompensationSamples || slot.delay.getNumChannels() != channels)
+            slot.delay.setSize(channels, kMaxCompensationSamples, false, true, false);
+        if (wide)
+        {
+            slot.out.setSize(kMaxChannels, maxBlockSize_, false, true, false);
+            slot.groupScratch.setSize(2, maxBlockSize_, false, true, false);
+        }
+        slot.matrixValid = false;
         slot.delay.clear();
         slot.delayWrite = 0;
         slot.currentDelay = 0;
@@ -135,6 +145,9 @@ TelemetrySnapshot AudioEngine::collectTelemetry() noexcept
     TelemetrySnapshot snapshot;
     snapshot.masterPeakLeft = telemetry_.masterPeakLeft.exchange(0.0f, std::memory_order_acq_rel);
     snapshot.masterPeakRight = telemetry_.masterPeakRight.exchange(0.0f, std::memory_order_acq_rel);
+    snapshot.masterChannels = telemetry_.masterChannels.load(std::memory_order_relaxed);
+    for (std::size_t ch = 0; ch < snapshot.masterPeaks.size(); ++ch)
+        snapshot.masterPeaks[ch] = telemetry_.masterPeaks[ch].exchange(0.0f, std::memory_order_acq_rel);
     snapshot.dspLoad = telemetry_.dspLoad.load(std::memory_order_relaxed);
     snapshot.dspLoadPeak = telemetry_.dspLoadPeak.exchange(0.0f, std::memory_order_acq_rel);
     snapshot.playheadSamples = telemetry_.playheadSamples.load(std::memory_order_relaxed);
@@ -152,9 +165,21 @@ StereoPeak AudioEngine::collectTrackPeak(int slot) noexcept
     if (slot < 0 || slot >= kMaxTracks)
         return {};
 
-    const auto index = static_cast<std::size_t>(slot) * 2;
+    const auto index = static_cast<std::size_t>(slot) * kMaxChannels;
     return {telemetry_.trackPeaks[index].exchange(0.0f, std::memory_order_acq_rel),
             telemetry_.trackPeaks[index + 1].exchange(0.0f, std::memory_order_acq_rel)};
+}
+
+ChannelPeaks AudioEngine::collectTrackPeaks(int slot) noexcept
+{
+    ChannelPeaks peaks;
+    if (slot < 0 || slot >= kMaxTracks)
+        return peaks;
+
+    const auto index = static_cast<std::size_t>(slot) * kMaxChannels;
+    for (std::size_t ch = 0; ch < static_cast<std::size_t>(kMaxChannels); ++ch)
+        peaks.peak[ch] = telemetry_.trackPeaks[index + ch].exchange(0.0f, std::memory_order_acq_rel);
+    return peaks;
 }
 
 float AudioEngine::collectInputPeak(int channel) noexcept
@@ -416,25 +441,29 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
         renderMaster(numSamples);
     }
 
-    testTone_.addTo(masterBus_, numSamples);
+    if (graph_ != nullptr)
+        testTone_.addTo(masterBus_, numSamples, graph_->masterLayout.indexOf(Speaker::left), graph_->masterLayout.indexOf(Speaker::right));
+    else
+        testTone_.addTo(masterBus_, numSamples);
 
     // Master gain (graph value or automation), smoothed.
     if (graph_ != nullptr && !graph_->masterVolumeAutomation.isEmpty())
         masterGain_.setTargetValue(automationToGain(graph_->masterVolumeAutomation.valueAt(blockStartSeconds_)));
 
+    const int numMaster = masterChannels();
     if (!masterGain_.isSmoothing())
     {
-        masterBus_.applyGain(0, numSamples, masterGain_.getTargetValue());
+        for (int ch = 0; ch < numMaster; ++ch)
+            masterBus_.applyGain(ch, 0, numSamples, masterGain_.getTargetValue());
     }
     else
     {
-        auto* left = masterBus_.getWritePointer(0);
-        auto* right = masterBus_.getWritePointer(1);
+        auto* const* channels = masterBus_.getArrayOfWritePointers();
         for (int i = 0; i < numSamples; ++i)
         {
             const Sample gain = masterGain_.getNextValue();
-            left[i] *= gain;
-            right[i] *= gain;
+            for (int ch = 0; ch < numMaster; ++ch)
+                channels[ch][i] *= gain;
         }
     }
 
@@ -447,8 +476,14 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
 
         if (capture_->master != nullptr)
         {
-            const Sample* channels[2] = {masterBus_.getReadPointer(0), masterBus_.getReadPointer(1)};
-            capture_->master->write(channels, 2, numSamples);
+            if (capture_->master->getNumChannels() >= numMaster || graph_ == nullptr)
+                capture_->master->write(masterBus_.getArrayOfReadPointers(), numMaster, numSamples);
+            else
+            {
+                // A stereo file of a surround master (e.g. MP3): its fold-down.
+                foldDown(masterBus_, numMaster, graph_->masterFoldDown, masterScratch_, numSamples);
+                capture_->master->write(masterScratch_.getArrayOfReadPointers(), 2, numSamples);
+            }
         }
 
         if (telemetry_.captureStartSeconds.load(std::memory_order_relaxed) < 0.0)
@@ -610,8 +645,12 @@ void AudioEngine::processTrack(int graphIndex) noexcept
         slot.gainLeft.setCurrentAndTargetValue(0.0);
         slot.gainRight.setCurrentAndTargetValue(0.0);
         slot.postGain.setCurrentAndTargetValue(track.hasPostFader && track.postAudible ? track.postVolume : 1.0);
+        slot.matrixValid = false;
         slot.panic = true;
     }
+
+    if (track.isWide() && track.slot < kFirstWideSlot)
+        return; // (the compiler always gives multichannel tracks a wide slot)
 
     slot.main.clear(0, numSamples);
     slot.midi.clear();
@@ -670,23 +709,13 @@ void AudioEngine::processTrack(int graphIndex) noexcept
             left[i] = right[i] = 0.5 * (left[i] + right[i]);
     }
 
-    for (const auto& device : track.devices)
-    {
-        const juce::AudioBuffer<Sample>* sidechain = nullptr;
-        if (device.sidechainSource >= 0)
-        {
-            const auto& source = graph_->tracks[static_cast<std::size_t>(device.sidechainSource)];
-            sidechain = &slots_[static_cast<std::size_t>(source.slot)].main;
-        }
-
-        device.node->process(slot.main, numSamples, slot.midi, sidechain);
-    }
+    runChain(track.devices, slot.main, track.layout.numChannels, track.groups, slot.midi, &slot.groupScratch);
 
     if (track.needsPreFaderCopy)
     {
         // Pre-fader sends ignore the fader, but not mute/solo (a muted track must not leak into a
         // reverb bus).
-        for (int ch = 0; ch < 2; ++ch)
+        for (int ch = 0; ch < track.layout.numChannels; ++ch)
         {
             if (track.audible)
                 slot.pre.copyFrom(ch, 0, slot.main, ch, 0, numSamples);
@@ -703,8 +732,14 @@ void AudioEngine::processTrack(int graphIndex) noexcept
     if (capture_ != nullptr && (playing_ || !capture_->onlyWhilePlaying))
         if (auto* stream = capture_->trackOutputs[static_cast<std::size_t>(track.slot)])
         {
-            const Sample* channels[2] = {slot.main.getReadPointer(0), slot.main.getReadPointer(1)};
-            stream->write(channels, 2, numSamples);
+            if (stream->getNumChannels() >= track.outputLayout.numChannels || slot.groupScratch.getNumChannels() < 2)
+                stream->write(slot.main.getArrayOfReadPointers(), track.outputLayout.numChannels, numSamples);
+            else
+            {
+                foldDown(slot.main, track.outputLayout.numChannels, conversionMatrix(track.outputLayout, ChannelLayout::stereo()),
+                         slot.groupScratch, numSamples);
+                stream->write(slot.groupScratch.getArrayOfReadPointers(), 2, numSamples);
+            }
         }
 }
 
@@ -712,8 +747,8 @@ void AudioEngine::renderAudioClips(const RenderTrack& track, SlotState& slot) no
 {
     const int numSamples = currentNumSamples_;
     const double blockEnd = blockStartSeconds_ + numSamples * secondsPerSample_;
-    Sample* left = slot.main.getWritePointer(0);
-    Sample* right = slot.main.getWritePointer(1);
+    auto* const* channels = slot.main.getArrayOfWritePointers();
+    const int numChannels = std::min(track.layout.numChannels, slot.main.getNumChannels());
 
     for (const auto& clip : track.clips)
     {
@@ -722,7 +757,7 @@ void AudioEngine::renderAudioClips(const RenderTrack& track, SlotState& slot) no
         if (clip.endSeconds <= blockStartSeconds_)
             continue;
 
-        dsp::renderClip(clip, blockStartSeconds_, secondsPerSample_, numSamples, left, right);
+        dsp::renderClip(clip, blockStartSeconds_, secondsPerSample_, numSamples, channels, numChannels);
     }
 }
 
@@ -841,7 +876,7 @@ void AudioEngine::renderAudioTrackSources(const RenderTrack& track, SlotState& s
         {
             renderAudioClips(track, slot);
             if (to > from)
-                for (int ch = 0; ch < 2; ++ch)
+                for (int ch = 0; ch < track.layout.numChannels; ++ch)
                     slot.main.clear(ch, from, to - from);
         }
     }
@@ -854,6 +889,15 @@ void AudioEngine::addInput(const RenderTrack& track, SlotState& slot, int from, 
     if (to <= from || track.inputChannel < 0 || track.inputChannel >= numInputs_)
         return;
 
+    if (track.inputCount > 2)
+    {
+        // A multichannel track: one input per channel, consecutive from the first.
+        for (int ch = 0; ch < std::min(track.inputCount, track.layout.numChannels); ++ch)
+            if (track.inputChannel + ch < numInputs_)
+                slot.main.addFrom(ch, from, inputBus_, track.inputChannel + ch, from, to - from);
+        return;
+    }
+
     const int second = track.inputStereo && track.inputChannel + 1 < numInputs_ ? track.inputChannel + 1 : track.inputChannel;
     slot.main.addFrom(0, from, inputBus_, track.inputChannel, from, to - from);
     slot.main.addFrom(1, from, inputBus_, second, from, to - from);
@@ -863,10 +907,13 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
 {
     const int numSamples = currentNumSamples_;
 
+    const int numChannels = std::min(track.layout.numChannels, slot.main.getNumChannels());
+
+    // Tracks routed here already deliver this bus's channels (their faders convert).
     for (const int source : track.busSources)
     {
         const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(source)].slot)];
-        for (int ch = 0; ch < 2; ++ch)
+        for (int ch = 0; ch < std::min(numChannels, sourceSlot.main.getNumChannels()); ++ch)
             slot.main.addFrom(ch, 0, sourceSlot.main, ch, 0, numSamples);
     }
 
@@ -876,7 +923,16 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
         const auto& buffer = send.preFader ? sourceSlot.pre : sourceSlot.main;
         const double gain = send.gainAutomation.isEmpty() ? send.gain
                                                           : automationToGain(send.gainAutomation.valueAt(blockStartSeconds_));
-        for (int ch = 0; ch < 2; ++ch)
+        if (send.convert)
+        {
+            // Into a bus of another layout: by speaker.
+            for (int o = 0; o < std::min(send.matrix.numOutputs, numChannels); ++o)
+                for (int i = 0; i < std::min(send.matrix.numInputs, buffer.getNumChannels()); ++i)
+                    if (const double g = send.matrix.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)]; std::abs(g) > 1.0e-12)
+                        slot.main.addFrom(o, 0, buffer, i, 0, numSamples, g * gain);
+            continue;
+        }
+        for (int ch = 0; ch < std::min(numChannels, buffer.getNumChannels()); ++ch)
             slot.main.addFrom(ch, 0, buffer, ch, 0, numSamples, gain);
     }
 
@@ -887,8 +943,19 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
         {
             const auto* node = source.devices.front().node;
             for (int ch = 0; ch < 2; ++ch)
-                if (const Sample* aux = node->getAuxOutput(track.auxChannel + ch))
+            {
+                const Sample* aux = node->getAuxOutput(track.auxChannel + ch);
+                if (aux == nullptr)
+                    continue;
+                if (!track.layout.isMultichannel())
+                {
                     juce::FloatVectorOperations::add(slot.main.getWritePointer(ch), aux, numSamples);
+                    continue;
+                }
+                for (int o = 0; o < std::min(track.auxMatrix.numOutputs, numChannels); ++o)
+                    if (const double g = track.auxMatrix.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(ch)]; std::abs(g) > 1.0e-12)
+                        juce::FloatVectorOperations::addWithMultiply(slot.main.getWritePointer(o), aux, g, numSamples);
+            }
         }
     }
 }
@@ -919,6 +986,12 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
     for (const auto& vca : track.vcaGains)
         volume *= vca.automation.isEmpty() ? vca.gain : automationToGain(vca.automation.valueAt(blockStartSeconds_));
 
+    if (track.isWide())
+    {
+        applyWideFader(track, slot, volume, pan);
+        return;
+    }
+
     const auto [panLeft, panRight] = balancePanGains(pan);
     const double sign = track.phaseInverted ? -1.0 : 1.0;
     slot.gainLeft.setTargetValue(track.audible ? volume * panLeft * sign : 0.0);
@@ -937,9 +1010,176 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
         peakRight = std::max(peakRight, std::abs(right[i]));
     }
 
-    const auto meterIndex = static_cast<std::size_t>(track.slot) * 2;
+    const auto meterIndex = static_cast<std::size_t>(track.slot) * kMaxChannels;
     rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex], static_cast<float>(peakLeft));
     rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + 1], static_cast<float>(peakRight));
+}
+
+void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan) noexcept
+{
+    // Multichannel: the fader is a matrix from the track's channels to its destination's (surround
+    // panner or conversion by speaker), with volume, phase and mute folded in. It ramps towards the
+    // block's target like the stereo gains do.
+    const int numSamples = currentNumSamples_;
+    const int numIn = std::min(track.layout.numChannels, slot.main.getNumChannels());
+    const int numOut = std::min(track.outputLayout.numChannels, slot.out.getNumChannels());
+
+    auto target = outputMatrix(track.layout, track.outputLayout, pan, track.panFrontRear, track.panCentre);
+    const double scale = track.audible ? volume * (track.phaseInverted ? -1.0 : 1.0) : 0.0;
+    for (int o = 0; o < numOut; ++o)
+        for (int i = 0; i < numIn; ++i)
+            target.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)] *= scale;
+
+    if (!slot.matrixValid || slot.matrix.numInputs != numIn || slot.matrix.numOutputs != numOut)
+    {
+        slot.matrix = ChannelMatrix{}; // (fade in from silence, like a fresh stereo track)
+        slot.matrix.numInputs = numIn;
+        slot.matrix.numOutputs = numOut;
+        slot.matrixTarget = slot.matrix;
+        slot.rampRemaining = 0;
+        slot.matrixValid = true;
+    }
+
+    // A new target starts a fresh linear ramp from where the gains are now.
+    bool changed = false;
+    for (int o = 0; o < numOut && !changed; ++o)
+        for (int i = 0; i < numIn && !changed; ++i)
+            changed = std::abs(target.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)]
+                               - slot.matrixTarget.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)]) > 1.0e-12;
+    if (changed)
+    {
+        slot.matrixTarget = target;
+        slot.rampRemaining = std::max(1, static_cast<int>(std::lround(kTrackGainRampSeconds * sampleRate_)));
+    }
+
+    ChannelMatrix end = slot.matrixTarget;
+    if (slot.rampRemaining > numSamples)
+    {
+        const double fraction = static_cast<double>(numSamples) / slot.rampRemaining;
+        for (int o = 0; o < numOut; ++o)
+            for (int i = 0; i < numIn; ++i)
+            {
+                const auto oi = static_cast<std::size_t>(o);
+                const auto ii = static_cast<std::size_t>(i);
+                end.gain[oi][ii] = slot.matrix.gain[oi][ii] + (slot.matrixTarget.gain[oi][ii] - slot.matrix.gain[oi][ii]) * fraction;
+            }
+    }
+    slot.rampRemaining = std::max(0, slot.rampRemaining - numSamples);
+
+    for (int o = 0; o < numOut; ++o)
+    {
+        Sample* destination = slot.out.getWritePointer(o);
+        std::fill_n(destination, numSamples, 0.0);
+        for (int i = 0; i < numIn; ++i)
+        {
+            const double g0 = slot.matrix.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)];
+            const double g1 = end.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)];
+            const Sample* source = slot.main.getReadPointer(i);
+            if (std::abs(g1 - g0) < 1.0e-12)
+            {
+                if (std::abs(g0) > 1.0e-12)
+                    juce::FloatVectorOperations::addWithMultiply(destination, source, g0, numSamples);
+                continue;
+            }
+            const double delta = (g1 - g0) / numSamples;
+            for (int k = 0; k < numSamples; ++k)
+                destination[k] += source[k] * (g0 + delta * (k + 1));
+        }
+    }
+    slot.matrix = end;
+
+    const auto meterIndex = static_cast<std::size_t>(track.slot) * kMaxChannels;
+    for (int o = 0; o < numOut; ++o)
+    {
+        slot.main.copyFrom(o, 0, slot.out, o, 0, numSamples);
+        const auto range = juce::FloatVectorOperations::findMinAndMax(slot.out.getReadPointer(o), numSamples);
+        const double peak = std::max(std::abs(range.getStart()), std::abs(range.getEnd()));
+        rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + static_cast<std::size_t>(o)], static_cast<float>(peak));
+    }
+    for (int ch = numOut; ch < slot.main.getNumChannels(); ++ch)
+        slot.main.clear(ch, 0, numSamples);
+}
+
+void AudioEngine::runChain(const std::vector<RenderDevice>& chain, juce::AudioBuffer<Sample>& buffer, int numChannels,
+                           const ChannelGroups& groups, juce::MidiBuffer& midi, juce::AudioBuffer<Sample>* groupScratch) noexcept
+{
+    const int numSamples = currentNumSamples_;
+
+    for (const auto& device : chain)
+    {
+        const juce::AudioBuffer<Sample>* sidechain = nullptr;
+        if (device.sidechainSource >= 0)
+        {
+            const auto& source = graph_->tracks[static_cast<std::size_t>(device.sidechainSource)];
+            sidechain = &slots_[static_cast<std::size_t>(source.slot)].main;
+        }
+
+        if (numChannels <= 2 || groups.count <= 1)
+        {
+            device.node->process(buffer, numSamples, midi, sidechain);
+            continue;
+        }
+
+        // Linked instances: the companions follow the primary's parameters and bypass.
+        const auto& parameters = device.node->getProcessor().getParameters();
+        for (int g = 1; g < groups.count; ++g)
+            if (auto* companion = device.companions[static_cast<std::size_t>(g - 1)])
+            {
+                companion->setBypassed(device.node->isBypassed());
+                const auto& own = companion->getProcessor().getParameters();
+                for (int p = 0; p < std::min(parameters.size(), own.size()); ++p)
+                {
+                    const float value = parameters.getUnchecked(p)->getValue();
+                    if (std::abs(own.getUnchecked(p)->getValue() - value) > 1.0e-7f)
+                        own.getUnchecked(p)->setValue(value);
+                }
+            }
+
+        for (int g = 0; g < groups.count; ++g)
+        {
+            auto* node = g == 0 ? device.node : device.companions[static_cast<std::size_t>(g - 1)];
+            const auto& group = groups.groups[static_cast<std::size_t>(g)];
+            if (node == nullptr || group.first >= numChannels)
+                continue; // (no instance: these channels pass through)
+
+            if (group.second >= 0 && group.second < numChannels)
+            {
+                Sample* pair[2] = {buffer.getWritePointer(group.first), buffer.getWritePointer(group.second)};
+                juce::AudioBuffer<Sample> view(pair, 2, numSamples);
+                node->process(view, numSamples, midi, sidechain);
+            }
+            else if (groupScratch != nullptr && groupScratch->getNumChannels() >= 2)
+            {
+                // A single channel through a stereo device: dual mono in, the average out.
+                groupScratch->copyFrom(0, 0, buffer, group.first, 0, numSamples);
+                groupScratch->copyFrom(1, 0, buffer, group.first, 0, numSamples);
+                Sample* pair[2] = {groupScratch->getWritePointer(0), groupScratch->getWritePointer(1)};
+                juce::AudioBuffer<Sample> view(pair, 2, numSamples);
+                node->process(view, numSamples, midi, sidechain);
+                Sample* channel = buffer.getWritePointer(group.first);
+                for (int i = 0; i < numSamples; ++i)
+                    channel[i] = 0.5 * (pair[0][i] + pair[1][i]);
+            }
+        }
+    }
+}
+
+void AudioEngine::foldDown(const juce::AudioBuffer<Sample>& source, int numChannels, const ChannelMatrix& matrix,
+                           juce::AudioBuffer<Sample>& stereo, int numSamples) noexcept
+{
+    for (int o = 0; o < 2; ++o)
+    {
+        Sample* destination = stereo.getWritePointer(o);
+        std::fill_n(destination, numSamples, 0.0);
+        for (int i = 0; i < std::min(numChannels, matrix.numInputs); ++i)
+            if (const double g = matrix.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)]; std::abs(g) > 1.0e-12)
+                juce::FloatVectorOperations::addWithMultiply(destination, source.getReadPointer(i), g, numSamples);
+    }
+}
+
+int AudioEngine::masterChannels() const noexcept
+{
+    return graph_ != nullptr ? std::min(graph_->masterLayout.numChannels, masterBus_.getNumChannels()) : 2;
 }
 
 void AudioEngine::applyPostFader(const RenderTrack& track, SlotState& slot) noexcept
@@ -948,18 +1188,17 @@ void AudioEngine::applyPostFader(const RenderTrack& track, SlotState& slot) noex
     const double volume = track.postVolumeAutomation.isEmpty() ? track.postVolume
                                                                : automationToGain(track.postVolumeAutomation.valueAt(blockStartSeconds_));
     slot.postGain.setTargetValue(track.postAudible ? volume : 0.0);
-    Sample* left = slot.main.getWritePointer(0);
-    Sample* right = slot.main.getWritePointer(1);
+    const int numChannels = std::min(track.outputLayout.numChannels, slot.main.getNumChannels());
+    auto* const* channels = slot.main.getArrayOfWritePointers();
     for (int i = 0; i < numSamples; ++i)
     {
         const Sample gain = slot.postGain.getNextValue();
-        left[i] *= gain;
-        right[i] *= gain;
+        for (int ch = 0; ch < numChannels; ++ch)
+            channels[ch][i] *= gain;
     }
 
     // Post-fader devices (like the inserts of a master fader).
-    for (const auto& device : track.postDevices)
-        device.node->process(slot.main, numSamples, slot.midi, nullptr);
+    runChain(track.postDevices, slot.main, numChannels, track.outputGroups, slot.midi, &slot.groupScratch);
 }
 
 void AudioEngine::applyMasterFader(int numSamples) noexcept
@@ -967,19 +1206,18 @@ void AudioEngine::applyMasterFader(int numSamples) noexcept
     const double volume = graph_->masterFaderAutomation.isEmpty() ? graph_->masterFaderVolume
                                                                   : automationToGain(graph_->masterFaderAutomation.valueAt(blockStartSeconds_));
     masterFaderGain_.setTargetValue(graph_->masterFaderAudible ? volume : 0.0);
-    auto* left = masterBus_.getWritePointer(0);
-    auto* right = masterBus_.getWritePointer(1);
+    const int numMaster = masterChannels();
+    auto* const* channels = masterBus_.getArrayOfWritePointers();
     for (int i = 0; i < numSamples; ++i)
     {
         const Sample gain = masterFaderGain_.getNextValue();
-        left[i] *= gain;
-        right[i] *= gain;
+        for (int ch = 0; ch < numMaster; ++ch)
+            channels[ch][i] *= gain;
     }
 
     applyParameterAutomation(graph_->masterFaderParameterLanes);
     masterMidi_.clear();
-    for (const auto& device : graph_->masterFaderDevices)
-        device.node->process(masterBus_, numSamples, masterMidi_, nullptr);
+    runChain(graph_->masterFaderDevices, masterBus_, numMaster, graph_->masterGroups, masterMidi_, &masterScratch_);
 }
 
 void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept
@@ -999,7 +1237,7 @@ void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& sl
     const int numSamples = currentNumSamples_;
     const int capacity = kMaxCompensationSamples;
 
-    for (int ch = 0; ch < 2; ++ch)
+    for (int ch = 0; ch < std::min(track.outputLayout.numChannels, slot.delay.getNumChannels()); ++ch)
     {
         Sample* signal = slot.main.getWritePointer(ch);
         Sample* ring = slot.delay.getWritePointer(ch);
@@ -1021,23 +1259,18 @@ void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& sl
 
 void AudioEngine::renderMaster(int numSamples) noexcept
 {
+    // Tracks routed to the master deliver its channels (their faders convert).
+    const int numMaster = masterChannels();
     for (const int source : graph_->masterSources)
     {
         const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(source)].slot)];
-        for (int ch = 0; ch < 2; ++ch)
+        for (int ch = 0; ch < std::min(numMaster, sourceSlot.main.getNumChannels()); ++ch)
             masterBus_.addFrom(ch, 0, sourceSlot.main, ch, 0, numSamples);
     }
 
     applyParameterAutomation(graph_->masterParameterLanes);
     masterMidi_.clear();
-
-    for (const auto& device : graph_->masterDevices)
-    {
-        const juce::AudioBuffer<Sample>* sidechain = nullptr;
-        if (device.sidechainSource >= 0)
-            sidechain = &slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(device.sidechainSource)].slot)].main;
-        device.node->process(masterBus_, numSamples, masterMidi_, sidechain);
-    }
+    runChain(graph_->masterDevices, masterBus_, numMaster, graph_->masterGroups, masterMidi_, &masterScratch_);
 }
 
 void AudioEngine::captureInputs(int /*inputOffset*/, int numSamples) noexcept
@@ -1047,55 +1280,99 @@ void AudioEngine::captureInputs(int /*inputOffset*/, int numSamples) noexcept
         if (target.stream == nullptr || target.firstChannel >= numInputs_)
             continue;
 
-        const Sample* channels[2] = {inputBus_.getReadPointer(target.firstChannel),
-                                     inputBus_.getReadPointer(std::min(target.firstChannel + 1, numInputs_ - 1))};
-        target.stream->write(channels, std::min(2, target.numChannels), numSamples);
+        std::array<const Sample*, kMaxChannels> channels{};
+        const int count = std::clamp(target.numChannels, 1, kMaxChannels);
+        for (int ch = 0; ch < count; ++ch)
+            channels[static_cast<std::size_t>(ch)] = inputBus_.getReadPointer(std::min(target.firstChannel + ch, numInputs_ - 1));
+        target.stream->write(channels.data(), count, numSamples);
     }
 }
 
 void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
 {
-    const Sample* left = masterBus_.getReadPointer(0);
-    const Sample* right = masterBus_.getReadPointer(1);
-    Sample peakLeft = 0.0;
-    Sample peakRight = 0.0;
+    const int numMaster = masterChannels();
+    std::array<Sample, kMaxChannels> peaks{};
     std::uint64_t clipped = 0;
 
-    for (int i = 0; i < numSamples; ++i)
+    for (int ch = 0; ch < numMaster; ++ch)
     {
-        const Sample l = std::abs(left[i]);
-        const Sample r = std::abs(right[i]);
-        peakLeft = std::max(peakLeft, l);
-        peakRight = std::max(peakRight, r);
-        clipped += (l > 1.0 ? 1u : 0u) + (r > 1.0 ? 1u : 0u);
-    }
-
-    for (int ch = 0; ch < numOutputs; ++ch)
-    {
-        float* const destination = outputs[ch];
-        if (destination == nullptr)
-            continue;
-
-        if (ch >= 2) // the master is stereo; further device outputs stay silent
-        {
-            std::fill_n(destination + offset, numSamples, 0.0f);
-            continue;
-        }
-
-        if (numOutputs == 1)
-        {
-            for (int i = 0; i < numSamples; ++i)
-                destination[offset + i] = static_cast<IoSample>(0.5 * (left[i] + right[i]));
-            continue;
-        }
-
-        const Sample* source = ch == 0 ? left : right;
+        const Sample* channel = masterBus_.getReadPointer(ch);
+        Sample peak = 0.0;
         for (int i = 0; i < numSamples; ++i)
-            destination[offset + i] = static_cast<IoSample>(source[i]);
+        {
+            const Sample v = std::abs(channel[i]);
+            peak = std::max(peak, v);
+            clipped += v > 1.0 ? 1u : 0u;
+        }
+        peaks[static_cast<std::size_t>(ch)] = peak;
     }
 
-    rt::atomicStoreMax(telemetry_.masterPeakLeft, static_cast<float>(peakLeft));
-    rt::atomicStoreMax(telemetry_.masterPeakRight, static_cast<float>(numChannels_ == 1 ? peakLeft : peakRight));
+    const auto silence = [&](int ch)
+    {
+        if (outputs[ch] != nullptr)
+            std::fill_n(outputs[ch] + offset, numSamples, 0.0f);
+    };
+
+    if (numOutputs >= numMaster)
+    {
+        // Every master channel has its own output, in the master's channel order.
+        for (int ch = 0; ch < numOutputs; ++ch)
+        {
+            if (outputs[ch] == nullptr)
+                continue;
+            if (ch >= numMaster)
+            {
+                silence(ch);
+                continue;
+            }
+            const Sample* source = masterBus_.getReadPointer(ch);
+            for (int i = 0; i < numSamples; ++i)
+                outputs[ch][offset + i] = static_cast<IoSample>(source[i]);
+        }
+    }
+    else
+    {
+        // Fewer outputs than master channels: a stereo fold-down (and its mono sum on one output).
+        const bool stereoMaster = numMaster <= 2;
+        const auto& fold = graph_ != nullptr ? graph_->masterFoldDown : ChannelMatrix{};
+        for (int ch = 0; ch < numOutputs; ++ch)
+        {
+            if (outputs[ch] == nullptr)
+                continue;
+            if (ch >= 2)
+            {
+                silence(ch);
+                continue;
+            }
+            float* destination = outputs[ch] + offset;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                double left = 0.0;
+                double right = 0.0;
+                if (stereoMaster)
+                {
+                    left = masterBus_.getSample(0, i);
+                    right = masterBus_.getSample(std::min(1, numMaster - 1), i);
+                }
+                else
+                {
+                    for (int m = 0; m < std::min(numMaster, fold.numInputs); ++m)
+                    {
+                        const Sample v = masterBus_.getSample(m, i);
+                        left += fold.gain[0][static_cast<std::size_t>(m)] * v;
+                        right += fold.gain[1][static_cast<std::size_t>(m)] * v;
+                    }
+                }
+                destination[i] = static_cast<IoSample>(numOutputs == 1 ? 0.5 * (left + right) : (ch == 0 ? left : right));
+            }
+        }
+    }
+
+    rt::atomicStoreMax(telemetry_.masterPeakLeft, static_cast<float>(peaks[0]));
+    rt::atomicStoreMax(telemetry_.masterPeakRight, static_cast<float>(numChannels_ == 1 || numMaster < 2 ? peaks[0] : peaks[1]));
+    for (int ch = 0; ch < numMaster; ++ch)
+        rt::atomicStoreMax(telemetry_.masterPeaks[static_cast<std::size_t>(ch)], static_cast<float>(peaks[static_cast<std::size_t>(ch)]));
+    telemetry_.masterChannels.store(numMaster, std::memory_order_relaxed);
 
     if (clipped > 0)
         telemetry_.clippedSamples.fetch_add(clipped, std::memory_order_relaxed);

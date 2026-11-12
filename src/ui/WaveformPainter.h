@@ -15,15 +15,20 @@ inline constexpr float kMinLaneHeight = 10.0f;
 inline constexpr float kLaneGap = 1.0f;
 
 /**
-    The lanes a waveform is drawn in: one for mono; for stereo, left above right (like Ableton's
-    arrangement) when each channel gets at least kMinLaneHeight, otherwise one merged lane.
+    The lanes a waveform is drawn in: one for mono; for stereo and multichannel files, one per
+    channel from the top (left above right, like Ableton's arrangement) when each gets at least
+    kMinLaneHeight, otherwise one merged lane.
 */
 [[nodiscard]] inline std::vector<juce::Rectangle<float>> lanes(juce::Rectangle<float> area, int numChannels)
 {
-    if (numChannels < 2 || area.getHeight() < 2.0f * kMinLaneHeight + kLaneGap)
+    const auto n = static_cast<float>(numChannels);
+    if (numChannels < 2 || area.getHeight() < n * kMinLaneHeight + (n - 1.0f) * kLaneGap)
         return {area};
-    const float laneHeight = (area.getHeight() - kLaneGap) * 0.5f;
-    return {area.withHeight(laneHeight), area.withTrimmedTop(laneHeight + kLaneGap)};
+    const float laneHeight = (area.getHeight() - (n - 1.0f) * kLaneGap) / n;
+    std::vector<juce::Rectangle<float>> result;
+    for (int k = 0; k < numChannels; ++k)
+        result.push_back(area.withY(area.getY() + static_cast<float>(k) * (laneHeight + kLaneGap)).withHeight(laneHeight));
+    return result;
 }
 
 /**
@@ -42,10 +47,10 @@ void paintChannels(juce::Graphics& g, juce::Rectangle<float> area, int numChanne
     const auto laneAreas = lanes(area, numChannels);
     const bool merged = laneAreas.size() < static_cast<std::size_t>(numChannels);
 
-    if (laneAreas.size() > 1)
+    for (std::size_t lane = 0; lane + 1 < laneAreas.size(); ++lane)
     {
         g.setColour(colour.withMultipliedAlpha(0.3f));
-        g.fillRect(static_cast<float>(firstX), laneAreas[0].getBottom(), static_cast<float>(lastX - firstX), kLaneGap);
+        g.fillRect(static_cast<float>(firstX), laneAreas[lane].getBottom(), static_cast<float>(lastX - firstX), kLaneGap);
     }
 
     g.setColour(colour);

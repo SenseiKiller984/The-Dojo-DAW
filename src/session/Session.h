@@ -19,14 +19,16 @@ using engine::TrackKind;
 /**
     Property and type identifiers of the session document (file format version 2).
 
-        DOJO_SESSION  version, tempo, masterVolumeDb, nextId, loopEnabled, loopStart, loopEnd,
+        DOJO_SESSION  version, tempo, masterVolumeDb, masterFormat, nextId, loopEnabled, loopStart, loopEnd,
                       speed, keepPitch, transpose
           MASTER        (the master bus: devices and automation)
             DEVICE ...  AUTOMATION ...
           TRACK       id, name, colour, kind (audio|instrument|bus), folder, collapsed,
                       volumeDb, pan, muted, soloed, phaseInverted, output, input, inputStereo,
-                      monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation
-            CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, stretch, pitch
+                      monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation,
+                      format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre
+            CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, stretch, pitch,
+                        sourceChannel, editLocked, timeLocked
             MIDICLIP    id, name, start, length, offset (beats)
               NOTE        start, length (beats, relative to the clip content), note, velocity, channel
               CC          controller (0..127, 128 = pitch bend), beat, value (0..1), channel
@@ -92,6 +94,9 @@ inline const juce::Identifier format {"format"};
 inline const juce::Identifier active {"active"};
 inline const juce::Identifier sourceChannel {"sourceChannel"};
 inline const juce::Identifier editLocked {"editLocked"};
+inline const juce::Identifier masterFormat {"masterFormat"};
+inline const juce::Identifier panFrontRear {"panFrontRear"};
+inline const juce::Identifier panCentre {"panCentre"};
 inline const juce::Identifier timeLocked {"timeLocked"};
 inline const juce::Identifier midiTarget {"midiTarget"};
 inline const juce::Identifier vca {"vca"};
@@ -149,15 +154,42 @@ const std::array<juce::Colour, 8>& getTrackPalette();
 /** Tracks of this kind make sound of their own (and have a place in the render graph). */
 [[nodiscard]] bool isRendered(TrackKind kind);
 
-/** A track's channel format (audio tracks and busses; instrument tracks are stereo). */
+/**
+    A track's channel format (audio tracks and busses; instrument tracks are stereo), and the
+    master's. The multichannel formats carry one channel per speaker, in this order:
+        3.1            L R C LFE
+        5.1            L R C LFE Ls Rs   (SMPTE/ITU)
+        7.1            L R C LFE Ls Rs Lrs Rrs
+        Dolby Digital  L C R Ls Rs LFE   (5.1 in AC-3 order)
+        DTS            L R Ls Rs C LFE   (5.1 in DTS order)
+*/
 enum class TrackFormat
 {
     mono,
     stereo,
+    lcrLfe,
+    surround51,
+    surround71,
+    dolbyDigital,
+    dts,
 };
 [[nodiscard]] juce::String toString(TrackFormat format);
 [[nodiscard]] TrackFormat trackFormatFromString(const juce::String& text);
+/** "Mono", "Stereo", "3.1", "5.1", "7.1", "Dolby Digital 5.1", "DTS 5.1". */
+[[nodiscard]] juce::String getDisplayName(TrackFormat format);
 [[nodiscard]] int getNumChannels(TrackFormat format);
+[[nodiscard]] inline bool isMultichannel(TrackFormat format) { return getNumChannels(format) > 2; }
+/** Every format, in menu order. */
+[[nodiscard]] std::vector<TrackFormat> getAllTrackFormats();
+/** The speakers of a format's channels (mono: the centre). */
+[[nodiscard]] engine::ChannelLayout getLayout(TrackFormat format);
+/**
+    Which channel of an audio file (with `fileChannels` channels) a multichannel track's channel
+    `trackChannel` plays, or -1: the same channel when the file has as many (recorded on such a
+    track), otherwise by speaker (assuming the SMPTE order for 1, 2, 4, 6 and 8 channels; a mono
+    file plays from the centre).
+*/
+[[nodiscard]] int fileChannelFor(int fileChannels, const engine::ChannelLayout& track, int trackChannel);
 
 /** Typed accessors for a TRACK tree. Setters take an UndoManager (nullptr = not undoable). */
 namespace track
@@ -183,8 +215,13 @@ double getPitch(const juce::ValueTree& t);
 std::uint32_t getAuxSource(const juce::ValueTree& t);
 int getAuxChannel(const juce::ValueTree& t);
 bool isShowingAutomation(const juce::ValueTree& t);
-/** Mono tracks play their clips (or one chosen channel of them) and record one input channel. */
+/** Mono tracks play their clips (or one chosen channel of them) and record one input channel;
+    multichannel tracks record as many consecutive input channels as they have speakers. */
 TrackFormat getFormat(const juce::ValueTree& t);
+/** Surround panner, used when a track feeds a multichannel bus or master: front (-1) to rear (+1). */
+double getPanFrontRear(const juce::ValueTree& t);
+/** Surround panner: how much of the centred front signal plays from the centre speaker (0..1). */
+double getPanCentre(const juce::ValueTree& t);
 /** Inactive tracks are not played or processed at all (their devices use no CPU). */
 bool isActive(const juce::ValueTree& t);
 /** MIDI tracks: the instrument track their MIDI goes to (0 = none). */
@@ -211,6 +248,8 @@ void setPitch(juce::ValueTree t, double semitones, juce::UndoManager* um);
 void setAuxSource(juce::ValueTree t, std::uint32_t instrumentTrackId, int firstChannel, juce::UndoManager* um);
 void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um);
 void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um);
+void setPanFrontRear(juce::ValueTree t, double frontRear, juce::UndoManager* um);
+void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um);
 void setActive(juce::ValueTree t, bool active, juce::UndoManager* um);
 void setMidiTarget(juce::ValueTree t, std::uint32_t instrumentTrackId, juce::UndoManager* um);
 void setVca(juce::ValueTree t, std::uint32_t vcaTrackId, juce::UndoManager* um);
@@ -350,6 +389,10 @@ public:
     void setTempo(double bpm);
     [[nodiscard]] double getMasterVolumeDb() const;
     void setMasterVolumeDb(double db);
+    /** The master's channel format (stereo, or a multichannel format for surround mixes; never mono).
+        Undoable. */
+    [[nodiscard]] TrackFormat getMasterFormat() const;
+    void setMasterFormat(TrackFormat format);
 
     [[nodiscard]] bool isLoopEnabled() const;
     [[nodiscard]] double getLoopStart() const;

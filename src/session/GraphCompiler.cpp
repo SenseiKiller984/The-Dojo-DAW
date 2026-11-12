@@ -64,6 +64,20 @@ private:
     std::vector<std::vector<int>> feeds_;
 };
 
+/** Which file channel each channel of a multichannel track plays (see fileChannelFor); one chosen
+    channel plays from the centre (or left and right). */
+void mapClipChannels(engine::RenderClip& clip, const engine::ChannelLayout& track)
+{
+    clip.numOutputs = track.numChannels;
+    clip.channelMap.fill(-1);
+    for (int o = 0; o < track.numChannels && o < engine::kMaxChannels; ++o)
+    {
+        const int source = clip.sourceChannel >= 0 ? (fileChannelFor(1, track, o) >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : -1)
+                                                   : fileChannelFor(clip.numChannels, track, o);
+        clip.channelMap[static_cast<std::size_t>(o)] = static_cast<std::int8_t>(source);
+    }
+}
+
 void applyCrossfades(std::vector<engine::RenderClip>& clips)
 {
     for (std::size_t i = 0; i + 1 < clips.size(); ++i)
@@ -105,29 +119,42 @@ void GraphBuilder::setRenderFormat(double sampleRate, int maximumBlockSize)
         maxBlock_ = std::max(maximumBlockSize, 64);
 }
 
-int GraphBuilder::assignSlot(std::uint32_t trackId, std::vector<bool>& used)
+int GraphBuilder::assignSlot(std::uint32_t trackId, std::vector<bool>& used, bool wide)
 {
     if (const auto it = slots_.find(trackId); it != slots_.end())
-        return it->second;
-
-    for (int slot = 0; slot < engine::kMaxTracks; ++slot)
     {
-        if (!used[static_cast<std::size_t>(slot)])
-        {
-            used[static_cast<std::size_t>(slot)] = true;
-            slots_[trackId] = slot;
-            return slot;
-        }
+        if (!wide || it->second >= engine::kFirstWideSlot)
+            return it->second;
+        used[static_cast<std::size_t>(it->second)] = false; // it needs a wide slot now
+        slots_.erase(it);
     }
 
-    return -1; // more tracks than the engine renders
+    const auto take = [&](int from, int to)
+    {
+        for (int slot = from; slot < to; ++slot)
+        {
+            if (!used[static_cast<std::size_t>(slot)])
+            {
+                used[static_cast<std::size_t>(slot)] = true;
+                slots_[trackId] = slot;
+                return slot;
+            }
+        }
+        return -1;
+    };
+
+    // Stereo tracks fill the stereo slots first (the wide ones are kept for multichannel signals).
+    int slot = wide ? take(engine::kFirstWideSlot, engine::kMaxTracks) : take(0, engine::kFirstWideSlot);
+    if (slot < 0 && !wide)
+        slot = take(engine::kFirstWideSlot, engine::kMaxTracks);
+    return slot; // -1: more tracks than the engine renders
 }
 
 std::shared_ptr<engine::ClipStretcher> GraphBuilder::getStretcher(std::uint32_t clipId, int numChannels)
 {
     auto& stretcher = stretchers_[clipId];
     if (stretcher == nullptr || std::abs(stretcher->getConfiguredSampleRate() - sampleRate_) > 1.0e-6 ||
-        stretcher->getMaximumBlockSize() < maxBlock_)
+        stretcher->getMaximumBlockSize() < maxBlock_ || stretcher->getNumChannels() != std::clamp(numChannels, 2, engine::kMaxChannels))
         stretcher = std::make_shared<engine::ClipStretcher>(numChannels, sampleRate_, maxBlock_);
     return stretcher;
 }
@@ -151,6 +178,25 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         else if (track::getKind(t) == TrackKind::masterFader)
             masterFaders.push_back(t);
     }
+
+    // --- Channel layouts: a track's own (stereo unless it is a multichannel audio track or bus) and
+    // its destination's (the bus it feeds or the master) --------------------------------------------
+    const auto masterLayout = getLayout(session.getMasterFormat());
+    const auto layoutOfTrack = [](const juce::ValueTree& t)
+    {
+        const auto format = track::getFormat(t);
+        return isMultichannel(format) ? getLayout(format) : engine::ChannelLayout::stereo();
+    };
+    const auto mayBeWide = [&](const juce::ValueTree& t)
+    {
+        // Its own layout, its destination's, or a fallback destination's (folder or master).
+        if (layoutOfTrack(t).isMultichannel() || masterLayout.isMultichannel())
+            return true;
+        if (const auto dest = session.getDestination(t); dest.isValid() && layoutOfTrack(dest).isMultichannel())
+            return true;
+        const auto folderTree = Session::getParentFolder(t);
+        return folderTree.isValid() && layoutOfTrack(folderTree).isMultichannel();
+    };
 
     // --- Slots: forget tracks that no longer exist, keep the rest stable ----------------------------
     std::set<std::uint32_t> liveIds;
@@ -177,7 +223,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     std::vector<int> slotOf;
     for (const auto& t : allTracks)
     {
-        const int slot = assignSlot(track::getId(t), used);
+        const int slot = assignSlot(track::getId(t), used, track::getKind(t) != TrackKind::midi && mayBeWide(t));
         if (slot < 0)
             continue;
         indexOfId[track::getId(t)] = static_cast<int>(trees.size());
@@ -310,6 +356,29 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         }
     }
 
+    std::vector<engine::ChannelLayout> layouts(count);
+    std::vector<engine::ChannelLayout> outputLayouts(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        layouts[i] = layoutOfTrack(trees[i]);
+        outputLayouts[i] = destination[i] >= 0   ? layoutOfTrack(trees[static_cast<std::size_t>(destination[i])])
+                           : destination[i] == -1 ? masterLayout
+                                                  : layouts[i];
+    }
+
+    // Instances for the channel groups of a multichannel signal.
+    const auto addCompanions = [&](engine::RenderDevice& device, const juce::ValueTree& deviceTree, const engine::ChannelGroups& groups)
+    {
+        if (devices == nullptr || groups.count <= 1)
+            return;
+        const auto companions = devices->getCompanions(deviceTree, groups.count - 1);
+        for (std::size_t k = 0; k < companions.size() && k < device.companions.size(); ++k)
+        {
+            device.companions[k] = companions[k].get();
+            graph->keepAlive.push_back(companions[k]);
+        }
+    };
+
     // --- Dependency levels -------------------------------------------------------------------------
     std::vector<std::vector<int>> dependsOn(count);
     for (std::size_t i = 0; i < count; ++i)
@@ -430,6 +499,12 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         rt.midiSources = midiSources[i];
         rt.phaseInverted = track::isPhaseInverted(t);
         rt.outputIndex = destination[i];
+        rt.layout = layouts[i];
+        rt.outputLayout = outputLayouts[i];
+        rt.groups = engine::channelGroupsOf(rt.layout);
+        rt.outputGroups = engine::channelGroupsOf(rt.outputLayout);
+        rt.panFrontRear = track::getPanFrontRear(t);
+        rt.panCentre = track::getPanCentre(t);
 
         // Devices.
         for (std::size_t d = 0; d < chainNodes[i].size(); ++d)
@@ -437,6 +512,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             engine::RenderDevice device;
             device.node = chainNodes[i][d].second.get();
             device.sidechainSource = sidechainOf[i][d];
+            if (rt.layout.isMultichannel())
+                addCompanions(device, chainNodes[i][d].first, rt.groups);
             rt.devices.push_back(device);
             graph->keepAlive.push_back(chainNodes[i][d].second);
         }
@@ -503,6 +580,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 rc.sourceChannel = clip::getSourceChannel(c);
                 rc.sourceLength = asset->numFrames;
                 rc.sourceSampleRate = asset->sampleRate;
+                if (rt.layout.isMultichannel())
+                    mapClipChannels(rc, rt.layout);
 
                 if (asset->isStreamed())
                     rc.streamed = asset->streamed.get();
@@ -513,7 +592,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 // stretcher. Varispeed alone is plain resampling in the clip renderer.
                 if (std::abs(rc.pitchSemitones) > 1.0e-6 || std::abs(rc.stretch - 1.0) > 1.0e-9)
                 {
-                    auto stretcher = getStretcher(clip::getId(c), rc.numChannels);
+                    auto stretcher = getStretcher(clip::getId(c), rc.sourceChannel >= 0 ? 1 : rc.numChannels);
                     rc.stretcher = stretcher.get();
                     graph->keepAlive.push_back(stretcher);
                 }
@@ -528,6 +607,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
             rt.inputChannel = track::getInput(t);
             rt.inputStereo = track::isInputStereo(t);
+            rt.inputCount = rt.layout.isMultichannel() ? rt.layout.numChannels : 0;
             rt.monitor = track::getMonitor(t);
             rt.armed = track::isArmed(t);
         }
@@ -588,6 +668,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             rt.busSources = busSources[i];
             rt.auxSourceIndex = auxSource[i];
             rt.auxChannel = track::getAuxChannel(t);
+            rt.auxMatrix = engine::conversionMatrix(engine::ChannelLayout::stereo(), rt.layout);
 
             for (const auto& [source, s] : incomingSends[i])
             {
@@ -600,6 +681,12 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 for (const auto& lane : Session::getAutomationLanes(trees[static_cast<std::size_t>(source)]))
                     if (automation::getTarget(lane) == sendTarget)
                         rs.gainAutomation = automation::toCurve(lane);
+
+                // The source's channels (its own before the fader, its destination's after) into ours.
+                const auto& from = rs.preFader ? layouts[static_cast<std::size_t>(source)] : outputLayouts[static_cast<std::size_t>(source)];
+                rs.convert = from != rt.layout;
+                if (rs.convert)
+                    rs.matrix = engine::conversionMatrix(from, rt.layout);
 
                 if (rs.preFader)
                     graph->tracks[static_cast<std::size_t>(source)].needsPreFaderCopy = true;
@@ -627,6 +714,10 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         if (destination[i] == -1)
             graph->masterSources.push_back(static_cast<int>(i));
 
+    graph->masterLayout = masterLayout;
+    graph->masterGroups = engine::channelGroupsOf(masterLayout);
+    graph->masterFoldDown = engine::conversionMatrix(masterLayout, engine::ChannelLayout::stereo());
+
     const auto masterTree = session.getMaster();
     if (devices != nullptr && masterTree.isValid())
     {
@@ -640,6 +731,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             device.node = node.get();
             if (const auto id = device::getSidechain(d); id != 0 && node->hasSidechainInput())
                 device.sidechainSource = indexOf(id);
+            if (masterLayout.isMultichannel())
+                addCompanions(device, d, graph->masterGroups);
             graph->masterDevices.push_back(device);
             graph->keepAlive.push_back(node);
         }
@@ -685,6 +778,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         engine::AutomationCurve volumeCurve;
         std::vector<engine::RenderDevice> chain;
         std::vector<engine::ParameterLane> lanes;
+        // Its post-fader devices run on the channels of the path it controls.
+        const auto& pathGroups = busIndex < 0 ? graph->masterGroups : graph->tracks[static_cast<std::size_t>(busIndex)].outputGroups;
         if (devices != nullptr)
         {
             std::vector<std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>> nodes;
@@ -693,6 +788,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 {
                     engine::RenderDevice device;
                     device.node = node.get();
+                    addCompanions(device, d, pathGroups);
                     chain.push_back(device);
                     graph->keepAlive.push_back(node);
                     nodes.emplace_back(d, std::move(node));

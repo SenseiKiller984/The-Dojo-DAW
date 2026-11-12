@@ -102,6 +102,8 @@ public:
     [[nodiscard]] bool post(const EngineCommand& command) noexcept;
     [[nodiscard]] TelemetrySnapshot collectTelemetry() noexcept;
     [[nodiscard]] StereoPeak collectTrackPeak(int slot) noexcept;
+    /** Every channel's peak of a slot (multichannel meters); also resets channels 0 and 1. */
+    [[nodiscard]] ChannelPeaks collectTrackPeaks(int slot) noexcept;
     [[nodiscard]] float collectInputPeak(int channel) noexcept;
 
     [[nodiscard]] std::uint64_t getAppliedGraphSerial() const noexcept
@@ -187,6 +189,14 @@ private:
         int delayWrite = 0;
         int currentDelay = 0;
         bool panic = false; ///< send all-notes-off before the next block
+
+        // Wide slots only (multichannel signals):
+        juce::AudioBuffer<Sample> out;          ///< the fader's output while it converts layouts
+        juce::AudioBuffer<Sample> groupScratch; ///< a mono channel group as dual mono for a stereo device
+        ChannelMatrix matrix;                   ///< the fader's current (smoothed) matrix
+        ChannelMatrix matrixTarget;             ///< ... the one it ramps to
+        int rampRemaining = 0;                  ///< samples left in that (linear) ramp
+        bool matrixValid = false;
     };
 
     class PlayHead final : public juce::AudioPlayHead
@@ -231,6 +241,15 @@ private:
     void applyMasterFader(int numSamples) noexcept;
     void applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept;
     void applyParameterAutomation(const std::vector<ParameterLane>& lanes) noexcept;
+    /** Runs a device chain on `numChannels` channels of `buffer`: directly when stereo, otherwise one
+        linked instance per channel group (companions take over the primary's parameters). */
+    void runChain(const std::vector<RenderDevice>& chain, juce::AudioBuffer<Sample>& buffer, int numChannels,
+                  const ChannelGroups& groups, juce::MidiBuffer& midi, juce::AudioBuffer<Sample>* groupScratch) noexcept;
+    void applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan) noexcept;
+    [[nodiscard]] int masterChannels() const noexcept;
+    /** The stereo fold-down of `numChannels` channels of `source` into `stereo` (two channels). */
+    static void foldDown(const juce::AudioBuffer<Sample>& source, int numChannels, const ChannelMatrix& matrix,
+                         juce::AudioBuffer<Sample>& stereo, int numSamples) noexcept;
 
     void renderMaster(int numSamples) noexcept;
     void writeOutputsAndMeter(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
@@ -259,7 +278,8 @@ private:
     int maxBlockSize_ = 0;
     int numChannels_ = 0;
     int numInputs_ = 0;
-    juce::AudioBuffer<Sample> masterBus_;
+    juce::AudioBuffer<Sample> masterBus_;   ///< kMaxChannels; the graph's master layout is used
+    juce::AudioBuffer<Sample> masterScratch_; ///< a mono master channel group as dual mono
     juce::AudioBuffer<Sample> inputBus_; ///< device inputs as 64-bit, for monitoring and capture
     juce::MidiBuffer masterMidi_;
     std::vector<SlotState> slots_;

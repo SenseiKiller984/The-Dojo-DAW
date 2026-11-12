@@ -48,8 +48,12 @@ struct EngineTelemetry
     std::atomic<double> captureStartSeconds{-1.0}; ///< timeline time of the first captured sample
     std::atomic<std::uint32_t> captureStops{0}; ///< StopCapture commands handled so far
 
-    /** Post-fader track peaks, [slot * 2 + channel], max since last read. */
-    std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks) * 2> trackPeaks{};
+    /** Post-fader track peaks, [slot * kMaxChannels + channel], max since last read. */
+    std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks) * kMaxChannels> trackPeaks{};
+
+    /** Master peaks per channel of the master's layout, max since last read. */
+    std::array<std::atomic<float>, static_cast<std::size_t>(kMaxChannels)> masterPeaks{};
+    std::atomic<int> masterChannels{2};
 
     /** Device input peaks per channel, max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxInputChannels)> inputPeaks{};
@@ -66,6 +70,8 @@ struct TelemetrySnapshot
 {
     float masterPeakLeft = 0.0f;
     float masterPeakRight = 0.0f;
+    int masterChannels = 2;                         ///< channels of the master's layout
+    std::array<float, kMaxChannels> masterPeaks{}; ///< per master channel
     float dspLoad = 0.0f;
     float dspLoadPeak = 0.0f;
     SampleCount playheadSamples = 0;
@@ -82,6 +88,12 @@ struct StereoPeak
 {
     float left = 0.0f;
     float right = 0.0f;
+};
+
+/** Linear peaks of every channel of one track since the previous read. */
+struct ChannelPeaks
+{
+    std::array<float, kMaxChannels> peak{};
 };
 
 } // namespace dojo::engine

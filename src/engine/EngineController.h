@@ -93,6 +93,7 @@ public:
 
     /** Post-fader peaks of the track rendered in `slot` since the last call. Once per UI frame. */
     [[nodiscard]] StereoPeak collectTrackPeak(int slot) noexcept;
+    [[nodiscard]] ChannelPeaks collectTrackPeaks(int slot) noexcept;
 
     // --- Render graph ------------------------------------------------------------------------------
     /** Hands a freshly built graph to the audio thread. At most one graph is ever in flight: while

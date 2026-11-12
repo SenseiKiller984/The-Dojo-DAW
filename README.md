@@ -14,9 +14,32 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - The graph renders on **all CPU cores**: independent tracks run in parallel.
 - Audio tracks and aux inputs (busses) are **mono or stereo**. A mono track plays its clips as one signal, or one chosen channel of each clip's file. It also records one input channel.
 
+**Surround (multichannel)**
+- Audio tracks, aux inputs, folders and the master can also be **3.1, 5.1, 7.1, Dolby Digital or DTS**. Each format has one channel per speaker, in this order:
+
+  | Format | Channels |
+  | --- | --- |
+  | 3.1 | L R C LFE |
+  | 5.1 | L R C LFE Ls Rs (SMPTE/ITU) |
+  | 7.1 | L R C LFE Ls Rs Lrs Rrs |
+  | Dolby Digital | L C R Ls Rs LFE (5.1 in AC-3 order) |
+  | DTS | L R Ls Rs C LFE (5.1 in DTS order) |
+
+- Choose the format in *Track > New*, or later in the track's right-click *Format* menu. The **master's format** is set in the master strip of the mixer.
+- A multichannel track plays multichannel files and records one input per channel (*In 3-8* for a 5.1 track on input 3).
+- Signals move between formats **by speaker**, so a Dolby Digital track's centre plays from a 5.1 master's centre:
+  - A track that feeds a smaller format is folded down (ITU style): the centre and surrounds go to the sides at -3 dB, and the LFE is dropped.
+  - On an audio device with fewer outputs than the master has channels, you hear the master's stereo fold-down.
+- **Surround panner**: a mono or stereo track that feeds a surround bus or master gets a panner pad in its mixer strip. Drag to place the track (left/right is its pan, up/down front to rear). Right-click to set how much of a centred signal plays from the centre speaker (dialogue: 100 %). Double-click to reset.
+- **Effects on multichannel tracks**: every device and plug-in runs as linked instances, one per channel group. The speaker pairs (L/R, Ls/Rs, Lrs/Rrs) run as stereo pairs; the centre and LFE run on their own. All instances follow the first one's settings.
+- Meters show one bar per channel, and the arranger draws every channel of a multichannel clip when the track is tall enough.
+- **Export**:
+  - A surround master exports as a multichannel WAV or FLAC. Stems have their destination's channels.
+  - MP3 gets the stereo fold-down.
+
 **Track menu**
 - **New...** (Ctrl+Shift+N) adds one or more tracks in one go. Each row is a count, a format (mono or stereo), a type and a name; + and - add and remove rows. The tracks go after the selected track (inside its folder) or at the end. The types:
-  - audio track, aux input (a bus), instrument track or folder;
+  - audio track, aux input (a bus), instrument track or folder (audio tracks, aux inputs and folders in any format: mono, stereo, 3.1, 5.1, 7.1, Dolby Digital or DTS);
   - **MIDI track**: MIDI clips (and live MIDI when armed) that play the instrument track picked in its menu (*MIDI Output*). Muting it silences its notes; soloing the instrument keeps it playing.
   - **VCA Master**: no audio of its own. Its fader (and volume automation) scales its member tracks, its mute mutes them and its solo solos them; VCAs can be nested. Assign tracks with *VCA* in the track menu (it applies to the whole selection).
   - **Master Fader**: one last fader, with mute, volume automation and post-fader devices, on the main output or on a bus (*Controls* in its menu; one per path).
@@ -24,7 +47,10 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Duplicate...** (Alt+Shift+D) makes any number of copies of the selected tracks. You choose whether the copies get the clips, automation, devices (with their current settings) and sends. Each copy goes right after its source, or all of them after the last selected track. A folder is copied with its contents; routing inside it points at the copies.
 - **Delete** removes the selected tracks (undoable). Deleting a VCA Master coalesces it: its fader and automation are added into each member's own volume (and a muted VCA mutes them), so they sound exactly as before.
 - Duplicating a VCA member without *VCA assignment* bakes the VCA's gain into the copy the same way.
-- **Split into Mono** gives each selected stereo audio track one mono track per channel ("Name.L", "Name.R"). They are panned hard left and right, play and record that channel, and get the source's devices, sends and automation; the source track stays.
+- **Split into Mono** gives each selected stereo or multichannel audio track one mono track per channel ("Name.L", "Name.R", and for surround "Name.C", "Name.LFE", "Name.Ls" ...).
+  - Each one is placed at its speaker: pan, front/rear, and the centre speaker for C.
+  - Each plays and records that channel.
+  - Each gets the source's devices, sends and automation; the source track stays.
 - **Make Inactive / Make Active**: an inactive track (or everything in an inactive folder) is not played and its devices use no CPU. Tracks routed into an inactive bus are silent. Inactive tracks are dimmed and can't be soloed, muted or recorded.
 - **Clear All Clip Indicators** (Alt+C) clears the red clip lights of every meter, in the mixer and on the master. They light when a signal goes over 0 dBFS and stay lit until cleared.
 - **Scroll to Track...** takes a track number (or a pick from the list), selects that track and brings it to the top of the arranger (opening collapsed folders) and the left of the mixer.

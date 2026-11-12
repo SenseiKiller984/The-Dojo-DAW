@@ -46,6 +46,12 @@ public:
 
     /** The node for a DEVICE tree, created if needed. Null if it could not be created. */
     std::shared_ptr<engine::ProcessorNode> getNode(const juce::ValueTree& device);
+    /**
+        `count` more instances of the same device for a multichannel signal (one per channel group
+        after the first). Created on demand from the primary's current state and kept with it; the
+        engine keeps their parameters in step with the primary's. Fewer if they could not be created.
+    */
+    std::vector<std::shared_ptr<engine::ProcessorNode>> getCompanions(const juce::ValueTree& device, int count);
     /** The node for a device id if it exists already (does not create). */
     [[nodiscard]] std::shared_ptr<engine::ProcessorNode> findNode(std::uint32_t deviceId) const;
     /** Why a device could not be created (empty if it was). */
@@ -77,6 +83,7 @@ private:
     struct Entry
     {
         std::shared_ptr<engine::ProcessorNode> node;
+        std::vector<std::shared_ptr<engine::ProcessorNode>> companions;
         juce::String type;
         juce::String error;
     };

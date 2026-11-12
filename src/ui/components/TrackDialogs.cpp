@@ -59,8 +59,10 @@ NewTracksPanel::Row::Row()
     count.setText("1", juce::dontSendNotification);
     count.setInputRestrictions(2, "0123456789");
     count.setJustification(juce::Justification::centred);
-    format.addItem("Mono", 1);
-    format.addItem("Stereo", 2);
+    // Ids follow session::getAllTrackFormats(): 1 Mono, 2 Stereo, 3 3.1, 4 5.1, 5 7.1, 6 Dolby Digital, 7 DTS.
+    const auto formats = session::getAllTrackFormats();
+    for (std::size_t i = 0; i < formats.size(); ++i)
+        format.addItem(session::getDisplayName(formats[i]), static_cast<int>(i) + 1);
     format.setSelectedId(2, juce::dontSendNotification);
     for (std::size_t i = 0; i < kNewTrackTypes.size(); ++i)
         type.addItem(actions::getName(kNewTrackTypes[i]), static_cast<int>(i) + 1);
@@ -80,7 +82,7 @@ void NewTracksPanel::Row::resized()
     auto area = getLocalBounds().reduced(0, 3);
     count.setBounds(area.removeFromLeft(48));
     area.removeFromLeft(8);
-    format.setBounds(area.removeFromLeft(96));
+    format.setBounds(area.removeFromLeft(150));
     area.removeFromLeft(8);
     type.setBounds(area.removeFromLeft(150));
     area.removeFromLeft(8);
@@ -180,7 +182,9 @@ std::vector<actions::NewTracks> NewTracksPanel::getRows() const
         actions::NewTracks r;
         r.count = parseCount(row->count.getText(), 1, 99);
         r.type = kNewTrackTypes[static_cast<std::size_t>(juce::jlimit(1, static_cast<int>(kNewTrackTypes.size()), row->type.getSelectedId()) - 1)];
-        r.format = row->format.getSelectedId() == 1 && actions::hasFormatChoice(r.type) ? session::TrackFormat::mono : session::TrackFormat::stereo;
+        const auto formats = session::getAllTrackFormats();
+        const int formatIndex = juce::jlimit(1, static_cast<int>(formats.size()), row->format.getSelectedId()) - 1;
+        r.format = actions::hasFormatChoice(r.type) ? formats[static_cast<std::size_t>(formatIndex)] : session::TrackFormat::stereo;
         r.name = row->name.getText().trim();
         result.push_back(r);
     }
@@ -201,7 +205,7 @@ void NewTracksPanel::layoutWindow()
 {
     for (auto& row : rows_)
         row->remove.setEnabled(getNumRows() > 1);
-    setSize(640, kMargin + 18 + getNumRows() * kRowHeight + 92);
+    setSize(700, kMargin + 18 + getNumRows() * kRowHeight + 92);
     resized();
 }
 

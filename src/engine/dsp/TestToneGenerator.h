@@ -25,7 +25,8 @@ public:
     [[nodiscard]] bool isActive() const noexcept;
 
     /** Audio thread: adds `numSamples` of the tone to every channel of `buffer`, from sample 0. */
-    void addTo(juce::AudioBuffer<Sample>& buffer, int numSamples) noexcept;
+    /** Adds the tone to channels `left` and `right` of the buffer (the master's L and R). */
+    void addTo(juce::AudioBuffer<Sample>& buffer, int numSamples, int left = 0, int right = 1) noexcept;
 
 private:
     double sampleRate_ = 48000.0;

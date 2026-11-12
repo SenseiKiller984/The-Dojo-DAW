@@ -535,3 +535,133 @@ TEST_CASE("Track > Delete on a VCA Master coalesces it; New gives each Master Fa
     CHECK(track::getControlledBus(created[3]) == track::getId(bus));
     CHECK(track::getName(created[2]).startsWith("Master"));
 }
+
+TEST_CASE("Track > New makes multichannel tracks; Split into Mono gives one mono track per speaker", "[ui][tracks][multichannel]")
+{
+    ProjectRig rig;
+    auto& session = rig.session();
+
+    // New: every format for audio tracks, aux inputs and folders.
+    ui::NewTracksPanel panel;
+    panel.getRow(0).format.setSelectedId(4, juce::sendNotificationSync); // 5.1
+    panel.getRow(0).name.setText("Ambience");
+    panel.addRow(0);
+    panel.getRow(1).type.setSelectedId(2, juce::sendNotificationSync); // aux input
+    panel.getRow(1).format.setSelectedId(6, juce::sendNotificationSync); // Dolby Digital
+    auto rows = panel.getRows();
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].format == TrackFormat::surround51);
+    CHECK(rows[1].format == TrackFormat::dolbyDigital);
+    const auto created = ui::actions::addNewTracks(session, rig.editor, rows);
+    REQUIRE(created.size() == 2);
+    CHECK(track::getFormat(created[0]) == TrackFormat::surround51);
+    CHECK(track::getKind(created[1]) == TrackKind::bus);
+    CHECK(track::getFormat(created[1]) == TrackFormat::dolbyDigital);
+
+    ui::actions::NewTracks folderRow;
+    folderRow.type = ui::actions::NewTrackType::folder;
+    folderRow.format = TrackFormat::surround71;
+    CHECK(ui::actions::hasFormatChoice(folderRow.type));
+    const auto folder = ui::actions::addNewTracks(session, rig.editor, {folderRow});
+    REQUIRE(folder.size() == 1);
+    CHECK(track::getFormat(folder[0]) == TrackFormat::surround71);
+
+    // Split into Mono: L R C LFE Ls Rs, each at its speaker, playing its channel of the file.
+    auto ambience = created[0];
+    test::TempFolder temp;
+    std::vector<std::vector<float>> six(6, std::vector<float>(4800, 0.1f));
+    const auto file = test::writeMultichannelWav(temp.dir.getChildFile("ambience.wav"), six, 48000.0);
+    const auto stereoFile = test::writeMultichannelWav(temp.dir.getChildFile("lr.wav"), {six[0], six[1]}, 48000.0);
+    juce::String error;
+    REQUIRE(rig.project.getAssets().loadNow(file, error) != nullptr);
+    REQUIRE(rig.project.getAssets().loadNow(stereoFile, error) != nullptr);
+    session.addClip(ambience, file, 0.0, 0.1);
+    session.addClip(ambience, stereoFile, 1.0, 0.1); // only feeds L and R
+    track::setInput(ambience, 8, true, nullptr);
+    rig.select({ambience});
+    REQUIRE(ui::actions::getSplittableTracks(session, rig.editor).size() == 1);
+    const auto mono = ui::actions::splitSelectedIntoMono(rig.project, rig.editor);
+    REQUIRE(mono.size() == 6);
+    const std::vector<juce::String> names{"Ambience.L", "Ambience.R", "Ambience.C", "Ambience.LFE", "Ambience.Ls", "Ambience.Rs"};
+    for (int ch = 0; ch < 6; ++ch)
+    {
+        const auto& t = mono[static_cast<std::size_t>(ch)];
+        CHECK(track::getName(t) == names[static_cast<std::size_t>(ch)]);
+        CHECK(track::getFormat(t) == TrackFormat::mono);
+        CHECK(track::getInput(t) == 8 + ch);
+        const auto clips = childrenOf(t, ids::clip);
+        REQUIRE(clips.size() == (ch < 2 ? 2u : 1u)); // the stereo file has nothing for C, LFE, Ls, Rs
+        CHECK(clip::getSourceChannel(clips[0]) == ch);
+    }
+    CHECK_THAT(track::getPan(mono[0]), WithinAbs(-1.0, 1e-9));
+    CHECK_THAT(track::getPanFrontRear(mono[0]), WithinAbs(-1.0, 1e-9));
+    CHECK_THAT(track::getPanCentre(mono[2]), WithinAbs(1.0, 1e-9)); // C: the centre speaker
+    CHECK_THAT(track::getPan(mono[5]), WithinAbs(1.0, 1e-9));       // Rs: right, rear
+    CHECK_THAT(track::getPanFrontRear(mono[5]), WithinAbs(1.0, 1e-9));
+}
+
+TEST_CASE("The mixer: surround panner, multichannel meters and the master format", "[ui][mixer][multichannel]")
+{
+    ProjectRig rig;
+    auto& session = rig.session();
+    auto vocal = session.addTrack(TrackKind::audio, "Vocal");
+    auto ambience = session.addTrack(TrackKind::audio, "Ambience");
+    track::setFormat(ambience, TrackFormat::surround51, nullptr);
+
+    ui::ChannelStrip vocalStrip(session, rig.editor, vocal, [] { return juce::StringArray{"1", "2", "3", "4", "5", "6", "7", "8"}; }, [] {});
+    ui::ChannelStrip ambienceStrip(session, rig.editor, ambience, [] { return juce::StringArray{"1", "2", "3", "4", "5", "6", "7", "8"}; }, [] {});
+    ui::MasterStrip master(session, rig.editor, [] {});
+    for (juce::Component* c : std::initializer_list<juce::Component*>{&vocalStrip, &ambienceStrip})
+        c->setSize(ui::MixerPanel::kStripWidth, 520);
+    master.setSize(120, 520);
+
+    // Stereo master: plain pan knobs.
+    CHECK_FALSE(vocalStrip.isSurroundPanning());
+    CHECK_FALSE(ambienceStrip.isSurroundPanning());
+
+    // The master format box (undoable): a 5.1 master gives the stereo track a surround panner.
+    master.getFormatBox().setSelectedId(4, juce::sendNotificationSync); // 5.1
+    CHECK(session.getMasterFormat() == TrackFormat::surround51);
+    CHECK(vocalStrip.isSurroundPanning());
+    CHECK(vocalStrip.getSurroundPanner().isVisible());
+    CHECK_FALSE(ambienceStrip.isSurroundPanning()); // a 5.1 track keeps its pan (balance)
+
+    // Dragging the puck to the rear right: pan and front/rear, one undo step.
+    auto& panner = vocalStrip.getSurroundPanner();
+    REQUIRE(panner.getWidth() > 20);
+    const auto at = panner.toPoint(0.5, 1.0);
+    const auto now = juce::Time::getCurrentTime();
+    const auto mods = juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier);
+    const auto event = [&](juce::Point<float> p)
+    {
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p, mods, juce::MouseInputSource::defaultPressure,
+                                juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                                juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, &panner, &panner, now,
+                                panner.toPoint(0.0, -1.0), now, 1, true);
+    };
+    panner.mouseDown(event(panner.toPoint(0.0, -1.0)));
+    panner.mouseDrag(event(at));
+    panner.mouseUp(event(at));
+    CHECK_THAT(track::getPan(vocal), WithinAbs(0.5, 0.02));
+    CHECK_THAT(track::getPanFrontRear(vocal), WithinAbs(1.0, 0.02));
+    session.getUndoManager().undo();
+    CHECK_THAT(track::getPan(vocal), WithinAbs(0.0, 1e-9));
+    CHECK_THAT(track::getPanFrontRear(vocal), WithinAbs(-1.0, 1e-9));
+
+    // The multichannel track's inputs: as many as it has channels.
+    track::setInput(ambience, 2, true, nullptr);
+    CHECK(track::getInput(ambience) == 2);
+
+    // Meters: one bar per channel of the destination.
+    const std::array<float, 6> peaks{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
+    vocalStrip.pushLevels(peaks.data(), 6, 0.02);
+    CHECK(vocalStrip.getMeter().getNumChannels() == 6);
+    master.pushLevels(peaks.data(), 6, 0.02);
+    CHECK(master.getMeter().getNumChannels() == 6);
+
+    // Back to stereo: the pan knob returns.
+    session.getUndoManager().undo();
+    CHECK(session.getMasterFormat() == TrackFormat::stereo);
+    CHECK_FALSE(vocalStrip.isSurroundPanning());
+    CHECK(master.getFormatBox().getSelectedId() == 2);
+}

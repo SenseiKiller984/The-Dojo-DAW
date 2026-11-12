@@ -88,6 +88,54 @@ std::shared_ptr<engine::ProcessorNode> DeviceManager::getNode(const juce::ValueT
     return node;
 }
 
+std::vector<std::shared_ptr<engine::ProcessorNode>> DeviceManager::getCompanions(const juce::ValueTree& deviceTree, int count)
+{
+    auto primary = getNode(deviceTree);
+    if (primary == nullptr || count <= 0)
+        return {};
+
+    const auto id = device::getId(deviceTree);
+    double sampleRate = 48000.0;
+    int blockSize = 512;
+    std::vector<std::shared_ptr<engine::ProcessorNode>> companions;
+    {
+        const std::lock_guard lock(mutex_);
+        sampleRate = sampleRate_;
+        blockSize = blockSize_;
+        const auto it = entries_.find(id);
+        if (it == entries_.end())
+            return {};
+        companions = it->second.companions;
+    }
+
+    if (static_cast<int>(companions.size()) < count)
+    {
+        juce::MemoryBlock state;
+        primary->getProcessor().getStateInformation(state);
+        while (static_cast<int>(companions.size()) < count)
+        {
+            juce::String error;
+            auto processor = creator_ ? creator_(deviceTree, sampleRate, blockSize, error) : nullptr;
+            if (processor == nullptr)
+                break;
+            if (state.getSize() > 0)
+                processor->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            auto node = std::make_shared<engine::ProcessorNode>(std::move(processor));
+            node->setNonRealtime(nonRealtime_);
+            node->prepare(sampleRate, blockSize, playHead_);
+            node->setBypassed(primary->isBypassed());
+            companions.push_back(std::move(node));
+        }
+
+        const std::lock_guard lock(mutex_);
+        if (const auto it = entries_.find(id); it != entries_.end())
+            it->second.companions = companions;
+    }
+
+    companions.resize(std::min(companions.size(), static_cast<std::size_t>(count)));
+    return companions;
+}
+
 std::shared_ptr<engine::ProcessorNode> DeviceManager::findNode(std::uint32_t deviceId) const
 {
     const std::lock_guard lock(mutex_);
@@ -110,8 +158,11 @@ void DeviceManager::prepareAll(double sampleRate, int maximumBlockSize)
         sampleRate_ = sampleRate;
         blockSize_ = maximumBlockSize;
         for (auto& [id, entry] : entries_)
+        {
             if (entry.node != nullptr)
                 nodes.push_back(entry.node);
+            nodes.insert(nodes.end(), entry.companions.begin(), entry.companions.end());
+        }
     }
 
     for (auto& node : nodes)
@@ -123,8 +174,12 @@ void DeviceManager::setNonRealtime(bool nonRealtime)
     const std::lock_guard lock(mutex_);
     nonRealtime_ = nonRealtime;
     for (auto& [id, entry] : entries_)
+    {
         if (entry.node != nullptr)
             entry.node->setNonRealtime(nonRealtime);
+        for (auto& companion : entry.companions)
+            companion->setNonRealtime(nonRealtime);
+    }
 }
 
 void DeviceManager::storeState(juce::ValueTree deviceTree, engine::ProcessorNode& node)

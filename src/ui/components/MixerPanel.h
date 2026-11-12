@@ -4,6 +4,7 @@
 #include "session/Project.h"
 #include "ui/components/InlineValueEditor.h"
 #include "ui/components/LevelMeter.h"
+#include "ui/components/SurroundPanner.h"
 #include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -32,6 +33,12 @@ public:
 
     [[nodiscard]] const juce::ValueTree& getTrack() const noexcept { return track_; }
     void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
+    /** A multichannel destination: one peak per channel. */
+    void pushLevels(const float* peaks, int numChannels, double elapsedSeconds);
+    [[nodiscard]] const LevelMeter& getMeter() const noexcept { return meter_; }
+    /** Shown instead of the pan knob when a mono or stereo track feeds a surround bus or master. */
+    [[nodiscard]] SurroundPanner& getSurroundPanner() noexcept { return surround_; }
+    [[nodiscard]] bool isSurroundPanning() const noexcept { return surroundMode_; }
 
     /** Double-clicking the volume or pan value under the fader opens a field to type it
         ("-6", "-inf"; "C", "L20", "R35"). */
@@ -53,7 +60,10 @@ private:
     };
 
     void syncFromModel();
+    void updateSurroundMode();
+    [[nodiscard]] int getDestinationChannels() const;
     void rebuildRouting();
+    void rebuildOutputs();
     void rebuildSends();
     void showSendMenu();
     void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier&) override;
@@ -76,6 +86,9 @@ private:
     std::vector<std::unique_ptr<SendControl>> sends_;
 
     juce::Slider pan_;
+    SurroundPanner surround_;
+    bool surroundMode_ = false;
+    bool panAllowed_ = true;
     juce::TextButton mute_;
     juce::TextButton solo_;
     juce::TextButton phase_;
@@ -97,6 +110,10 @@ public:
     ~MasterStrip() override;
 
     void pushLevels(float peakLeft, float peakRight, double elapsedSeconds);
+    void pushLevels(const float* peaks, int numChannels, double elapsedSeconds);
+    [[nodiscard]] const LevelMeter& getMeter() const noexcept { return meter_; }
+    /** The master's channel format (stereo or surround). */
+    [[nodiscard]] juce::ComboBox& getFormatBox() noexcept { return format_; }
 
     /** Double-clicking the GAIN readout opens a field to type the master volume. */
     void showGainEditor();
@@ -114,6 +131,7 @@ private:
     EditorState& editor_;
     std::function<void()> showDevices_;
     juce::TextButton devices_;
+    juce::ComboBox format_;
     juce::Slider fader_;
     LevelMeter meter_;
     juce::Rectangle<int> scaleArea_;

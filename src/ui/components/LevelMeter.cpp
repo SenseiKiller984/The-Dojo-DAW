@@ -41,7 +41,10 @@ LevelMeter::~LevelMeter()
 
 bool LevelMeter::isClipLit() const noexcept
 {
-    return channels_[0].clipped || channels_[1].clipped;
+    for (int i = 0; i < numChannels_; ++i)
+        if (channels_[static_cast<std::size_t>(i)].clipped)
+            return true;
+    return false;
 }
 
 void LevelMeter::clearAllClipIndicators()
@@ -58,10 +61,21 @@ float LevelMeter::decibelsToProportion(float decibels) noexcept
 void LevelMeter::update(float peakLeft, float peakRight, double elapsedSeconds)
 {
     const std::array<float, 2> peaks{peakLeft, peakRight};
+    update(peaks.data(), 2, elapsedSeconds);
+}
+
+void LevelMeter::update(const float* peaks, int numChannels, double elapsedSeconds)
+{
+    numChannels = juce::jlimit(1, kMaxChannels, numChannels);
     const auto fall = static_cast<float>(kFallRateDbPerSecond * elapsedSeconds);
     bool changed = false;
+    if (numChannels != numChannels_)
+    {
+        numChannels_ = numChannels;
+        changed = true;
+    }
 
-    for (std::size_t i = 0; i < channels_.size(); ++i)
+    for (std::size_t i = 0; i < static_cast<std::size_t>(numChannels_); ++i)
     {
         auto& ch = channels_[i];
         const float peakDb = juce::Decibels::gainToDecibels(peaks[i], kMinDb);
@@ -110,12 +124,15 @@ void LevelMeter::mouseDown(const juce::MouseEvent&)
 void LevelMeter::paint(juce::Graphics& g)
 {
     auto area = getLocalBounds().toFloat();
-    const float gap = 2.0f;
-    const float channelWidth = (area.getWidth() - gap) * 0.5f;
+    const float gap = numChannels_ > 2 ? 1.0f : 2.0f;
+    const auto n = static_cast<float>(numChannels_);
+    const float channelWidth = (area.getWidth() - gap * (n - 1.0f)) / n;
 
-    paintChannel(g, area.removeFromLeft(channelWidth), channels_[0]);
-    area.removeFromLeft(gap);
-    paintChannel(g, area, channels_[1]);
+    for (int i = 0; i < numChannels_; ++i)
+    {
+        paintChannel(g, area.removeFromLeft(channelWidth), channels_[static_cast<std::size_t>(i)]);
+        area.removeFromLeft(gap);
+    }
 }
 
 void LevelMeter::paintChannel(juce::Graphics& g, juce::Rectangle<float> area, const Channel& channel) const

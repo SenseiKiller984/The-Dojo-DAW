@@ -8,7 +8,8 @@ namespace dojo::ui
 {
 
 /**
-    Stereo peak meter with peak-hold and a latching clip indicator.
+    Peak meter (stereo, or one bar per channel of a multichannel signal, up to 8) with peak-hold and
+    latching clip indicators.
 
     Fed once per UI frame with the "max since last frame" peaks published by the engine, so no
     transient is ever missed. Ballistics (instant attack, 24 dB/s fall, 1.2 s hold) are applied here
@@ -23,11 +24,16 @@ public:
     LevelMeter();
     ~LevelMeter() override;
 
+    static constexpr int kMaxChannels = 8;
+
     /** `peakLeft` / `peakRight` are linear; `elapsedSeconds` is the time since the previous update. */
     void update(float peakLeft, float peakRight, double elapsedSeconds);
+    /** One linear peak per channel (`numChannels` bars, 1..8). */
+    void update(const float* peaks, int numChannels, double elapsedSeconds);
+    [[nodiscard]] int getNumChannels() const noexcept { return numChannels_; }
 
     void resetClipIndicators();
-    /** True while the clip indicator of either channel is lit. */
+    /** True while the clip indicator of any channel is lit. */
     [[nodiscard]] bool isClipLit() const noexcept;
     /** Track > Clear All Clip Indicators: every meter in the application. Message thread only. */
     static void clearAllClipIndicators();
@@ -49,7 +55,8 @@ private:
 
     void paintChannel(juce::Graphics& g, juce::Rectangle<float> area, const Channel& channel) const;
 
-    std::array<Channel, 2> channels_;
+    std::array<Channel, kMaxChannels> channels_;
+    int numChannels_ = 2;
 };
 
 } // namespace dojo::ui

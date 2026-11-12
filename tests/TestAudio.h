@@ -51,6 +51,26 @@ inline juce::File writeWav(const juce::File& file, const std::vector<float>& sam
     return file;
 }
 
+/** A WAV with one entry of `channels` per channel (all the same length). */
+inline juce::File writeMultichannelWav(const juce::File& file, const std::vector<std::vector<float>>& channels, double sampleRate)
+{
+    const int numChannels = static_cast<int>(channels.size());
+    juce::AudioBuffer<float> buffer(numChannels, static_cast<int>(channels.front().size()));
+    for (int ch = 0; ch < numChannels; ++ch)
+        std::copy(channels[static_cast<std::size_t>(ch)].begin(), channels[static_cast<std::size_t>(ch)].end(), buffer.getWritePointer(ch));
+
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+    juce::WavAudioFormat wav;
+    auto writer = wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                  .withSampleRate(sampleRate)
+                                                  .withNumChannels(numChannels)
+                                                  .withBitsPerSample(32)
+                                                  .withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
+    if (writer != nullptr)
+        writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+    return file;
+}
+
 /** A WAV with a single impulse of `amplitude` at `frame`. */
 inline juce::File writeImpulse(const juce::File& file, int frame, int length, double sampleRate, float amplitude = 0.5f)
 {

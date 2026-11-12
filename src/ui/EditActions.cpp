@@ -328,7 +328,7 @@ juce::String getName(NewTrackType type)
 
 bool hasFormatChoice(NewTrackType type)
 {
-    return type == NewTrackType::audio || type == NewTrackType::auxInput;
+    return type == NewTrackType::audio || type == NewTrackType::auxInput || type == NewTrackType::folder;
 }
 
 std::vector<juce::ValueTree> addNewTracks(session::Session& session, EditorState& editor, const std::vector<NewTracks>& rows,
@@ -458,7 +458,7 @@ std::vector<juce::ValueTree> getSplittableTracks(const session::Session& session
     std::vector<juce::ValueTree> tracks;
     for (const auto& t : getSelectedTracks(session, editor))
         if (session::track::getKind(t) == session::TrackKind::audio && !session::track::isFolder(t)
-            && session::track::getFormat(t) == session::TrackFormat::stereo)
+            && session::getNumChannels(session::track::getFormat(t)) >= 2)
             tracks.push_back(t);
     return tracks;
 }
@@ -479,18 +479,43 @@ std::vector<juce::ValueTree> splitSelectedIntoMono(session::Project& project, Ed
     {
         auto after = source;
         const int input = session::track::getInput(source);
-        for (int channel = 0; channel < 2; ++channel)
+        const auto layout = session::getLayout(session::track::getFormat(source));
+        const bool hasRears = layout.has(engine::Speaker::leftRear);
+        for (int channel = 0; channel < layout.numChannels; ++channel)
         {
-            const auto name = session.uniqueTrackName(session::track::getName(source) + (channel == 0 ? ".L" : ".R"));
+            // One mono track per speaker ("Name.L", "Name.C", "Name.LFE", ...), placed at that speaker.
+            const auto speaker = layout.speakers[static_cast<std::size_t>(channel)];
+            const auto name = session.uniqueTrackName(session::track::getName(source) + "." + engine::shortName(speaker));
             auto mono = session.duplicateTrack(source, {}, after, name);
             if (!mono.isValid())
                 continue;
             session::track::setFormat(mono, session::TrackFormat::mono, um);
-            session::track::setPan(mono, channel == 0 ? -1.0 : 1.0, um);
+            const int side = engine::sideOf(speaker);
+            session::track::setPan(mono, static_cast<double>(side), um);
+            const double frontRear = speaker == engine::Speaker::leftRear || speaker == engine::Speaker::rightRear ? 1.0
+                                     : speaker == engine::Speaker::leftSurround || speaker == engine::Speaker::rightSurround
+                                         ? (hasRears ? 0.0 : 1.0)
+                                         : -1.0;
+            session::track::setPanFrontRear(mono, frontRear, um);
+            session::track::setPanCentre(mono, speaker == engine::Speaker::centre ? 1.0 : 0.0, um);
             session::track::setInput(mono, input >= 0 ? input + channel : -1, false, um);
+
+            // Each clip plays the file channel that fed this speaker (a clip with none goes).
+            std::vector<juce::ValueTree> silent;
             for (auto c : mono)
-                if (c.hasType(session::ids::clip))
-                    session::clip::setSourceChannel(c, channel, um);
+            {
+                if (!c.hasType(session::ids::clip))
+                    continue;
+                const auto asset = project.getAssets().find(session::clip::getFile(c));
+                const int fileChannels = asset != nullptr ? asset->numChannels : layout.numChannels;
+                const int fileChannel = layout.numChannels == 2 ? channel : session::fileChannelFor(fileChannels, layout, channel);
+                if (fileChannel < 0)
+                    silent.push_back(c);
+                else
+                    session::clip::setSourceChannel(c, fileChannel, um);
+            }
+            for (auto& c : silent)
+                mono.removeChild(c, um);
             after = mono;
             created.push_back(mono);
         }

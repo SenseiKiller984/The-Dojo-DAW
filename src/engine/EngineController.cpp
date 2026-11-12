@@ -124,6 +124,11 @@ StereoPeak EngineController::collectTrackPeak(int slot) noexcept
     return engine_.collectTrackPeak(slot);
 }
 
+ChannelPeaks EngineController::collectTrackPeaks(int slot) noexcept
+{
+    return engine_.collectTrackPeaks(slot);
+}
+
 double EngineController::getSampleRateOr(double fallback) const noexcept
 {
     const double rate = engine_.getSampleRate();

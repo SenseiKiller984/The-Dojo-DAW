@@ -2,6 +2,7 @@
 
 #include "core/Types.h"
 #include "engine/Automation.h"
+#include "engine/ChannelLayout.h"
 
 #include <cstdint>
 #include <memory>
@@ -26,6 +27,11 @@ inline constexpr int kMaxTracks = 256;
 
 /** Longest plug-in delay compensation per track, in samples (~170 ms at 48 kHz). */
 inline constexpr int kMaxCompensationSamples = 8192;
+
+/** Slots that carry up to kMaxChannels (the last ones): tracks that are multichannel themselves or
+    feed a multichannel bus or master. The others are stereo. */
+inline constexpr int kMaxWideSlots = 32;
+inline constexpr int kFirstWideSlot = kMaxTracks - kMaxWideSlots;
 
 enum class TrackKind : std::uint8_t
 {
@@ -66,8 +72,13 @@ struct RenderClip
 
     const float* const* channels = nullptr; ///< in-memory audio (kept alive by RenderGraph::keepAlive)
     const StreamedAudio* streamed = nullptr; ///< or disk-streamed audio
-    int numChannels = 0;                    ///< 1 = mono (played on both sides), 2 = stereo
-    int sourceChannel = -1;                 ///< play only this source channel (on both sides); -1 = all
+    int numChannels = 0;                    ///< source channels (1 = mono, 2 = stereo, up to 8)
+    int sourceChannel = -1;                 ///< play only this source channel (on every output); -1 = all
+
+    /** Which source channel each of the track's channels plays (-1 = none). With numOutputs = 0, the
+        stereo default: a mono source (or sourceChannel) on both sides, otherwise channels 0 and 1. */
+    int numOutputs = 0;
+    std::array<std::int8_t, kMaxChannels> channelMap{};
     SampleCount sourceLength = 0;           ///< frames in the source
     double sourceSampleRate = 48000.0;
 };
@@ -113,6 +124,9 @@ struct RenderDevice
 {
     ProcessorNode* node = nullptr;
     int sidechainSource = -1; ///< graph index of the track whose output feeds the sidechain (-1 = none)
+    /** On a multichannel signal: linked instances for channel groups 1.. (group 0 is `node`); each
+        block they take over `node`'s parameter values and bypass. */
+    std::array<ProcessorNode*, kMaxChannelGroups - 1> companions{};
 };
 
 /** An incoming send, stored on the *receiving* bus (busses pull, so parallel tracks never write to
@@ -123,6 +137,9 @@ struct RenderSend
     double gain = 1.0;
     bool preFader = false;
     AutomationCurve gainAutomation; ///< normalised like volume automation; overrides `gain` when set
+    /** From the source's (pre- or post-fader) channels to the bus's, when they differ. */
+    bool convert = false;
+    ChannelMatrix matrix;
 };
 
 struct RenderTrack
@@ -131,6 +148,19 @@ struct RenderTrack
     int slot = 0;              ///< index into the engine's per-track state, buffers and meters
     TrackKind kind = TrackKind::audio;
     bool mono = false; ///< a mono track: its sources are folded to mono before its devices
+
+    /** The channels the track's sources and devices work in: stereo for mono, stereo and instrument
+        tracks, one per speaker for multichannel tracks. */
+    ChannelLayout layout = ChannelLayout::stereo();
+    /** The channels of its destination (the bus it feeds, or the master): the fader converts to these
+        (surround panner, or by speaker). */
+    ChannelLayout outputLayout = ChannelLayout::stereo();
+    ChannelGroups groups;       ///< device channel groups of `layout`
+    ChannelGroups outputGroups; ///< ... of `outputLayout` (a Master Fader's post-fader devices)
+    double panFrontRear = -1.0; ///< surround panner (see surroundPanMatrix)
+    double panCentre = 0.0;
+    /** Needs a wide slot (layout or outputLayout has more than two channels). */
+    [[nodiscard]] bool isWide() const noexcept { return layout.isMultichannel() || outputLayout.isMultichannel(); }
 
     // Mix
     double volume = 1.0; ///< linear; ignored while volumeAutomation has points
@@ -148,10 +178,12 @@ struct RenderTrack
     std::vector<RenderSend> sends;         ///< bus tracks: incoming sends
     int auxSourceIndex = -1;               ///< bus fed from an instrument's aux outputs (multi-out)
     int auxChannel = 0;                    ///< first aux channel (a stereo pair)
+    ChannelMatrix auxMatrix;               ///< the stereo pair into a multichannel bus
 
     // Inputs
     int inputChannel = -1; ///< first device input channel, -1 = none
     bool inputStereo = true;
+    int inputCount = 0; ///< multichannel tracks: consecutive input channels (one per layout channel)
     MonitorMode monitor = MonitorMode::automatic;
     bool armed = false;
     bool receivesLiveMidi = false;
@@ -210,6 +242,11 @@ struct RenderGraph
     double punchEnd = 1.0e300;        ///< ...to here (the track's clips before and after)
 
     double masterGain = 1.0;
+    /** The master's channels (stereo, or a surround format), its device channel groups, and how it
+        is folded down to stereo for an audio device with fewer outputs. */
+    ChannelLayout masterLayout = ChannelLayout::stereo();
+    ChannelGroups masterGroups;
+    ChannelMatrix masterFoldDown;
     AutomationCurve masterVolumeAutomation;
     std::vector<RenderDevice> masterDevices;
     std::vector<ParameterLane> masterParameterLanes;

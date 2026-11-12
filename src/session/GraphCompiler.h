@@ -58,7 +58,8 @@ public:
     static std::pair<double, double> panGains(double pan) noexcept { return engine::balancePanGains(pan); }
 
 private:
-    int assignSlot(std::uint32_t trackId, std::vector<bool>& used);
+    /** A stable slot for a track; `wide` tracks (multichannel signals) get one of the wide slots. */
+    int assignSlot(std::uint32_t trackId, std::vector<bool>& used, bool wide);
     std::shared_ptr<engine::ClipStretcher> getStretcher(std::uint32_t clipId, int numChannels);
 
     std::map<std::uint32_t, int> slots_;

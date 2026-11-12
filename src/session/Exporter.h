@@ -77,6 +77,9 @@ private:
     {
         int slot = -1; ///< -1 = the mix
         juce::File file;
+        int channels = 2;                ///< channels written (a surround mix or stem has one per speaker)
+        engine::ChannelLayout layout;    ///< the signal's channels (a stem: its track's destination's)
+        bool foldDown = false;           ///< a surround stem into a stereo-only format (MP3)
         std::unique_ptr<juce::AudioFormatWriter> writer;          // offline
         std::shared_ptr<engine::CaptureStream> stream;             // real-time
     };

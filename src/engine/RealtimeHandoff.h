@@ -97,6 +97,8 @@ public:
         before capturing starts. */
     void skipFirstFrames(std::uint64_t frames) noexcept { skip_ = frames; }
 
+    [[nodiscard]] int getNumChannels() const noexcept { return numChannels_; }
+
     /** Frames dropped because the disk thread fell behind (should stay 0). */
     [[nodiscard]] std::uint64_t getOverflowCount() const noexcept { return overflow_.load(); }
     [[nodiscard]] std::uint64_t getFramesWritten() const noexcept { return framesWritten_; }

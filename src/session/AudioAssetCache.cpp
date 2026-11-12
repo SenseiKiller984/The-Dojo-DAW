@@ -257,7 +257,7 @@ AudioAssetCache::DecodeResult AudioAssetCache::decode(juce::AudioFormatManager& 
     auto asset = std::make_shared<AudioAsset>();
     asset->file = file;
     asset->sampleRate = reader->sampleRate;
-    asset->numChannels = reader->numChannels > 1 ? 2 : 1;
+    asset->numChannels = std::clamp(static_cast<int>(reader->numChannels), 1, engine::kMaxChannels);
     asset->numFrames = reader->lengthInSamples;
 
     const double duration = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;

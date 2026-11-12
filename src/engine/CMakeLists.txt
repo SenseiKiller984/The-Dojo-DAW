@@ -1,6 +1,8 @@
 add_library(dojo_engine STATIC
     AudioEngine.cpp
     AudioEngine.h
+    ChannelLayout.cpp
+    ChannelLayout.h
     Automation.cpp
     Automation.h
     Capture.h

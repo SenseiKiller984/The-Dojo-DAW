@@ -104,18 +104,27 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
     targets_.clear();
     juce::String error;
 
-    const auto add = [&](int slot, const juce::File& file) -> bool
+    // Surround mixes and stems keep their channels (one per speaker, in the format's order), except
+    // in MP3, which is stereo: there they are folded down.
+    const bool stereoOnly = settings_.format == ExportSettings::Format::mp3;
+    const auto& session = project_.getSession();
+    const auto layoutOf = [](TrackFormat format) { return isMultichannel(format) ? getLayout(format) : engine::ChannelLayout::stereo(); };
+
+    const auto add = [&](int slot, const juce::File& file, const engine::ChannelLayout& layout) -> bool
     {
         Target target;
         target.slot = slot;
         target.file = file;
-        auto writer = createWriter(file, settings_, sampleRate, 2, error);
+        target.layout = layout;
+        target.channels = stereoOnly ? 2 : layout.numChannels;
+        target.foldDown = layout.numChannels > target.channels;
+        auto writer = createWriter(file, settings_, sampleRate, target.channels, error);
         if (writer == nullptr)
             return false;
 
         if (forStreams)
         {
-            target.stream = std::make_shared<engine::CaptureStream>(std::move(writer), 2, sampleRate, 10.0);
+            target.stream = std::make_shared<engine::CaptureStream>(std::move(writer), target.channels, sampleRate, 10.0);
             target.stream->skipFirstFrames(static_cast<std::uint64_t>(slot < 0 ? latency_ : stemLatency_));
         }
         else
@@ -126,7 +135,7 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         return true;
     };
 
-    if (settings_.includeMix && !add(-1, settings_.destination))
+    if (settings_.includeMix && !add(-1, settings_.destination, layoutOf(session.getMasterFormat())))
         return error;
 
     if (settings_.includeStems)
@@ -134,7 +143,9 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         for (const auto& t : project_.getSession().getAllTracks())
         {
             const int slot = project_.getCompiler().getSlot(track::getId(t));
-            if (slot >= 0 && !add(slot, getStemFile(settings_, track::getName(t))))
+            const auto destination = session.getDestination(t);
+            const auto layout = layoutOf(destination.isValid() ? track::getFormat(destination) : session.getMasterFormat());
+            if (slot >= 0 && !add(slot, getStemFile(settings_, track::getName(t)), layout))
                 return error;
         }
     }
@@ -267,14 +278,19 @@ void Exporter::run()
     const auto totalFrames = outputFrames + latency_;
     const int block = std::min(kOfflineBlock, engine.getMaximumBlockSize());
 
-    juce::AudioBuffer<float> mix(2, block);
-    juce::AudioBuffer<float> stem(2, block);
-    float* outputs[2] = {mix.getWritePointer(0), mix.getWritePointer(1)};
+    // The mix: as many outputs as the file has channels (the engine folds a surround master down
+    // when there are fewer).
+    int mixChannels = 2;
+    for (const auto& target : targets_)
+        if (target.slot < 0)
+            mixChannels = target.channels;
+    juce::AudioBuffer<float> mix(mixChannels, block);
+    juce::AudioBuffer<float> stem(engine::kMaxChannels, block);
 
     for (juce::int64 rendered = 0; rendered < totalFrames && !threadShouldExit(); rendered += block)
     {
         const int n = static_cast<int>(std::min<juce::int64>(block, totalFrames - rendered));
-        engine.renderOffline(outputs, 2, n);
+        engine.renderOffline(mix.getArrayOfWritePointers(), mixChannels, n);
 
         for (auto& target : targets_)
         {
@@ -289,18 +305,36 @@ void Exporter::run()
             {
                 if (target.slot < 0)
                 {
-                    const float* channels[2] = {mix.getReadPointer(0, skip), mix.getReadPointer(1, skip)};
-                    if (!target.writer->writeFromFloatArrays(channels, 2, count))
+                    std::array<const float*, engine::kMaxChannels> channels{};
+                    for (int ch = 0; ch < mixChannels; ++ch)
+                        channels[static_cast<std::size_t>(ch)] = mix.getReadPointer(ch, skip);
+                    if (!target.writer->writeFromFloatArrays(channels.data(), mixChannels, count))
                         failed_ = true;
                 }
                 else
                 {
+                    // A stem is the track's output: its destination's channels (or their fold-down).
                     const auto& source = engine.getSlotOutput(target.slot);
-                    for (int ch = 0; ch < 2; ++ch)
+                    const auto fold = engine::conversionMatrix(target.layout, engine::ChannelLayout::stereo());
+                    for (int ch = 0; ch < target.channels; ++ch)
                         for (int i = 0; i < count; ++i)
-                            stem.setSample(ch, i, static_cast<float>(source.getSample(ch, skip + i)));
-                    const float* channels[2] = {stem.getReadPointer(0), stem.getReadPointer(1)};
-                    if (!target.writer->writeFromFloatArrays(channels, 2, count))
+                        {
+                            double value = 0.0;
+                            if (target.foldDown)
+                            {
+                                for (int in = 0; in < std::min(target.layout.numChannels, source.getNumChannels()); ++in)
+                                    value += fold.gain[static_cast<std::size_t>(ch)][static_cast<std::size_t>(in)] * source.getSample(in, skip + i);
+                            }
+                            else if (ch < source.getNumChannels())
+                            {
+                                value = source.getSample(ch, skip + i);
+                            }
+                            stem.setSample(ch, i, static_cast<float>(value));
+                        }
+                    std::array<const float*, engine::kMaxChannels> channels{};
+                    for (int ch = 0; ch < target.channels; ++ch)
+                        channels[static_cast<std::size_t>(ch)] = stem.getReadPointer(ch);
+                    if (!target.writer->writeFromFloatArrays(channels.data(), target.channels, count))
                         failed_ = true;
                 }
             }

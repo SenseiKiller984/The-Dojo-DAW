@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/ChannelLayout.h"
+
 #include "engine/dsp/ClipStretcher.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -21,8 +23,8 @@ struct WaveformPeaks
     static constexpr int kFramesPerBucket = 256;
 
     int numChannels = 0;
-    std::array<std::vector<float>, 2> minimum;
-    std::array<std::vector<float>, 2> maximum;
+    std::array<std::vector<float>, engine::kMaxChannels> minimum;
+    std::array<std::vector<float>, engine::kMaxChannels> maximum;
 
     [[nodiscard]] int getNumBuckets() const noexcept { return static_cast<int>(minimum[0].size()); }
 };

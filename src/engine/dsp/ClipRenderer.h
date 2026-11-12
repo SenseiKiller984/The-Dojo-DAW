@@ -7,7 +7,8 @@ namespace dojo::engine::dsp
 {
 
 /**
-    Adds the part of `clip` that falls inside one block into a stereo 64-bit buffer.
+    Adds the part of `clip` that falls inside one block into a 64-bit buffer of `numOutputs` channels
+    (output o plays the source channel clip.channelMap[o]; see RenderClip::numOutputs).
 
     - `blockStartSeconds` is the timeline time of the block's first sample; `secondsPerSample` is the
       timeline time per output sample (1/sampleRate, scaled by the global varispeed).
@@ -19,6 +20,10 @@ namespace dojo::engine::dsp
 
     Returns true if any sample of the clip was rendered. Real-time safe: no allocation, no locks.
 */
+bool renderClip(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int numSamples,
+                Sample* const* outputs, int numOutputs) noexcept;
+
+/** The same into a stereo pair. */
 bool renderClip(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int numSamples,
                 Sample* left, Sample* right) noexcept;
 

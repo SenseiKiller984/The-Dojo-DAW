@@ -67,8 +67,10 @@ ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce:
             session::track::setInput(track_, -1, true, &session_.getUndoManager());
         else if (id < 1000)
             session::track::setInput(track_, id - 2, false, &session_.getUndoManager());
-        else
+        else if (id < 2000)
             session::track::setInput(track_, id - 1000, true, &session_.getUndoManager());
+        else // a multichannel track: as many inputs as it has channels, from this one
+            session::track::setInput(track_, id - 2000, true, &session_.getUndoManager());
     };
     input_.setVisible(kind == session::TrackKind::audio);
     addChildComponent(input_);
@@ -186,6 +188,27 @@ ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce:
          std::initializer_list<juce::Component*>{&pan_, &mute_, &solo_, &phase_, &fader_, &meter_})
         addAndMakeVisible(child);
 
+    // Surround: left/right is the pan, front/rear and the centre amount are the track's surround
+    // position. One drag is one undo step.
+    surround_.onDragStart = [this] { session_.beginTransaction("Surround Pan"); };
+    surround_.onMove = [this](double pan, double frontRear)
+    {
+        session::track::setPan(track_, pan, &session_.getUndoManager());
+        session::track::setPanFrontRear(track_, frontRear, &session_.getUndoManager());
+    };
+    surround_.onCentreChange = [this](double centre)
+    {
+        session_.beginTransaction("Surround Centre");
+        session::track::setPanCentre(track_, centre, &session_.getUndoManager());
+    };
+    surround_.onReset = [this]
+    {
+        session_.beginTransaction("Reset Surround Pan");
+        session::track::setPan(track_, 0.0, &session_.getUndoManager());
+        session::track::setPanFrontRear(track_, -1.0, &session_.getUndoManager());
+    };
+    addChildComponent(surround_);
+
     rebuildRouting();
     rebuildSends();
 
@@ -195,6 +218,7 @@ ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce:
     {
         for (auto* c : std::initializer_list<juce::Component*>{&output_, &addSend_, &pan_, &phase_, &meter_})
             c->setVisible(false);
+        panAllowed_ = false;
         for (auto& control : sends_)
             control->level.setVisible(false);
         if (kind != session::TrackKind::masterFader)
@@ -225,10 +249,29 @@ ChannelStrip::~ChannelStrip()
 
 void ChannelStrip::rebuildRouting()
 {
-    // Inputs: none, each channel (mono), each pair (stereo).
+    // Inputs: none, each channel (mono), each pair (stereo); a multichannel track takes as many
+    // consecutive inputs as it has channels.
     input_.clear(juce::dontSendNotification);
     input_.addItem("No input", 1);
     const auto names = inputNames_ ? inputNames_() : juce::StringArray();
+    const auto format = session::track::getFormat(track_);
+    const int in = session::track::getInput(track_);
+    if (session::isMultichannel(format))
+    {
+        const int n = session::getNumChannels(format);
+        for (int ch = 0; ch + n <= std::max(names.size(), n); ch += n)
+            input_.addItem("In " + juce::String(ch + 1) + "-" + juce::String(ch + n) + " (" + session::getDisplayName(format) + ")"
+                               + (names.size() < ch + n ? " (not on this device)" : ""),
+                           2000 + ch);
+        input_.setSelectedId(in < 0 ? 1 : 2000 + in, juce::dontSendNotification);
+        if (in >= 0 && input_.getSelectedId() != 2000 + in)
+        {
+            input_.addItem("In " + juce::String(in + 1) + "-" + juce::String(in + n), 2000 + in);
+            input_.setSelectedId(2000 + in, juce::dontSendNotification);
+        }
+        rebuildOutputs();
+        return;
+    }
     for (int ch = 0; ch < names.size(); ++ch)
         input_.addItem("In " + juce::String(ch + 1) + " (" + names[ch] + ")", ch + 2);
     for (int ch = 0; ch + 1 < names.size(); ch += 2)
@@ -236,8 +279,12 @@ void ChannelStrip::rebuildRouting()
     if (names.isEmpty())
         input_.addItem("In 1/2 (no device inputs)", 1000);
 
-    const int in = session::track::getInput(track_);
     input_.setSelectedId(in < 0 ? 1 : (session::track::isInputStereo(track_) ? 1000 + in : in + 2), juce::dontSendNotification);
+    rebuildOutputs();
+}
+
+void ChannelStrip::rebuildOutputs()
+{
 
     // Outputs: the default (folder or master) and every bus that would not create a loop.
     output_.clear(juce::dontSendNotification);
@@ -339,8 +386,35 @@ void ChannelStrip::valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTre
         syncFromModel();
 }
 
+int ChannelStrip::getDestinationChannels() const
+{
+    const auto destination = session_.getDestination(track_);
+    return destination.isValid() ? session::getNumChannels(session::track::getFormat(destination))
+                                 : session::getNumChannels(session_.getMasterFormat());
+}
+
+void ChannelStrip::updateSurroundMode()
+{
+    // A mono or stereo signal into a surround destination is placed with the surround panner; a
+    // multichannel track keeps the pan knob (as a balance).
+    const bool surround = panAllowed_ && getDestinationChannels() > 2 && !session::isMultichannel(session::track::getFormat(track_));
+    if (surround)
+    {
+        const auto destination = session_.getDestination(track_);
+        surround_.setLayout(session::getLayout(destination.isValid() ? session::track::getFormat(destination) : session_.getMasterFormat()));
+    }
+    if (surround == surroundMode_ && surround_.isVisible() == surround)
+        return;
+    surroundMode_ = surround;
+    surround_.setVisible(surround);
+    pan_.setVisible(panAllowed_ && !surround);
+    resized();
+}
+
 void ChannelStrip::syncFromModel()
 {
+    updateSurroundMode();
+    surround_.setPosition(session::track::getPan(track_), session::track::getPanFrontRear(track_), session::track::getPanCentre(track_));
     arm_.setToggleState(session::track::isArmed(track_), juce::dontSendNotification);
     const auto monitor = session::track::getMonitor(track_);
     monitor_.setButtonText(monitor == engine::MonitorMode::off ? "OFF" : monitor == engine::MonitorMode::always ? "IN" : "AUTO");
@@ -362,8 +436,11 @@ void ChannelStrip::syncFromModel()
 
 void ChannelStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property)
 {
-    if (tree == track_ && (property == session::ids::output || property == session::ids::input || property == session::ids::inputStereo))
+    if (tree == track_ && (property == session::ids::output || property == session::ids::input || property == session::ids::inputStereo
+                           || property == session::ids::format))
         rebuildRouting();
+    if (property == session::ids::masterFormat || property == session::ids::format || property == session::ids::output)
+        updateSurroundMode(); // (this track's destination, or its format, may have changed)
     if (tree == track_ || tree.getParent() == track_ || property == session::ids::active) // (a folder around it)
         syncFromModel();
     else if (tree.hasType(session::ids::track) && property == session::ids::name)
@@ -373,6 +450,11 @@ void ChannelStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::I
 void ChannelStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
 {
     meter_.update(peakLeft, peakRight, elapsedSeconds);
+}
+
+void ChannelStrip::pushLevels(const float* peaks, int numChannels, double elapsedSeconds)
+{
+    meter_.update(peaks, numChannels, elapsedSeconds);
 }
 
 void ChannelStrip::showVolumeEditor()
@@ -471,7 +553,10 @@ void ChannelStrip::resized()
     devices_.setBounds(sendRow);
     area.removeFromTop(2);
 
-    pan_.setBounds(area.removeFromTop(34).withSizeKeepingCentre(30, 30));
+    if (surroundMode_)
+        surround_.setBounds(area.removeFromTop(58).reduced(2, 0));
+    else
+        pan_.setBounds(area.removeFromTop(34).withSizeKeepingCentre(30, 30));
 
     auto buttons = area.removeFromTop(20);
     const int buttonWidth = (buttons.getWidth() - 3 * 2) / (arm_.isVisible() ? 4 : 3);
@@ -493,7 +578,7 @@ void ChannelStrip::resized()
     volumeArea_ = readoutArea_.withWidth(readoutArea_.getWidth() / 2);
     panArea_ = readoutArea_.withTrimmedLeft(volumeArea_.getWidth());
     area.removeFromBottom(2);
-    meter_.setBounds(area.removeFromRight(14));
+    meter_.setBounds(area.removeFromRight(getDestinationChannels() > 2 ? 28 : 14)); // a bar per channel
     area.removeFromRight(2);
     fader_.setBounds(area);
 }
@@ -564,6 +649,25 @@ MasterStrip::MasterStrip(session::Session& session, EditorState& editor, std::fu
     };
     addAndMakeVisible(devices_);
 
+    // The master's format: stereo, or a surround format (tracks are panned and converted into it;
+    // the audio device gets one output per channel, or a stereo fold-down).
+    const auto formats = session::getAllTrackFormats();
+    for (std::size_t i = 1; i < formats.size(); ++i) // (never mono)
+        format_.addItem(session::getDisplayName(formats[i]), static_cast<int>(i) + 1);
+    format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
+    format_.setTooltip("Master format: stereo or surround. With fewer device outputs than channels you hear a stereo fold-down.");
+    format_.setWantsKeyboardFocus(false);
+    format_.onChange = [this]
+    {
+        const auto all = session::getAllTrackFormats();
+        const int index = format_.getSelectedId() - 1;
+        if (index < 1 || index >= static_cast<int>(all.size()) || all[static_cast<std::size_t>(index)] == session_.getMasterFormat())
+            return;
+        session_.beginTransaction("Master Format");
+        session_.setMasterFormat(all[static_cast<std::size_t>(index)]);
+    };
+    addAndMakeVisible(format_);
+
     configureFader(fader_);
     fader_.setTooltip("Master volume. Double-click to reset to 0 dB.");
     fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
@@ -601,18 +705,34 @@ void MasterStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Id
         fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
         repaint(readoutArea_);
     }
+    if (tree == session_.getState() && property == session::ids::masterFormat)
+    {
+        format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
+        resized();
+    }
 }
 
 void MasterStrip::valueTreeRedirected(juce::ValueTree&)
 {
     fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
+    format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
+    resized();
 }
 
 void MasterStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
 {
-    meter_.update(peakLeft, peakRight, elapsedSeconds);
+    const std::array<float, 2> peaks{peakLeft, peakRight};
+    pushLevels(peaks.data(), 2, elapsedSeconds);
+}
 
-    const float peakDb = juce::Decibels::gainToDecibels(juce::jmax(peakLeft, peakRight), LevelMeter::kMinDb);
+void MasterStrip::pushLevels(const float* peaks, int numChannels, double elapsedSeconds)
+{
+    meter_.update(peaks, numChannels, elapsedSeconds);
+
+    float loudest = 0.0f;
+    for (int ch = 0; ch < numChannels; ++ch)
+        loudest = juce::jmax(loudest, peaks[ch]);
+    const float peakDb = juce::Decibels::gainToDecibels(loudest, LevelMeter::kMinDb);
     peakHoldAge_ += elapsedSeconds;
 
     if (peakDb >= heldPeakDb_ || peakHoldAge_ > kPeakReadoutHoldSeconds)
@@ -631,11 +751,14 @@ void MasterStrip::resized()
     area.removeFromTop(26);
     devices_.setBounds(area.removeFromTop(22));
     area.removeFromTop(4);
+    format_.setBounds(area.removeFromTop(22));
+    area.removeFromTop(4);
     readoutArea_ = area.removeFromBottom(40);
     gainArea_ = readoutArea_.withWidth(readoutArea_.getWidth() / 2).reduced(2, 4);
     area.removeFromBottom(6);
 
-    meter_.setBounds(area.removeFromRight(22));
+    // A surround master meters every channel: a wider meter.
+    meter_.setBounds(area.removeFromRight(session::isMultichannel(session_.getMasterFormat()) ? 44 : 22));
     scaleArea_ = area.removeFromRight(26);
     fader_.setBounds(area);
 }
@@ -796,13 +919,25 @@ void MixerPanel::valueTreeChildOrderChanged(juce::ValueTree& parent, int, int)
 
 void MixerPanel::updateMeters(const engine::TelemetrySnapshot& telemetry, double elapsedSeconds)
 {
-    master_.pushLevels(telemetry.masterPeakLeft, telemetry.masterPeakRight, elapsedSeconds);
+    if (telemetry.masterChannels > 2)
+        master_.pushLevels(telemetry.masterPeaks.data(), telemetry.masterChannels, elapsedSeconds);
+    else
+        master_.pushLevels(telemetry.masterPeakLeft, telemetry.masterPeakRight, elapsedSeconds);
 
+    // A strip meters what the track sends on: its destination's channels (a bus or the master).
+    const auto& session = project_.getSession();
+    const auto masterChannels = session::getNumChannels(session.getMasterFormat());
     for (auto& strip : strips_)
     {
-        const int slot = project_.getCompiler().getSlot(session::track::getId(strip->getTrack()));
-        const auto peak = slot >= 0 ? controller_.collectTrackPeak(slot) : engine::StereoPeak{};
-        strip->pushLevels(peak.left, peak.right, elapsedSeconds);
+        const auto& t = strip->getTrack();
+        const int slot = project_.getCompiler().getSlot(session::track::getId(t));
+        const auto destination = session.getDestination(t);
+        const int channels = destination.isValid() ? std::max(2, session::getNumChannels(session::track::getFormat(destination))) : masterChannels;
+        const auto peaks = slot >= 0 ? controller_.collectTrackPeaks(slot) : engine::ChannelPeaks{};
+        if (channels > 2)
+            strip->pushLevels(peaks.peak.data(), channels, elapsedSeconds);
+        else
+            strip->pushLevels(peaks.peak[0], peaks.peak[1], elapsedSeconds);
     }
 }
 

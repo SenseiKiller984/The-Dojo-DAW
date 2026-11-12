@@ -35,10 +35,40 @@ inline double interpolate(const float* data, SampleCount length, double position
     return (((a * fraction) - bNeg) * fraction + c) * fraction + x0;
 }
 
-bool renderStretchedClip(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int first,
-                         int last, Sample* left, Sample* right) noexcept
+/** Output channel -> source channel (-1 = silent) for one render call. */
+struct Routing
 {
-    return clip.stretcher->render(clip, blockStartSeconds, secondsPerSample, first, last, left, right);
+    int numOutputs = 0;
+    std::array<int, kMaxChannels> sourceOf{};
+    std::array<bool, kMaxChannels> needed{}; ///< source channels any output plays
+};
+
+Routing routingOf(const RenderClip& clip, int numOutputs) noexcept
+{
+    Routing r;
+    r.numOutputs = std::clamp(numOutputs, 0, kMaxChannels);
+    const int last = std::max(0, std::min(clip.numChannels, kMaxChannels) - 1);
+    if (clip.numOutputs > 0)
+    {
+        for (int o = 0; o < r.numOutputs; ++o)
+        {
+            const int source = o < clip.numOutputs ? clip.channelMap[static_cast<std::size_t>(o)] : -1;
+            r.sourceOf[static_cast<std::size_t>(o)] = source < 0 ? -1 : std::min(static_cast<int>(source), last);
+        }
+    }
+    else
+    {
+        // Stereo default: one chosen channel on both sides, a mono source on both, else 0 and 1.
+        const int chosen = clip.sourceChannel >= 0 ? std::min(clip.sourceChannel, last) : -1;
+        for (int o = 0; o < r.numOutputs; ++o)
+            r.sourceOf[static_cast<std::size_t>(o)] = o == 0 ? (chosen >= 0 ? chosen : 0)
+                                                    : o == 1 ? (chosen >= 0 ? chosen : std::min(1, last))
+                                                             : -1;
+    }
+    for (int o = 0; o < r.numOutputs; ++o)
+        if (const int source = r.sourceOf[static_cast<std::size_t>(o)]; source >= 0)
+            r.needed[static_cast<std::size_t>(source)] = true;
+    return r;
 }
 
 inline double streamedSampleAt(const StreamedAudio& audio, int channel, SampleCount index) noexcept
@@ -66,24 +96,26 @@ double interpolateStreamed(const StreamedAudio& audio, int channel, double posit
 }
 
 bool renderStreamedClip(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int first,
-                        int last, Sample* left, Sample* right) noexcept
+                        int last, Sample* const* outputs, const Routing& routing) noexcept
 {
     const auto& audio = *clip.streamed;
     const double stretch = clip.stretch > 0.0 ? clip.stretch : 1.0;
     const double sourceStep = secondsPerSample / stretch * clip.sourceSampleRate;
     const double firstTimeInClip = blockStartSeconds + first * secondsPerSample - clip.startSeconds;
     const double firstSourcePosition = (clip.sourceOffsetSeconds + firstTimeInClip / stretch) * clip.sourceSampleRate;
-    const int leftChannel = clip.sourceChannel >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : 0;
-    const bool stereo = clip.sourceChannel < 0 && clip.numChannels > 1;
+    const int numChannels = std::min(clip.numChannels, kMaxChannels);
+    std::array<double, kMaxChannels> value{};
 
     for (int i = first; i < last; ++i)
     {
         const double gain = clip.gain * clipEdgeGain(clip, firstTimeInClip + (i - first) * secondsPerSample);
         const double position = firstSourcePosition + (i - first) * sourceStep;
-        const double l = interpolateStreamed(audio, leftChannel, position);
-        const double r = stereo ? interpolateStreamed(audio, 1, position) : l;
-        left[i] += l * gain;
-        right[i] += r * gain;
+        for (int c = 0; c < numChannels; ++c)
+            if (routing.needed[static_cast<std::size_t>(c)])
+                value[static_cast<std::size_t>(c)] = interpolateStreamed(audio, c, position);
+        for (int o = 0; o < routing.numOutputs; ++o)
+            if (const int source = routing.sourceOf[static_cast<std::size_t>(o)]; source >= 0)
+                outputs[o][i] += value[static_cast<std::size_t>(source)] * gain;
     }
 
     return true;
@@ -118,7 +150,14 @@ double clipEdgeGain(const RenderClip& clip, double timeInClip) noexcept
 bool renderClip(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int numSamples,
                 Sample* left, Sample* right) noexcept
 {
-    if (secondsPerSample <= 0.0 || numSamples <= 0 || clip.sourceLength <= 0 || clip.numChannels <= 0)
+    Sample* outputs[2] = {left, right};
+    return renderClip(clip, blockStartSeconds, secondsPerSample, numSamples, outputs, 2);
+}
+
+bool renderClip(const RenderClip& clip, double blockStartSeconds, double secondsPerSample, int numSamples,
+                Sample* const* outputs, int numOutputs) noexcept
+{
+    if (secondsPerSample <= 0.0 || numSamples <= 0 || clip.sourceLength <= 0 || clip.numChannels <= 0 || numOutputs <= 0)
         return false;
 
     // Which samples of this block lie inside [start, end)?
@@ -130,20 +169,18 @@ bool renderClip(const RenderClip& clip, double blockStartSeconds, double seconds
     if (first >= last)
         return false;
 
+    const auto routing = routingOf(clip, numOutputs);
+
     if (clip.stretcher != nullptr)
-        return renderStretchedClip(clip, blockStartSeconds, secondsPerSample, first, last, left, right);
+        return clip.stretcher->render(clip, blockStartSeconds, secondsPerSample, first, last, outputs, routing.sourceOf.data(),
+                                      routing.numOutputs);
 
     if (clip.channels == nullptr)
-        return clip.streamed != nullptr
-               && renderStreamedClip(clip, blockStartSeconds, secondsPerSample, first, last, left, right);
+        return clip.streamed != nullptr && renderStreamedClip(clip, blockStartSeconds, secondsPerSample, first, last, outputs, routing);
 
     const double stretch = clip.stretch > 0.0 ? clip.stretch : 1.0;
     const double sourceStep = secondsPerSample / stretch * clip.sourceSampleRate;
-
-    // One chosen channel plays on both sides (a track split into mono); otherwise left and right.
-    const int chosen = clip.sourceChannel >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : -1;
-    const float* const sourceLeft = clip.channels[chosen >= 0 ? chosen : 0];
-    const float* const sourceRight = chosen >= 0 ? sourceLeft : (clip.numChannels > 1 ? clip.channels[1] : clip.channels[0]);
+    const int numChannels = std::min(clip.numChannels, kMaxChannels);
 
     const double firstTimeInClip = blockStartSeconds + first * secondsPerSample - clip.startSeconds;
     const double firstSourcePosition = (clip.sourceOffsetSeconds + firstTimeInClip / stretch) * clip.sourceSampleRate;
@@ -151,30 +188,23 @@ bool renderClip(const RenderClip& clip, double blockStartSeconds, double seconds
     // Exact path: same rate and the clip is aligned to whole source samples.
     const double roundedPosition = std::round(firstSourcePosition);
     const bool exact = std::abs(sourceStep - 1.0) < 1.0e-12 && std::abs(firstSourcePosition - roundedPosition) < 1.0e-6;
+    std::array<double, kMaxChannels> value{};
 
     for (int i = first; i < last; ++i)
     {
         const double timeInClip = firstTimeInClip + (i - first) * secondsPerSample;
         const double gain = clip.gain * clipEdgeGain(clip, timeInClip);
+        const auto index = static_cast<SampleCount>(roundedPosition) + (i - first);
+        const double position = firstSourcePosition + (i - first) * sourceStep;
 
-        double l = 0.0;
-        double r = 0.0;
+        for (int c = 0; c < numChannels; ++c)
+            if (routing.needed[static_cast<std::size_t>(c)])
+                value[static_cast<std::size_t>(c)] = exact ? sampleAt(clip.channels[c], clip.sourceLength, index)
+                                                           : interpolate(clip.channels[c], clip.sourceLength, position);
 
-        if (exact)
-        {
-            const auto index = static_cast<SampleCount>(roundedPosition) + (i - first);
-            l = sampleAt(sourceLeft, clip.sourceLength, index);
-            r = sampleAt(sourceRight, clip.sourceLength, index);
-        }
-        else
-        {
-            const double position = firstSourcePosition + (i - first) * sourceStep;
-            l = interpolate(sourceLeft, clip.sourceLength, position);
-            r = sourceRight == sourceLeft ? l : interpolate(sourceRight, clip.sourceLength, position);
-        }
-
-        left[i] += l * gain;
-        right[i] += r * gain;
+        for (int o = 0; o < routing.numOutputs; ++o)
+            if (const int source = routing.sourceOf[static_cast<std::size_t>(o)]; source >= 0)
+                outputs[o][i] += value[static_cast<std::size_t>(source)] * gain;
     }
 
     return true;

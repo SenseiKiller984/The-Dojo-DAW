@@ -107,17 +107,89 @@ juce::String toString(TrackKind kind)
 
 juce::String toString(TrackFormat format)
 {
-    return format == TrackFormat::mono ? "mono" : "stereo";
+    switch (format)
+    {
+    case TrackFormat::mono:         return "mono";
+    case TrackFormat::lcrLfe:       return "3.1";
+    case TrackFormat::surround51:   return "5.1";
+    case TrackFormat::surround71:   return "7.1";
+    case TrackFormat::dolbyDigital: return "dolbyDigital";
+    case TrackFormat::dts:          return "dts";
+    case TrackFormat::stereo:       break;
+    }
+    return "stereo";
 }
 
 TrackFormat trackFormatFromString(const juce::String& text)
 {
-    return text == "mono" ? TrackFormat::mono : TrackFormat::stereo;
+    for (const auto format : getAllTrackFormats())
+        if (text == toString(format))
+            return format;
+    return TrackFormat::stereo;
+}
+
+juce::String getDisplayName(TrackFormat format)
+{
+    switch (format)
+    {
+    case TrackFormat::mono:         return "Mono";
+    case TrackFormat::lcrLfe:       return "3.1";
+    case TrackFormat::surround51:   return "5.1";
+    case TrackFormat::surround71:   return "7.1";
+    case TrackFormat::dolbyDigital: return "Dolby Digital 5.1";
+    case TrackFormat::dts:          return "DTS 5.1";
+    case TrackFormat::stereo:       break;
+    }
+    return "Stereo";
 }
 
 int getNumChannels(TrackFormat format)
 {
-    return format == TrackFormat::mono ? 1 : 2;
+    return getLayout(format).numChannels;
+}
+
+int fileChannelFor(int fileChannels, const engine::ChannelLayout& track, int trackChannel)
+{
+    if (fileChannels <= 0 || trackChannel < 0 || trackChannel >= track.numChannels)
+        return -1;
+    const auto speaker = track.speakers[static_cast<std::size_t>(trackChannel)];
+    if (fileChannels == 1)
+    {
+        const bool toCentre = track.has(engine::Speaker::centre);
+        return (toCentre ? speaker == engine::Speaker::centre : (speaker == engine::Speaker::left || speaker == engine::Speaker::right)) ? 0 : -1;
+    }
+    if (fileChannels == track.numChannels)
+        return trackChannel;
+    switch (fileChannels)
+    {
+    case 2: return engine::ChannelLayout::stereo().indexOf(speaker);
+    case 4: return engine::ChannelLayout::lcrLfe().indexOf(speaker);
+    case 6: return engine::ChannelLayout::surround51().indexOf(speaker);
+    case 8: return engine::ChannelLayout::surround71().indexOf(speaker);
+    default: break;
+    }
+    return trackChannel < fileChannels ? trackChannel : -1;
+}
+
+std::vector<TrackFormat> getAllTrackFormats()
+{
+    return {TrackFormat::mono,       TrackFormat::stereo,       TrackFormat::lcrLfe, TrackFormat::surround51,
+            TrackFormat::surround71, TrackFormat::dolbyDigital, TrackFormat::dts};
+}
+
+engine::ChannelLayout getLayout(TrackFormat format)
+{
+    switch (format)
+    {
+    case TrackFormat::mono:         return engine::ChannelLayout::mono();
+    case TrackFormat::lcrLfe:       return engine::ChannelLayout::lcrLfe();
+    case TrackFormat::surround51:   return engine::ChannelLayout::surround51();
+    case TrackFormat::surround71:   return engine::ChannelLayout::surround71();
+    case TrackFormat::dolbyDigital: return engine::ChannelLayout::dolbyDigital();
+    case TrackFormat::dts:          return engine::ChannelLayout::dts();
+    case TrackFormat::stereo:       break;
+    }
+    return engine::ChannelLayout::stereo();
 }
 
 TrackKind trackKindFromString(const juce::String& text)
@@ -186,6 +258,8 @@ TrackFormat getFormat(const juce::ValueTree& t)
         return TrackFormat::stereo;
     return trackFormatFromString(t.getProperty(ids::format, "stereo").toString());
 }
+double getPanFrontRear(const juce::ValueTree& t) { return t.getProperty(ids::panFrontRear, -1.0); }
+double getPanCentre(const juce::ValueTree& t) { return t.getProperty(ids::panCentre, 0.0); }
 bool isActive(const juce::ValueTree& t) { return t.getProperty(ids::active, true); }
 std::uint32_t getMidiTarget(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::midiTarget, 0))); }
 std::uint32_t getVca(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::vca, 0))); }
@@ -248,6 +322,14 @@ void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um)
 void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um)
 {
     t.setProperty(ids::format, toString(format), um);
+}
+void setPanFrontRear(juce::ValueTree t, double frontRear, juce::UndoManager* um)
+{
+    t.setProperty(ids::panFrontRear, juce::jlimit(-1.0, 1.0, frontRear), um);
+}
+void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um)
+{
+    t.setProperty(ids::panCentre, juce::jlimit(0.0, 1.0, centre), um);
 }
 void setActive(juce::ValueTree t, bool active, juce::UndoManager* um)
 {
@@ -503,6 +585,19 @@ void Session::setLoop(bool enabled, double startSeconds, double endSeconds)
 }
 
 void Session::setLoopEnabled(bool enabled) { state_.setProperty(ids::loopEnabled, enabled, &undo_); }
+
+TrackFormat Session::getMasterFormat() const
+{
+    const auto format = trackFormatFromString(state_.getProperty(ids::masterFormat, "stereo").toString());
+    return format == TrackFormat::mono ? TrackFormat::stereo : format;
+}
+
+void Session::setMasterFormat(TrackFormat format)
+{
+    if (format == TrackFormat::mono)
+        format = TrackFormat::stereo;
+    state_.setProperty(ids::masterFormat, toString(format), &undo_);
+}
 
 bool Session::isPunchInEnabled() const { return state_.getProperty(ids::punchIn, false); }
 bool Session::isPunchOutEnabled() const { return state_.getProperty(ids::punchOut, false); }

@@ -448,7 +448,7 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress('d', juce::ModifierKeys::altModifier | shift);
         break;
     case splitIntoMono:
-        info.setInfo("Split into Mono", "Make a mono track for each channel of the selected stereo tracks", categories::track, 0);
+        info.setInfo("Split into Mono", "Make a mono track for each channel of the selected stereo and multichannel tracks", categories::track, 0);
         info.setActive(!actions::getSplittableTracks(session, editor_).empty());
         break;
     case toggleTrackActive:

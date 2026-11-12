@@ -32,20 +32,24 @@ bool TestToneGenerator::isActive() const noexcept
     return enabled_ || gain_.isSmoothing();
 }
 
-void TestToneGenerator::addTo(juce::AudioBuffer<Sample>& buffer, int numSamples) noexcept
+void TestToneGenerator::addTo(juce::AudioBuffer<Sample>& buffer, int numSamples, int left, int right) noexcept
 {
     if (!isActive())
         return;
 
-    const int numChannels = buffer.getNumChannels();
     auto* const* channels = buffer.getArrayOfWritePointers();
+    const int numChannels = buffer.getNumChannels();
+    Sample* const first = left >= 0 && left < numChannels ? channels[left] : nullptr;
+    Sample* const second = right >= 0 && right < numChannels && right != left ? channels[right] : nullptr;
 
     for (int i = 0; i < numSamples; ++i)
     {
         const double value = std::sin(phase_) * gain_.getNextValue();
 
-        for (int ch = 0; ch < numChannels; ++ch)
-            channels[ch][i] += value;
+        if (first != nullptr)
+            first[i] += value;
+        if (second != nullptr)
+            second[i] += value;
 
         phase_ += phaseIncrement_;
         if (phase_ >= kTwoPi)

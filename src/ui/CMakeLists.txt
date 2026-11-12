@@ -37,6 +37,8 @@ add_library(dojo_ui STATIC
     components/IconButton.h
     components/LevelMeter.cpp
     components/LevelMeter.h
+    components/SurroundPanner.cpp
+    components/SurroundPanner.h
     components/InlineValueEditor.cpp
     components/InlineValueEditor.h
     components/MixerPanel.cpp
