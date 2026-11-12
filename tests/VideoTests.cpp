@@ -1,7 +1,6 @@
 #include "video/FrameServer.h"
 #include "video/MjpegAvi.h"
 #include "video/PlatformDecoders.h"
-#include "video/MediaFoundationReader.h"
 #include "video/VideoSource.h"
 #include "TestAudio.h"
 
@@ -13,21 +12,36 @@ using Catch::Matchers::WithinAbs;
 
 namespace
 {
-/** Frame k of the test videos: a flat colour with red = 12 k (so its number can be read back). */
+/** Frame k of the test videos: its number in binary as five black or white stripes (left = bit 0),
+    which survive any decoder's colour conversion. */
+constexpr int kStripeWidth = 12;
 juce::Image numberedFrame(int k, int width = 64, int height = 48)
 {
     juce::Image image(juce::Image::RGB, width, height, false);
-    image.clear(image.getBounds(), juce::Colour(static_cast<juce::uint8>(12 * k), 80, 160));
+    juce::Graphics g(image);
+    g.fillAll(juce::Colour(0xff406080));
+    for (int bit = 0; bit < 5; ++bit)
+    {
+        g.setColour((k >> bit) & 1 ? juce::Colours::white : juce::Colours::black);
+        g.fillRect(bit * kStripeWidth, 0, kStripeWidth, height);
+    }
     return image;
 }
 
-/** Which frame an image is (from its red), or -1. */
+/** Which frame an image is (from its stripes), or -1. */
 int frameNumberOf(const juce::Image& image)
 {
     if (!image.isValid())
         return -1;
-    const auto colour = image.getPixelAt(image.getWidth() / 2, image.getHeight() / 2);
-    return juce::roundToInt(colour.getRed() / 12.0);
+    const float scale = static_cast<float>(image.getWidth()) / 64.0f; // (thumbnails are smaller)
+    int number = 0;
+    for (int bit = 0; bit < 5; ++bit)
+    {
+        const auto x = static_cast<int>((static_cast<float>(bit * kStripeWidth) + kStripeWidth / 2.0f) * scale);
+        if (image.getPixelAt(x, image.getHeight() / 2).getBrightness() > 0.5f)
+            number |= 1 << bit;
+    }
+    return number;
 }
 
 juce::File writeTestVideo(const juce::File& file, int frames = 10, double frameRate = 10.0)
@@ -114,31 +128,6 @@ TEST_CASE("Media Foundation decodes video files frame by frame (where it can rea
 {
     test::TempFolder temp;
     const auto file = writeTestVideo(temp.dir.getChildFile("count.avi"));
-
-    // What Media Foundation itself delivers: each sample's time and which frame its picture is.
-    {
-        video::mf::Reader reader;
-        std::string message;
-        if (reader.open(file.getFullPathName().toWideCharPointer(), message))
-        {
-            const auto dump = [&](const char* what)
-            {
-                std::vector<std::uint8_t> pixels;
-                int width = 0;
-                int height = 0;
-                double time = 0.0;
-                for (int k = 0; k < 6 && reader.readNext(pixels, width, height, time); ++k)
-                {
-                    const auto centre = (static_cast<std::size_t>(height / 2) * static_cast<std::size_t>(width) + static_cast<std::size_t>(width / 2)) * 4;
-                    WARN(what << " sample " << k << ": time " << time << " s, picture of frame "
-                              << juce::roundToInt(pixels[centre + 2] / 12.0));
-                }
-            };
-            dump("from the start,");
-            reader.seek(0.35);
-            dump("after seeking to 0.35 s,");
-        }
-    }
 
     juce::String error;
     auto source = video::openWithMediaFoundation(file, error);
