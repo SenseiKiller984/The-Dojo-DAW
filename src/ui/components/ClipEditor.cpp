@@ -14,6 +14,7 @@ constexpr int kKeyboardWidth = 56;
 constexpr int kRulerHeight = 18;
 constexpr int kLaneHeight = 80;
 constexpr int kToolbarHeight = 30;
+constexpr int kScrollBarSize = 12;
 constexpr float kResizeGrab = 6.0f;
 
 bool isBlackKey(int pitch)
@@ -34,18 +35,74 @@ PianoRoll::PianoRoll(session::Session& session, EditorState& editor)
 {
     setWantsKeyboardFocus(true);
     setOpaque(true);
+    for (auto* bar : {&hScroll_, &vScroll_})
+    {
+        bar->setAutoHide(false);
+        bar->addListener(this);
+        addAndMakeVisible(bar);
+    }
 }
 
 PianoRoll::~PianoRoll()
 {
+    stopPreview();
     if (clip_.isValid())
         clip_.removeListener(this);
+}
+
+void PianoRoll::startPreview(int pitch, float velocity)
+{
+    if (pitch == previewNote_)
+        return;
+    stopPreview();
+    previewNote_ = juce::jlimit(0, 127, pitch);
+    if (onPreview)
+        onPreview(juce::MidiMessage::noteOn(1, previewNote_, juce::jlimit(0.05f, 1.0f, velocity)));
+    repaint(keyboardArea());
+}
+
+void PianoRoll::stopPreview()
+{
+    if (previewNote_ < 0)
+        return;
+    if (onPreview)
+        onPreview(juce::MidiMessage::noteOff(1, previewNote_));
+    previewNote_ = -1;
+    repaint(keyboardArea());
+}
+
+void PianoRoll::updateScrollBars()
+{
+    const auto grid = gridArea();
+    // Time: the clip's content and a little more, and wherever the view has been taken.
+    const double visibleBeats = static_cast<double>(std::max(1, grid.getWidth())) / pixelsPerBeat_;
+    const double from = std::min(contentStart(), scrollBeats_);
+    const double to = std::max(contentEnd() + 4.0, scrollBeats_ + visibleBeats);
+    hScroll_.setRangeLimits(from, to, juce::dontSendNotification);
+    hScroll_.setCurrentRange(scrollBeats_, visibleBeats, juce::dontSendNotification);
+    hScroll_.setSingleStepSize(std::max(gridBeats(), visibleBeats / 16.0));
+
+    // Pitch: 127 at the top, 0 at the bottom.
+    const double visibleKeys = static_cast<double>(std::max(1, grid.getHeight())) / static_cast<double>(keyHeight_);
+    vScroll_.setRangeLimits(0.0, 128.0, juce::dontSendNotification);
+    vScroll_.setCurrentRange(127.0 - scrollPitch_, visibleKeys, juce::dontSendNotification);
+    vScroll_.setSingleStepSize(1.0);
+}
+
+void PianoRoll::scrollBarMoved(juce::ScrollBar* bar, double newRangeStart)
+{
+    if (bar == &hScroll_)
+        scrollBeats_ = newRangeStart;
+    else
+        scrollPitch_ = juce::jlimit(0, 127, 127 - juce::roundToInt(newRangeStart));
+    repaint();
 }
 
 void PianoRoll::setClip(const juce::ValueTree& midiClip)
 {
     if (clip_ == midiClip)
         return;
+    stopPreview();
     if (clip_.isValid())
         clip_.removeListener(this);
     clip_ = midiClip;
@@ -84,15 +141,16 @@ double PianoRoll::contentEnd() const
 
 juce::Rectangle<int> PianoRoll::keyboardArea() const
 {
-    return {0, kRulerHeight, kKeyboardWidth, std::max(0, getHeight() - kRulerHeight - kLaneHeight - 4)};
+    return {0, kRulerHeight, kKeyboardWidth, std::max(0, getHeight() - kRulerHeight - kLaneHeight - 4 - kScrollBarSize)};
 }
 juce::Rectangle<int> PianoRoll::gridArea() const
 {
-    return {kKeyboardWidth, kRulerHeight, std::max(0, getWidth() - kKeyboardWidth), std::max(0, getHeight() - kRulerHeight - kLaneHeight - 4)};
+    return {kKeyboardWidth, kRulerHeight, std::max(0, getWidth() - kKeyboardWidth - kScrollBarSize),
+            std::max(0, getHeight() - kRulerHeight - kLaneHeight - 4 - kScrollBarSize)};
 }
 juce::Rectangle<int> PianoRoll::laneArea() const
 {
-    return {kKeyboardWidth, getHeight() - kLaneHeight, std::max(0, getWidth() - kKeyboardWidth), kLaneHeight};
+    return {kKeyboardWidth, getHeight() - kLaneHeight, std::max(0, getWidth() - kKeyboardWidth - kScrollBarSize), kLaneHeight};
 }
 
 float PianoRoll::beatToX(double beat) const
@@ -137,13 +195,18 @@ void PianoRoll::zoomToFit()
             }
     const int visibleKeys = std::max(12, static_cast<int>(static_cast<float>(gridArea().getHeight()) / keyHeight_));
     scrollPitch_ = highest >= 0 ? juce::jlimit(visibleKeys - 1, 127, (highest + lowest) / 2 + visibleKeys / 2) : 72 + visibleKeys / 4;
+    updateScrollBars();
     repaint();
 }
 
 void PianoRoll::resized()
 {
+    const auto grid = gridArea();
+    hScroll_.setBounds(grid.getX(), grid.getBottom(), grid.getWidth(), kScrollBarSize);
+    vScroll_.setBounds(grid.getRight(), grid.getY(), kScrollBarSize, grid.getHeight());
     if (clip_.isValid() && pixelsPerBeat_ < 1.0)
         zoomToFit();
+    updateScrollBars();
 }
 
 juce::ValueTree PianoRoll::noteAt(juce::Point<float> p, bool& onRightEdge) const
@@ -252,7 +315,7 @@ void PianoRoll::paint(juce::Graphics& g)
 
         // Keyboard.
         auto key = juce::Rectangle<float>(0.0f, y, static_cast<float>(kKeyboardWidth), keyHeight_);
-        g.setColour(black ? juce::Colour(0xff1b1d22) : juce::Colour(0xffd8d4cc));
+        g.setColour(pitch == previewNote_ ? colour::accent : black ? juce::Colour(0xff1b1d22) : juce::Colour(0xffd8d4cc));
         g.fillRect(black ? key.withWidth(kKeyboardWidth * 0.62f) : key);
         g.setColour(colour::outline);
         g.drawHorizontalLine(juce::roundToInt(y + keyHeight_) - 1, 0.0f, static_cast<float>(kKeyboardWidth));
@@ -263,6 +326,11 @@ void PianoRoll::paint(juce::Graphics& g)
             g.drawText(juce::MidiMessage::getMidiNoteName(pitch, true, true, 3), key.reduced(3.0f, 0.0f), juce::Justification::centredRight, false);
         }
     }
+
+    // The rest stays inside the grid (notes that start before the view must not cover the keys).
+    g.restoreState();
+    g.saveState();
+    g.reduceClipRegion(grid);
 
     // Beats and bars.
     const double first = std::floor(xToBeat(static_cast<float>(grid.getX())));
@@ -314,6 +382,8 @@ void PianoRoll::paint(juce::Graphics& g)
     g.fillRect(ruler.withX(0).withWidth(getWidth()));
     g.setColour(colour::textSecondary);
     g.setFont(mono(9.5f));
+    g.saveState();
+    g.reduceClipRegion(ruler);
     for (double b = std::ceil(first); b <= last; b += 1.0)
     {
         if (pixelsPerBeat_ < 20.0 && std::abs(std::fmod(b, 4.0)) > 1.0e-6)
@@ -323,6 +393,7 @@ void PianoRoll::paint(juce::Graphics& g)
         g.drawText(juce::String(bar) + "." + juce::String(beatInBar), juce::Rectangle<float>(beatToX(b) + 2.0f, 2.0f, 40.0f, 14.0f),
                    juce::Justification::centredLeft, false);
     }
+    g.restoreState();
 
     // Lower lane.
     const auto lane = laneArea();
@@ -393,10 +464,19 @@ void PianoRoll::paint(juce::Graphics& g)
 void PianoRoll::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
+    drag_ = Drag::none;
+
+    // The keys: hear the note while the mouse is held (also on an edit-locked clip).
+    if (clip_.isValid() && keyboardArea().contains(e.getPosition()) && !e.mods.isPopupMenu())
+    {
+        drag_ = Drag::keyboard;
+        startPreview(yToPitch(e.position.y), 0.35f + 0.65f * juce::jlimit(0.0f, 1.0f, e.position.x / static_cast<float>(kKeyboardWidth)));
+        return;
+    }
+
     if (!clip_.isValid() || isLocked()) // an edit-locked clip is read-only
         return;
 
-    drag_ = Drag::none;
     dragChanged_ = false;
     dragStart_ = e.position;
     dragNotes_.clear();
@@ -509,6 +589,12 @@ void PianoRoll::editLane(const juce::MouseEvent& e, bool erase)
 
 void PianoRoll::mouseDrag(const juce::MouseEvent& e)
 {
+    if (drag_ == Drag::keyboard)
+    {
+        // Sliding along the keys plays each one in turn.
+        startPreview(yToPitch(e.position.y), 0.35f + 0.65f * juce::jlimit(0.0f, 1.0f, e.position.x / static_cast<float>(kKeyboardWidth)));
+        return;
+    }
     if (drag_ == Drag::lane)
     {
         editLane(e, e.mods.isPopupMenu());
@@ -550,6 +636,7 @@ void PianoRoll::mouseDrag(const juce::MouseEvent& e)
 
 void PianoRoll::mouseUp(const juce::MouseEvent&)
 {
+    stopPreview(); // (the note sounds only while the key is held)
     drag_ = Drag::none;
     dragNotes_.clear();
 }
@@ -591,6 +678,7 @@ void PianoRoll::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheel
     {
         scrollPitch_ = juce::jlimit(12, 127, scrollPitch_ + juce::roundToInt(wheel.deltaY * 24.0f));
     }
+    updateScrollBars();
     repaint();
 }
 
@@ -657,6 +745,8 @@ StepSequencer::StepSequencer(session::Project& project, EditorState& editor)
 
 StepSequencer::~StepSequencer()
 {
+    if (previewNote_ >= 0 && onPreview)
+        onPreview(juce::MidiMessage::noteOff(1, previewNote_));
     if (clip_.isValid())
         clip_.removeListener(this);
 }
@@ -665,6 +755,9 @@ void StepSequencer::setClip(const juce::ValueTree& midiClip)
 {
     if (clip_ == midiClip)
         return;
+    if (previewNote_ >= 0 && onPreview)
+        onPreview(juce::MidiMessage::noteOff(1, previewNote_));
+    previewNote_ = -1;
     if (clip_.isValid())
         clip_.removeListener(this);
     clip_ = midiClip;
@@ -747,6 +840,12 @@ juce::Rectangle<int> StepSequencer::cellBounds(int row, int step) const
         .toNearestInt();
 }
 
+juce::Rectangle<int> StepSequencer::getRowLabel(int row) const
+{
+    const auto cell = cellBounds(row, 0);
+    return {0, cell.getY(), kRowLabelWidth, cell.getHeight()};
+}
+
 bool StepSequencer::cellAt(juce::Point<int> p, int& row, int& step) const
 {
     if (p.x < kRowLabelWidth || p.y < kRulerHeight)
@@ -805,8 +904,8 @@ void StepSequencer::paint(juce::Graphics& g)
 
     for (int row = 0; row < kStepRows; ++row)
     {
-        const auto label = juce::Rectangle<int>(0, cellBounds(row, 0).getY(), kRowLabelWidth, cellBounds(row, 0).getHeight());
-        g.setColour(row % 2 == 0 ? colour::panelRaised : colour::panel);
+        const auto label = getRowLabel(row);
+        g.setColour(rowPitch(row) == previewNote_ ? colour::accent.withAlpha(0.6f) : row % 2 == 0 ? colour::panelRaised : colour::panel);
         g.fillRect(label);
         g.setColour(colour::textPrimary);
         g.setFont(sans(10.5f));
@@ -845,6 +944,19 @@ void StepSequencer::mouseDown(const juce::MouseEvent& e)
 {
     int row = 0;
     int step = 0;
+    // A row's name: hear its note (pad) while the mouse is held.
+    if (clip_.isValid() && !e.mods.isPopupMenu() && e.x < kRowLabelWidth && e.y >= kRulerHeight)
+    {
+        for (int r = 0; r < kStepRows; ++r)
+            if (getRowLabel(r).contains(e.getPosition()))
+            {
+                previewNote_ = rowPitch(r);
+                if (onPreview)
+                    onPreview(juce::MidiMessage::noteOn(1, previewNote_, 0.8f));
+                repaint();
+            }
+        return;
+    }
     if (!clip_.isValid() || session::clip::isEditLocked(clip_) || !cellAt(e.getPosition(), row, step))
         return;
 
@@ -883,6 +995,13 @@ void StepSequencer::mouseDrag(const juce::MouseEvent& e)
 void StepSequencer::mouseUp(const juce::MouseEvent&)
 {
     painting_ = false;
+    if (previewNote_ >= 0)
+    {
+        if (onPreview)
+            onPreview(juce::MidiMessage::noteOff(1, previewNote_));
+        previewNote_ = -1;
+        repaint();
+    }
 }
 
 //==================================================================================================
@@ -1125,6 +1244,16 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     addChildComponent(pianoRoll_);
     addChildComponent(steps_);
     addChildComponent(inspector_);
+    const auto preview = [this](const juce::MidiMessage& message)
+    {
+        // A note-off goes where its note-on went, even if another clip was opened meanwhile.
+        if (message.isNoteOn())
+            previewTrack_ = clip_.isValid() && clip_.getParent().isValid() ? session::track::getId(clip_.getParent()) : 0u;
+        if (onPreviewMidi && previewTrack_ != 0)
+            onPreviewMidi(previewTrack_, message);
+    };
+    pianoRoll_.onPreview = preview;
+    steps_.onPreview = preview;
 
     editor_.addListener(this);
     project_.getSession().getState().addListener(this);

@@ -7,6 +7,7 @@
 #include "session/GraphCompiler.h"
 #include "session/Project.h"
 #include "TestAudio.h"
+#include "ui/ClipList.h"
 #include "ui/EditActions.h"
 #include "ui/EditorState.h"
 #include "ui/components/ArrangerView.h"
@@ -37,6 +38,24 @@ std::set<std::uint32_t> idsOf(std::initializer_list<juce::ValueTree> clips)
 }
 
 std::size_t at(double seconds) { return static_cast<std::size_t>(seconds * kRate); }
+
+/** The Clip List rows of a session (all kinds; auto-created ones when asked for). */
+std::vector<ui::cliplist::Item> listItems(const Session& session, bool autoCreated)
+{
+    ui::cliplist::Show show;
+    show.autoCreated = autoCreated;
+    return ui::cliplist::collectItems(session, show);
+}
+
+/** One row for a clip (to place it). */
+ui::cliplist::Item itemOf(const juce::ValueTree& c)
+{
+    ui::cliplist::Item item;
+    item.clip = c;
+    item.entry = c.getParent().hasType(session::ids::clipList);
+    item.kind = clip::isMidi(c) ? ui::cliplist::Kind::midi : clip::isVideo(c) ? ui::cliplist::Kind::video : ui::cliplist::Kind::audio;
+    return item;
+}
 
 std::unique_ptr<juce::AudioProcessor> createDevice(const juce::ValueTree& device, double, int, juce::String& error)
 {
@@ -620,24 +639,29 @@ TEST_CASE("Capture uses the time selection or the selected clips; the entry is p
     CHECK(ui::actions::suggestCaptureName(session, range) == clip::getName(c) + " Capture 2");
 
     // The Clip List: captured first; auto-created clips only when asked for.
-    auto items = ui::actions::getClipListItems(session, false);
+    auto items = listItems(session, false);
     REQUIRE(items.size() == 1);
-    CHECK(items[0].captured);
-    CHECK(ui::actions::getClipListItems(session, true).size() == 3);
+    CHECK(items[0].entry);
+    CHECK_FALSE(items[0].wholeFile);
+    CHECK_FALSE(items[0].used);
+    CHECK(listItems(session, true).size() == 3);
 
     // Placing it: on an audio track at the time given, selected.
-    auto placed = ui::actions::placeClipListItem(session, editor, entry, b, 10.0);
-    REQUIRE(placed.isValid());
+    const auto placedClips = ui::cliplist::place(session, editor, {itemOf(entry)}, b, 10.0);
+    REQUIRE(placedClips.size() == 1);
+    const auto placed = placedClips.front();
     CHECK(placed.getParent() == b);
     CHECK(clip::getStart(placed) == 10.0);
     CHECK(clip::getOffset(placed) == 1.0);
     CHECK(clip::getLength(placed) == 1.0);
-    CHECK(editor.getSelectedClips() == std::set<std::uint32_t>{clip::getId(placed)});
+    CHECK(editor.getSelectedClips() == idsOf({placed}));
+    CHECK(listItems(session, false)[0].used); // (now on a track)
 
     // On a track that cannot hold it: a new audio track.
     const int before = session.getNumTracks();
-    auto elsewhere = ui::actions::placeClipListItem(session, editor, entry, keys, 3.0);
-    REQUIRE(elsewhere.isValid());
+    const auto elsewhereClips = ui::cliplist::place(session, editor, {itemOf(entry)}, keys, 3.0);
+    REQUIRE(elsewhereClips.size() == 1);
+    const auto elsewhere = elsewhereClips.front();
     CHECK(session.getNumTracks() == before + 1);
     CHECK(track::getKind(elsewhere.getParent()) == session::TrackKind::audio);
     session.getUndoManager().undo(); // one step
@@ -651,18 +675,18 @@ TEST_CASE("Rename makes a clip user-defined: it is in the Clip List even with au
     auto c = session.addClip(t, juce::File("/drums.wav"), 0.0, 4.0);
     auto right = session.splitClip(c, 2.0); // auto-created
     REQUIRE(right.isValid());
-    CHECK(ui::actions::getClipListItems(session, false).empty());
-    CHECK(ui::actions::getClipListItems(session, true).size() == 2);
+    CHECK(listItems(session, false).empty());
+    CHECK(listItems(session, true).size() == 2);
 
     CHECK_FALSE(ui::actions::renameClip(session, right, "   "));
     REQUIRE(ui::actions::renameClip(session, right, "Fill"));
     CHECK(clip::getName(right) == "Fill");
     CHECK(clip::isUserNamed(right));
-    const auto items = ui::actions::getClipListItems(session, false);
+    const auto items = listItems(session, false);
     REQUIRE(items.size() == 1);
     CHECK(items[0].clip == right);
     CHECK(items[0].userDefined);
-    CHECK_FALSE(items[0].captured);
+    CHECK_FALSE(items[0].entry);
 
     session.getUndoManager().undo();
     CHECK_FALSE(clip::isUserNamed(right));
@@ -790,9 +814,11 @@ TEST_CASE("A marquee drag is the time selection; Clip List drags drop copies ont
     // The Clip List panel lists it and describes drags of it.
     ui::ClipListPanel panel(session, rig.editor);
     REQUIRE(panel.getItems().size() == 1);
-    const auto description = ui::ClipListPanel::describeDrag(entry);
-    CHECK(ui::ClipListPanel::findDragged(session, description) == entry);
-    CHECK_FALSE(ui::ClipListPanel::findDragged(session, "something else").isValid());
+    const auto description = ui::cliplist::describeDrag({itemOf(entry)});
+    const auto dragged = ui::cliplist::findDragged(session, description);
+    REQUIRE(dragged.size() == 1);
+    CHECK(dragged[0].clip == entry);
+    CHECK(ui::cliplist::findDragged(session, "something else").empty());
 
     // Dropped on track B at 14 s.
     juce::DragAndDropTarget::SourceDetails details(description, &panel, juce::Point<int>(juce::roundToInt(rig.xOf(14.0)), juce::roundToInt(rig.yOf(rig.clipB))));
@@ -812,12 +838,12 @@ TEST_CASE("A marquee drag is the time selection; Clip List drags drop copies ont
     panel.removeItem(0);
     panel.refresh();
     REQUIRE(panel.getItems().size() == 1);
-    CHECK_FALSE(panel.getItems()[0].captured);
+    CHECK_FALSE(panel.getItems()[0].entry);
     CHECK(panel.getItems()[0].clip == placed);
     session.getUndoManager().undo();
     panel.refresh();
     REQUIRE(panel.getItems().size() == 1); // (the same clip: listed once)
-    CHECK(panel.getItems()[0].captured);
+    CHECK(panel.getItems()[0].entry);
 }
 
 TEST_CASE("The text prompt (Loop, Capture, Rename) accepts only what makes sense", "[ui][clip]")

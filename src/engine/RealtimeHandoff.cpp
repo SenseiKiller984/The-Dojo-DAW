@@ -36,7 +36,7 @@ void ReleasePool::collect()
 
 LiveMidiQueue::LiveMidiQueue() = default;
 
-bool LiveMidiQueue::push(const juce::MidiMessage& message)
+bool LiveMidiQueue::push(const juce::MidiMessage& message, std::uint32_t trackId)
 {
     const int size = message.getRawDataSize();
     if (size <= 0 || size > 3)
@@ -45,6 +45,7 @@ bool LiveMidiQueue::push(const juce::MidiMessage& message)
     LiveMidiEvent event;
     std::copy_n(message.getRawData(), size, event.data);
     event.size = static_cast<std::uint8_t>(size);
+    event.trackId = trackId;
 
     const std::lock_guard<std::mutex> lock(producerMutex_);
     return queue_.tryPush(event);

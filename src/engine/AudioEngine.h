@@ -229,6 +229,8 @@ private:
     void processTrack(int graphIndex) noexcept;
     void renderAudioClips(const RenderTrack& track, SlotState& slot) noexcept;
     void renderMidiClips(const RenderTrack& track, SlotState& slot) noexcept;
+    /** This callback's previewed notes for `trackId` (first sub-block only, like live MIDI). */
+    void addTargetedMidi(std::uint32_t trackId, juce::MidiBuffer& midi) const noexcept;
     /** Adds the track's input channels to its buffer, for samples [from, to) of the block. */
     void addInput(const RenderTrack& track, SlotState& slot, int from, int to) noexcept;
     /** An audio track's sources: its clips and/or its input, as its monitoring says. */
@@ -303,6 +305,9 @@ private:
     RenderGraph* graph_ = nullptr; // owned; replaced only via command::SwapGraph
     CaptureSession* capture_ = nullptr;
     juce::MidiBuffer liveBlock_; ///< live MIDI drained this callback (events at offset 0)
+    static constexpr int kMaxTargetedMidi = 256;
+    std::array<LiveMidiEvent, kMaxTargetedMidi> targetedMidi_{}; ///< this callback's events for one track each
+    int numTargetedMidi_ = 0;
     bool liveBlockPending_ = false;
     PlayHead playHead_;
 

@@ -15,6 +15,7 @@ add_executable(dojo_tests
     AudioEngineTests.cpp
     BrowserTests.cpp
     ClickTests.cpp
+    ClipListTests.cpp
     ClipLockTests.cpp
     ClipMenuTests.cpp
     MultichannelTests.cpp

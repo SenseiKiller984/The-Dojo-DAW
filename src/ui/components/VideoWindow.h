@@ -6,6 +6,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <optional>
 
 namespace dojo::ui
 {
@@ -47,6 +48,9 @@ private:
 
 /** A timecode for `seconds` at `frameRate`: hh:mm:ss:ff. */
 [[nodiscard]] juce::String formatTimecode(double seconds, double frameRate);
+/** Seconds from a timecode "hh:mm:ss:ff" (also "mm:ss:ff", "ss:ff" or "hh:mm:ss.ff"; any of
+    : ; . as separators) at `frameRate`; nullopt if it is not one. */
+[[nodiscard]] std::optional<double> parseTimecode(const juce::String& text, double frameRate);
 
 /** The floating Video window (View > Video, Ctrl+Shift+V). Closing it only hides it. */
 class VideoWindow final : public juce::DocumentWindow

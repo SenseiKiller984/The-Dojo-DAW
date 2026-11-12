@@ -1,5 +1,6 @@
 #include "ui/components/TrackDialogs.h"
 
+#include "ui/components/VideoWindow.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <array>
@@ -528,6 +529,195 @@ void TextPromptPanel::show(juce::Component* centreAround, const juce::String& ti
     launch(std::move(panel), title, centreAround);
     raw->text.grabKeyboardFocus();
     raw->text.selectAll();
+}
+
+//==================================================================================================
+// Auto Rename
+
+AutoRenamePanel::AutoRenamePanel(const juce::String& rootName, int firstNumber, int numClips)
+    : numClips_(std::max(1, numClips))
+{
+    const std::array<const char*, 4> captions{"Name", "Number", "Zeros", "Suffix"};
+    for (std::size_t i = 0; i < labels_.size(); ++i)
+    {
+        styleLabel(labels_[i], captions[i]);
+        addAndMakeVisible(labels_[i]);
+    }
+    name.setText(rootName, juce::dontSendNotification);
+    number.setText(juce::String(firstNumber), juce::dontSendNotification);
+    number.setInputRestrictions(6, "0123456789");
+    zeros.setText("2", juce::dontSendNotification);
+    zeros.setInputRestrictions(1, "0123456789");
+    for (auto* field : {&name, &number, &zeros, &suffix})
+    {
+        field->onTextChange = [this] { update(); };
+        field->onReturnKey = [this] { confirm(); };
+        addAndMakeVisible(field);
+    }
+    example_.setFont(theme::mono(12.0f));
+    example_.setColour(juce::Label::textColourId, theme::colour::textSecondary);
+    addAndMakeVisible(example_);
+
+    okButton_.onClick = [this] { confirm(); };
+    cancelButton_.onClick = [this] { closeDialog(*this); };
+    okButton_.setWantsKeyboardFocus(false);
+    cancelButton_.setWantsKeyboardFocus(false);
+    addAndMakeVisible(okButton_);
+    addAndMakeVisible(cancelButton_);
+    update();
+    setSize(380, 260);
+}
+
+juce::String AutoRenamePanel::getExample() const
+{
+    const int first = number.getText().getIntValue();
+    const int digits = zeros.getText().getIntValue();
+    auto text = session::Session::formatAutoName(name.getText().trim(), first, digits, suffix.getText());
+    if (numClips_ > 1)
+        text << "  ...  " << session::Session::formatAutoName(name.getText().trim(), first + numClips_ - 1, digits, suffix.getText());
+    return text;
+}
+
+void AutoRenamePanel::update()
+{
+    example_.setText(name.getText().trim().isEmpty() ? juce::String("Type a name") : getExample(), juce::dontSendNotification);
+}
+
+void AutoRenamePanel::confirm()
+{
+    if (name.getText().trim().isEmpty())
+    {
+        name.setColour(juce::TextEditor::outlineColourId, theme::colour::record);
+        name.repaint();
+        return;
+    }
+    auto callback = onRename;
+    const auto root = name.getText().trim();
+    const int first = number.getText().getIntValue();
+    const int digits = zeros.getText().getIntValue();
+    const auto end = suffix.getText();
+    closeDialog(*this);
+    if (callback)
+        callback(root, first, digits, end);
+}
+
+void AutoRenamePanel::resized()
+{
+    auto area = getLocalBounds().reduced(kMargin);
+    const std::array<juce::TextEditor*, 4> fields{&name, &number, &zeros, &suffix};
+    for (std::size_t i = 0; i < fields.size(); ++i)
+    {
+        auto row = area.removeFromTop(kRowHeight);
+        labels_[i].setBounds(row.removeFromLeft(80));
+        fields[i]->setBounds(row.reduced(0, 2));
+        area.removeFromTop(4);
+    }
+    example_.setBounds(area.removeFromTop(24));
+    auto buttons = area.removeFromBottom(30);
+    okButton_.setBounds(buttons.removeFromRight(100));
+    buttons.removeFromRight(8);
+    cancelButton_.setBounds(buttons.removeFromRight(90));
+}
+
+void AutoRenamePanel::paint(juce::Graphics& g)
+{
+    g.fillAll(theme::colour::panel);
+}
+
+void AutoRenamePanel::show(juce::Component* centreAround, const juce::String& rootName, int firstNumber, int numClips,
+                           std::function<void(const juce::String&, int, int, const juce::String&)> onRename)
+{
+    auto panel = std::make_unique<AutoRenamePanel>(rootName, firstNumber, numClips);
+    panel->onRename = std::move(onRename);
+    auto* raw = panel.get();
+    launch(std::move(panel), numClips > 1 ? "Auto Rename " + juce::String(numClips) + " Clips" : juce::String("Auto Rename"), centreAround);
+    raw->name.grabKeyboardFocus();
+    raw->name.selectAll();
+}
+
+//==================================================================================================
+// Time Stamp
+
+TimeStampPanel::TimeStampPanel(const juce::String& clipName, int numClips, double originalSeconds, double userSeconds,
+                               double playheadSeconds)
+    : playhead_(playheadSeconds)
+{
+    title_.setText(numClips > 1 ? clipName + "  (and " + juce::String(numClips - 1) + " more: they move by as much)" : clipName,
+                   juce::dontSendNotification);
+    title_.setFont(theme::sansBold(13.0f));
+    addAndMakeVisible(title_);
+    styleLabel(originalLabel_, "Original Time Stamp");
+    styleLabel(userLabel_, "User Time Stamp");
+    original_.setText(formatTimecode(originalSeconds, 30.0), juce::dontSendNotification);
+    original_.setFont(theme::mono(13.0f));
+    for (auto* l : {&originalLabel_, &original_, &userLabel_})
+        addAndMakeVisible(l);
+
+    user.setText(formatTimecode(userSeconds, 30.0), juce::dontSendNotification);
+    user.setFont(theme::mono(13.0f));
+    user.onReturnKey = [this] { confirm(); };
+    addAndMakeVisible(user);
+    currentButton.onClick = [this] { user.setText(formatTimecode(playhead_, 30.0), juce::dontSendNotification); };
+    currentButton.setWantsKeyboardFocus(false);
+    addAndMakeVisible(currentButton);
+
+    okButton_.onClick = [this] { confirm(); };
+    cancelButton_.onClick = [this] { closeDialog(*this); };
+    okButton_.setWantsKeyboardFocus(false);
+    cancelButton_.setWantsKeyboardFocus(false);
+    addAndMakeVisible(okButton_);
+    addAndMakeVisible(cancelButton_);
+    setSize(420, 190);
+}
+
+void TimeStampPanel::confirm()
+{
+    const auto seconds = parseTimecode(user.getText(), 30.0);
+    if (!seconds.has_value())
+    {
+        user.setColour(juce::TextEditor::outlineColourId, theme::colour::record);
+        user.repaint();
+        return;
+    }
+    auto callback = onSet;
+    closeDialog(*this);
+    if (callback)
+        callback(*seconds);
+}
+
+void TimeStampPanel::resized()
+{
+    auto area = getLocalBounds().reduced(kMargin);
+    title_.setBounds(area.removeFromTop(24));
+    area.removeFromTop(6);
+    auto row = area.removeFromTop(kRowHeight);
+    originalLabel_.setBounds(row.removeFromLeft(150));
+    original_.setBounds(row);
+    row = area.removeFromTop(kRowHeight);
+    userLabel_.setBounds(row.removeFromLeft(150));
+    currentButton.setBounds(row.removeFromRight(110).reduced(0, 2));
+    row.removeFromRight(8);
+    user.setBounds(row.reduced(0, 2));
+    auto buttons = area.removeFromBottom(30);
+    okButton_.setBounds(buttons.removeFromRight(100));
+    buttons.removeFromRight(8);
+    cancelButton_.setBounds(buttons.removeFromRight(90));
+}
+
+void TimeStampPanel::paint(juce::Graphics& g)
+{
+    g.fillAll(theme::colour::panel);
+}
+
+void TimeStampPanel::show(juce::Component* centreAround, const juce::String& clipName, int numClips, double originalSeconds,
+                          double userSeconds, double playheadSeconds, std::function<void(double)> onSet)
+{
+    auto panel = std::make_unique<TimeStampPanel>(clipName, numClips, originalSeconds, userSeconds, playheadSeconds);
+    panel->onSet = std::move(onSet);
+    auto* raw = panel.get();
+    launch(std::move(panel), "Time Stamp", centreAround);
+    raw->user.grabKeyboardFocus();
+    raw->user.selectAll();
 }
 
 } // namespace dojo::ui

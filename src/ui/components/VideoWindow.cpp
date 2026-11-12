@@ -3,6 +3,7 @@
 #include "ui/EditActions.h"
 #include "ui/theme/DojoTheme.h"
 
+#include <array>
 #include <cmath>
 
 namespace dojo::ui
@@ -15,6 +16,25 @@ juce::String formatTimecode(double seconds, double frameRate)
     const auto totalSeconds = frames / fps;
     return juce::String::formatted("%02lld:%02lld:%02lld:%02lld", totalSeconds / 3600, (totalSeconds / 60) % 60, totalSeconds % 60,
                                    frames % fps);
+}
+
+std::optional<double> parseTimecode(const juce::String& text, double frameRate)
+{
+    const auto fields = juce::StringArray::fromTokens(text.trim(), ":;.", "");
+    if (fields.isEmpty() || fields.size() > 4)
+        return std::nullopt;
+    std::array<int, 4> parts{}; // hh mm ss ff, filled from the right
+    for (int i = 0; i < fields.size(); ++i)
+    {
+        const auto field = fields[fields.size() - 1 - i].trim();
+        if (field.isEmpty() || !field.containsOnly("0123456789"))
+            return std::nullopt;
+        parts[static_cast<std::size_t>(3 - i)] = field.getIntValue();
+    }
+    const int fps = std::max(1, juce::roundToInt(frameRate));
+    if (parts[1] > 59 || parts[2] > 59 || parts[3] >= fps)
+        return std::nullopt;
+    return parts[0] * 3600.0 + parts[1] * 60.0 + parts[2] + parts[3] / frameRate;
 }
 
 VideoView::VideoView(const session::Session& session, video::FrameServer& frames, std::function<double()> playheadSeconds)

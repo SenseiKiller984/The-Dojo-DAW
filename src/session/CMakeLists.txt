@@ -7,6 +7,8 @@ add_library(dojo_session STATIC
     Exporter.h
     GraphCompiler.cpp
     GraphCompiler.h
+    MediaInfo.cpp
+    MediaInfo.h
     Project.cpp
     Project.h
     Recorder.cpp

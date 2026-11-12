@@ -46,11 +46,13 @@ private:
     std::vector<Entry> pending_;
 };
 
-/** A MIDI message from a hardware input, as queued for the audio thread. */
+/** A MIDI message from a hardware input (or a note previewed in the editor), as queued for the
+    audio thread. */
 struct LiveMidiEvent
 {
     std::uint8_t data[3]{};
     std::uint8_t size = 0;
+    std::uint32_t trackId = 0; ///< 0: for the armed (or monitoring) tracks; else only for this track
 };
 
 /**
@@ -63,8 +65,10 @@ class LiveMidiQueue final
 public:
     LiveMidiQueue();
 
-    /** Any MIDI driver thread. Short, non-sysex messages only. Returns false if the queue is full. */
-    bool push(const juce::MidiMessage& message);
+    /** Any MIDI driver thread. Short, non-sysex messages only. Returns false if the queue is full.
+        With a `trackId`, the message plays on that track only (whether it is armed or not, playing
+        or stopped): the piano roll's keyboard previews notes this way. Not recorded. */
+    bool push(const juce::MidiMessage& message, std::uint32_t trackId = 0);
 
     /** Audio thread. */
     [[nodiscard]] bool pop(LiveMidiEvent& event) noexcept { return queue_.tryPop(event); }

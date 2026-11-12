@@ -150,6 +150,10 @@ MainComponent::MainComponent(AppServices& services)
     };
     arranger_.onCommand = [this](int commandId) { commandManager_.invokeDirectly(commandId, true); };
     arranger_.setVideoFrames(&videoFrames_);
+    clipList_.setSettings(services_.settings.getUserSettings());
+    clipEditor_.onPreviewMidi = [this](std::uint32_t trackId, const juce::MidiMessage& message)
+    { (void)controller_.getEngine().getLiveMidiQueue().push(message, trackId); };
+    clipList_.getPlayheadSeconds = [this] { return arranger_.getPlayheadSeconds(); };
     arranger_.onVideoImported = [this] { showVideoWindow(true); };
     browser_.onFileActivated = [this](const juce::File& file)
     {

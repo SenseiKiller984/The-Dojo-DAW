@@ -29,7 +29,11 @@ using engine::TrackKind;
                       format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre
             CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, gainBypassed, stretch,
                         pitch, sourceChannel, editLocked, timeLocked, rating (1..5), groups (clip group ids,
-                        outermost first), looped, loopLength, syncPoint (seconds from the start), userNamed
+                        outermost first), looped, loopLength, syncPoint (seconds from the start), userNamed,
+                        timeStamp (original time stamp of the source's start, seconds), userTimeShift
+                        (user time stamp - original), listEntry (the Clip List entry it was placed
+                        from), autoCreated (made by editing), autoNameRoot / autoNameZeros /
+                        autoNameSuffix (Auto Rename)
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
                         (and rating, groups, looped, loopLength, syncPoint, userNamed)
             MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above)
@@ -41,7 +45,9 @@ using engine::TrackKind;
               POINT       time (seconds), value (0..1)
             TRACK ...   (folders contain tracks)
           CLIPGROUPS    the clip groups: CLIPGROUP id, name
-          CLIPLIST      captured clips (Clip > Capture): CLIP / MIDICLIP / VIDEOCLIP, start 0
+          CLIPLIST      captured clips (Clip > Capture) and whole-file clips (wholeFile, one per
+                        imported or recorded file): CLIP / MIDICLIP / VIDEOCLIP, start 0
+          AUTONAMES     Auto Rename counters: AUTONAME name (the root), next
 
     Timeline times are in seconds; MIDI content is in beats (quarter notes). A folder is a bus track
     whose child tracks are summed into it.
@@ -114,6 +120,17 @@ inline const juce::Identifier userNamed {"userNamed"};
 inline const juce::Identifier clipGroupList {"CLIPGROUPS"};
 inline const juce::Identifier clipGroup {"CLIPGROUP"};
 inline const juce::Identifier clipList {"CLIPLIST"};
+inline const juce::Identifier wholeFile {"wholeFile"};
+inline const juce::Identifier timeStamp {"timeStamp"};
+inline const juce::Identifier userTimeShift {"userTimeShift"};
+inline const juce::Identifier listEntry {"listEntry"};
+inline const juce::Identifier autoCreated {"autoCreated"};
+inline const juce::Identifier autoNameRoot {"autoNameRoot"};
+inline const juce::Identifier autoNameZeros {"autoNameZeros"};
+inline const juce::Identifier autoNameSuffix {"autoNameSuffix"};
+inline const juce::Identifier autoNames {"AUTONAMES"};
+inline const juce::Identifier autoName {"AUTONAME"};
+inline const juce::Identifier next {"next"};
 inline const juce::Identifier midiTarget {"midiTarget"};
 inline const juce::Identifier vca {"vca"};
 inline const juce::Identifier controls {"controls"};
@@ -635,6 +652,39 @@ public:
         no groups, locks or sync point carried over beyond what a fresh clip has. Invalid if the
         track cannot hold that kind of clip. */
     juce::ValueTree placeClipCopy(const juce::ValueTree& source, juce::ValueTree track, double seconds);
+    /** Copies of every clip of group `groupId`, the earliest at `seconds`, keeping their spacing in
+        time and between tracks (the topmost on `track`; a track that cannot hold a clip, or one
+        past the last, is replaced by a new track of the right kind). The copies form a new group. */
+    std::vector<juce::ValueTree> placeGroupCopy(std::uint32_t groupId, juce::ValueTree track, double seconds);
+
+    /** The whole-file clip of an imported or recorded file (made once; `lengthSeconds` of material
+        whose first sample has time stamp `timeStamp`). */
+    juce::ValueTree addWholeFileClip(const juce::File& file, double lengthSeconds, bool video, double timeStamp);
+    [[nodiscard]] juce::ValueTree findWholeFileClip(const juce::File& file) const;
+
+    // --- Time stamps (Clip List > Time Stamp) -----------------------------------------------------
+    /** Where the clip's material starts in its source (seconds; MIDI: its content offset). */
+    [[nodiscard]] double getStartInParent(const juce::ValueTree& clip) const;
+    [[nodiscard]] double getEndInParent(const juce::ValueTree& clip) const;
+    /** When the clip's first sample was recorded (from the file's time stamp, a BWF time reference
+        or where it was first placed, plus its start in the file). */
+    [[nodiscard]] double getOriginalTimeStamp(const juce::ValueTree& clip) const;
+    /** The user time stamp: the original one unless set with setUserTimeStamp. */
+    [[nodiscard]] double getUserTimeStamp(const juce::ValueTree& clip) const;
+    void setUserTimeStamp(juce::ValueTree clip, double seconds);
+
+    // --- Auto Rename -------------------------------------------------------------------------------
+    /** "<root><number, `zeros` digits at least><suffix>". */
+    [[nodiscard]] static juce::String formatAutoName(const juce::String& root, int number, int zeros, const juce::String& suffix);
+    /** Renames `clips` in order root + number (counting up from `number`) + suffix; they become
+        user-defined, and clips later made from them by editing continue the numbering. */
+    void autoRenameClips(const std::vector<juce::ValueTree>& clips, const juce::String& root, int number, int zeros,
+                         const juce::String& suffix);
+    /** A clip made from `source` by editing (split, copy, unloop): marked auto-created, and given the
+        next auto name if `source` has auto-naming. */
+    void nameDerivedClip(const juce::ValueTree& source, juce::ValueTree derived);
+    /** The next number Auto Rename gives `root` (1 if it never did). */
+    [[nodiscard]] int getNextAutoNumber(const juce::String& root) const;
 
     /** Removes everything on `track` between `start` and `end` (seconds): clips inside go, clips across
         the edges are trimmed (or split, when they span the whole range). For recording over. Locked

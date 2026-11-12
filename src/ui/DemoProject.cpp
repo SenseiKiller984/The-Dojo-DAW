@@ -184,6 +184,7 @@ juce::Result createDemoProject(session::Project& project, const juce::File& fold
     juce::String error;
     const auto bassAsset = project.getAssets().loadNow(bassFile, error);
     const double loopLength = bassAsset != nullptr ? bassAsset->getLengthSeconds() : 2.0 * bar;
+    session.addWholeFileClip(bassFile, loopLength, false, 0.0); // (in the Clip List)
     for (int i = 0; i < 4; ++i)
         session.addClip(bass, bassFile, i * loopLength, loopLength);
     session.addDevice(bass, "builtin:eq", "EQ");
@@ -236,6 +237,7 @@ juce::Result createDemoProject(session::Project& project, const juce::File& fold
     if (writeDemoVideo(videoFile, tempo, 8))
     {
         auto picture = session.addTrack(session::TrackKind::video, "Picture", 0);
+        session.addWholeFileClip(videoFile, 8.0 * bar, true, 0.0);
         session.addVideoClip(picture, videoFile, 0.0, 8.0 * bar);
         session::track::setColour(picture, session::getTrackPalette()[6], um);
     }

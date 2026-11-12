@@ -5,7 +5,7 @@
 
 #include "ui/Commands.h"
 #include "ui/EditActions.h"
-#include "ui/components/ClipListPanel.h"
+#include "ui/ClipList.h"
 #include "ui/components/VideoWindow.h"
 #include "ui/theme/DojoTheme.h"
 #include "video/VideoSource.h"
@@ -1570,7 +1570,20 @@ void ArrangerView::paintVideoFrames(juce::Graphics& g, const juce::ValueTree& c,
     g.restoreState();
 }
 
-void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int row, juce::Colour colour) const
+bool ArrangerView::isOffline(const juce::ValueTree& c) const
+{
+    if (session::clip::isMidi(c))
+        return false;
+    // (checked at most every two seconds per file: painting must stay cheap)
+    const auto path = session::clip::getFile(c).getFullPathName();
+    const auto now = juce::Time::getMillisecondCounter();
+    auto& entry = fileExists_[path];
+    if (entry.second == 0 || now - entry.second > 2000)
+        entry = {juce::File(path).existsAsFile(), now == 0 ? 1u : now};
+    return !entry.first;
+}
+
+void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int row, juce::Colour trackColour) const
 {
     using namespace theme;
 
@@ -1580,6 +1593,9 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
 
     const bool selected = editor_.isClipSelected(session::clip::getId(c));
     const bool midi = session::clip::isMidi(c);
+    // Offline clips (their file cannot be found): light blue, the name in italics.
+    const bool offline = isOffline(c);
+    const auto colour = offline ? juce::Colour(0xff86b9e8) : trackColour;
 
     g.setColour(colour.withAlpha(selected ? 0.36f : 0.22f));
     g.fillRoundedRectangle(bounds, 4.0f);
@@ -1612,8 +1628,8 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
     if (const int rating = session::clip::getRating(c); rating > 0 && editor_.isShowingClipRatings() && titleText.getWidth() > 30.0f + static_cast<float>(rating) * 10.0f)
         drawStars(g, titleText.removeFromRight(static_cast<float>(rating) * 10.0f + 2.0f), rating, textOn(colour));
     g.setColour(textOn(colour));
-    g.setFont(sansBold(10.5f));
-    g.drawText(name, titleText, juce::Justification::centredLeft, true);
+    g.setFont(offline ? sansBold(10.5f).italicised() : sansBold(10.5f));
+    g.drawText(offline ? name + "  (offline)" : name, titleText, juce::Justification::centredLeft, true);
 
     const auto body = bounds.withTrimmedTop(kClipTitleHeight);
     const bool video = session::clip::isVideo(c);
@@ -3316,7 +3332,7 @@ bool ArrangerView::isInterestedInDragSource(const SourceDetails& details)
 {
     const auto description = details.description.toString();
     return browserDrag::isFileDrag(details.description) || description.startsWith(kDeviceDragPrefix)
-           || description.startsWith(ClipListPanel::kDragPrefix);
+           || description.startsWith(cliplist::kDragPrefix);
 }
 
 void ArrangerView::itemDragEnter(const SourceDetails& details)
@@ -3348,13 +3364,14 @@ void ArrangerView::itemDropped(const SourceDetails& details)
         return;
     }
 
-    if (description.startsWith(ClipListPanel::kDragPrefix))
+    if (description.startsWith(cliplist::kDragPrefix))
     {
-        // A clip from the Clip List: a copy at the drop point (on a new track if this one cannot hold it).
+        // Clips from the Clip List: copies from the drop point on, one after the other (on a new track
+        // when this one cannot hold them).
         dropActive_ = false;
-        const auto source = ClipListPanel::findDragged(session_, details.description);
+        const auto items = cliplist::findDragged(session_, details.description);
         const auto target = dropRow_ >= 0 ? rows()[static_cast<std::size_t>(dropRow_)].track : juce::ValueTree();
-        actions::placeClipListItem(session_, editor_, source, target, dropTime_);
+        cliplist::place(session_, editor_, items, target, dropTime_);
         repaint();
         return;
     }

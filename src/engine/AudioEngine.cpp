@@ -316,9 +316,17 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
     // the first sub-block only).
     liveBlock_.clear();
     liveBlockPending_ = true;
+    numTargetedMidi_ = 0;
     LiveMidiEvent event;
     while (liveMidi_.pop(event))
     {
+        if (event.trackId != 0)
+        {
+            // A previewed note: for its track only, and never recorded.
+            if (numTargetedMidi_ < kMaxTargetedMidi)
+                targetedMidi_[static_cast<std::size_t>(numTargetedMidi_++)] = event;
+            continue;
+        }
         liveBlock_.addEvent(event.data, event.size, 0);
 
         if (capture_ != nullptr && capture_->captureMidi && playing_)
@@ -674,6 +682,7 @@ void AudioEngine::processTrack(int graphIndex) noexcept
             renderMidiClips(track, slot);
         if (track.receivesLiveMidi && liveBlockPending_)
             slot.midi.addEvents(liveBlock_, 0, numSamples, 0);
+        addTargetedMidi(track.trackId, slot.midi);
         // MIDI tracks routed here (rendered in an earlier level), unless muted.
         for (const int source : track.midiSources)
         {
@@ -689,6 +698,7 @@ void AudioEngine::processTrack(int graphIndex) noexcept
             renderMidiClips(track, slot);
         if (track.receivesLiveMidi && liveBlockPending_)
             slot.midi.addEvents(liveBlock_, 0, numSamples, 0);
+        addTargetedMidi(track.trackId, slot.midi);
         break;
 
     case TrackKind::vca:
@@ -759,6 +769,18 @@ void AudioEngine::renderAudioClips(const RenderTrack& track, SlotState& slot) no
             continue;
 
         dsp::renderClip(clip, blockStartSeconds_, secondsPerSample_, numSamples, channels, numChannels);
+    }
+}
+
+void AudioEngine::addTargetedMidi(std::uint32_t trackId, juce::MidiBuffer& midi) const noexcept
+{
+    if (!liveBlockPending_)
+        return;
+    for (int i = 0; i < numTargetedMidi_; ++i)
+    {
+        const auto& event = targetedMidi_[static_cast<std::size_t>(i)];
+        if (event.trackId == trackId)
+            midi.addEvent(event.data, event.size, 0);
     }
 }
 

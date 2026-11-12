@@ -9,6 +9,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -266,6 +267,8 @@ private:
     void paintLanes(juce::Graphics& g) const;
     void paintAutomation(juce::Graphics& g, int rowIndex, const Row& row) const;
     void paintClip(juce::Graphics& g, const juce::ValueTree& clip, int row, juce::Colour colour) const;
+    /** An audio or video clip whose file cannot be found. */
+    [[nodiscard]] bool isOffline(const juce::ValueTree& clip) const;
     /** Clip groups on a row: one frame and title bar over each group's clips. */
     void paintClipGroups(juce::Graphics& g, int row, const juce::ValueTree& track) const;
     /** A video clip's body: a strip of frames along it. */
@@ -338,6 +341,7 @@ private:
         int contentY = 0;
     };
     TimelinePoint marqueeAnchor_, marqueeEnd_;
+    mutable std::map<juce::String, std::pair<bool, juce::uint32>> fileExists_; ///< path -> (exists, checked at)
     bool marqueeActive_ = false;
     std::set<std::uint32_t> marqueeBase_;
     double pendingLocate_ = 0.0;      ///< a click (no drag) in empty space moves the playhead here

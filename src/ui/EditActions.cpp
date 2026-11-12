@@ -927,7 +927,10 @@ int renderSelectedClipsGain(session::Project& project, EditorState& editor, juce
         }
         writer.reset();
 
-        // The clip now plays the rendered file from its start, at 0 dB.
+        // The clip now plays the rendered file from its start, at 0 dB (the file has a whole-file clip of
+        // its own, time stamped like the material it came from).
+        session.addWholeFileClip(target, static_cast<double>(count) / rate, false, session.getOriginalTimeStamp(c));
+        c.setProperty(session::ids::timeStamp, session.getOriginalTimeStamp(c), um);
         c.setProperty(session::ids::file, target.getFullPathName(), um);
         session::clip::setOffset(c, 0.0, um);
         session::clip::setGainDb(c, 0.0, um);
@@ -1022,62 +1025,6 @@ juce::ValueTree captureSelection(session::Session& session, EditorState& editor,
     return session.captureClip(range.track, range.start, range.end, name.trim().isNotEmpty() ? name : suggestCaptureName(session, range), error);
 }
 
-std::vector<ClipListItem> getClipListItems(const session::Session& session, bool includeAutoCreated)
-{
-    std::vector<ClipListItem> items;
-    const auto same = [](const juce::ValueTree& a, const juce::ValueTree& b)
-    {
-        return a.getType() == b.getType() && session::clip::getName(a) == session::clip::getName(b)
-               && session::clip::getFile(a) == session::clip::getFile(b)
-               && std::abs(session::clip::getOffset(a) - session::clip::getOffset(b)) < 1.0e-6
-               && std::abs(session::clip::getLength(a) - session::clip::getLength(b)) < 1.0e-6;
-    };
-    const auto add = [&](const juce::ValueTree& c, bool captured, bool userDefined)
-    {
-        if (std::none_of(items.begin(), items.end(), [&](const ClipListItem& item) { return same(item.clip, c); }))
-            items.push_back({c, captured, userDefined});
-    };
-
-    for (const auto& entry : session.getClipListEntries())
-        add(entry, true, true);
-    const auto tracks = session.getAllTracks();
-    for (const auto& t : tracks)
-        for (const auto& c : t)
-            if (session::Session::isClip(c) && session::clip::isUserNamed(c))
-                add(c, false, true);
-    if (includeAutoCreated)
-        for (const auto& t : tracks)
-            for (const auto& c : t)
-                if (session::Session::isClip(c) && !session::clip::isUserNamed(c))
-                    add(c, false, false);
-    return items;
-}
-
-juce::ValueTree placeClipListItem(session::Session& session, EditorState& editor, const juce::ValueTree& source,
-                                  juce::ValueTree track, double seconds)
-{
-    if (!source.isValid() || !session::Session::isClip(source))
-        return {};
-    session.beginTransaction("Place Clip");
-    auto clip = session.placeClipCopy(source, track, seconds);
-    if (!clip.isValid())
-    {
-        // A new track of the kind the clip needs.
-        const auto kind = session::clip::isMidi(source)    ? session::TrackKind::instrument
-                          : session::clip::isVideo(source) ? session::TrackKind::video
-                                                           : session::TrackKind::audio;
-        auto newTrack = session.addTrack(kind, session::clip::getName(source));
-        clip = session.placeClipCopy(source, newTrack, seconds);
-    }
-    if (clip.isValid())
-    {
-        editor.selectTrack(session::track::getId(clip.getParent()));
-        editor.setSelectedClips({session::clip::getId(clip)});
-        editor.clearTimeSelection();
-    }
-    return clip;
-}
-
 juce::ValueTree importVideo(session::Session& session, EditorState& editor, const juce::File& file, double seconds,
                             const juce::ValueTree& target, juce::String& error)
 {
@@ -1100,6 +1047,7 @@ juce::ValueTree importVideo(session::Session& session, EditorState& editor, cons
         t = session.addTrack(session::TrackKind::video, {}, 0); // video sits on top, like the picture above the mix
 
     const double length = info.durationSeconds > 0.0 ? info.durationSeconds : 1.0;
+    session.addWholeFileClip(file, length, true, std::max(0.0, seconds));
     auto c = session.addVideoClip(t, file, std::max(0.0, seconds), length);
     editor.selectTrack(session::track::getId(t));
     editor.setSelectedClips({session::clip::getId(c)});

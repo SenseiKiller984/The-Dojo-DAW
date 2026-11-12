@@ -6,6 +6,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -22,9 +23,13 @@ namespace dojo::ui
                   (Shift: an octave), Left/Right move by one grid step
       lower lane  velocity bars (drag to set), or a controller lane (CC 1/7/10/11/64, pitch bend):
                   click/drag to draw values, right-click to delete a point
+      piano keys  click a key to hear its note through the track's instrument for as long as the
+                  mouse is held (further right on the key = louder); drag up and down to play others
+      scroll bars move left and right in time, and up and down in pitch (also the mouse wheel:
+                  Shift for time, Ctrl to zoom)
     Time snaps to the editor grid (hold Alt to bypass). Every gesture is one undo step.
 */
-class PianoRoll final : public juce::Component, private juce::ValueTree::Listener
+class PianoRoll final : public juce::Component, private juce::ValueTree::Listener, private juce::ScrollBar::Listener
 {
 public:
     PianoRoll(session::Session& session, EditorState& editor);
@@ -49,6 +54,19 @@ public:
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     bool keyPressed(const juce::KeyPress& key) override;
 
+    /** Plays a note (note-on, then note-off) through the clip's track: set by the clip editor. */
+    std::function<void(const juce::MidiMessage&)> onPreview;
+    /** The note the keyboard is sounding (-1 = none). */
+    [[nodiscard]] int getPreviewNote() const noexcept { return previewNote_; }
+    /** Where the view starts (beats) and the topmost pitch: for the scroll bars and tests. */
+    [[nodiscard]] double getScrollBeats() const noexcept { return scrollBeats_; }
+    [[nodiscard]] int getScrollPitch() const noexcept { return scrollPitch_; }
+    [[nodiscard]] juce::ScrollBar& getHorizontalScrollBar() noexcept { return hScroll_; }
+    [[nodiscard]] juce::ScrollBar& getVerticalScrollBar() noexcept { return vScroll_; }
+    /** The keyboard on the left, in this component's coordinates. */
+    [[nodiscard]] juce::Rectangle<int> getKeyboardArea() const { return keyboardArea(); }
+    [[nodiscard]] float getKeyY(int pitch) const { return pitchToY(pitch); }
+
 private:
     enum class Drag
     {
@@ -56,6 +74,7 @@ private:
         move,
         resize,
         lane,
+        keyboard,
     };
 
     struct NoteSnapshot
@@ -84,8 +103,16 @@ private:
     void editLane(const juce::MouseEvent& e, bool erase);
     void deleteSelection();
     void moveSelection(double beats, int semitones);
+    void startPreview(int pitch, float velocity);
+    void stopPreview();
+    void updateScrollBars();
+    void scrollBarMoved(juce::ScrollBar* bar, double newRangeStart) override;
 
-    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier&) override { repaint(); }
+    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier&) override
+    {
+        updateScrollBars();
+        repaint();
+    }
     void valueTreeChildAdded(juce::ValueTree&, juce::ValueTree&) override { repaint(); }
     void valueTreeChildRemoved(juce::ValueTree&, juce::ValueTree& child, int) override;
     void valueTreeChildOrderChanged(juce::ValueTree&, int, int) override { repaint(); }
@@ -93,6 +120,9 @@ private:
     session::Session& session_;
     EditorState& editor_;
     juce::ValueTree clip_;
+    juce::ScrollBar hScroll_{false};
+    juce::ScrollBar vScroll_{true};
+    int previewNote_ = -1;
     std::vector<juce::ValueTree> selection_;
     int lowerLane_ = -1;
     double gridBeats_ = 0.25;
@@ -125,6 +155,11 @@ public:
     void setPlayhead(double seconds);
     /** True when the clip's track plays a Drum Rack (rows are its pads). */
     [[nodiscard]] bool usesDrumRack() const;
+    /** Clicking a row's name plays its note while the mouse is held (as the piano roll's keys). */
+    std::function<void(const juce::MidiMessage&)> onPreview;
+    [[nodiscard]] int getPreviewNote() const noexcept { return previewNote_; }
+    /** A row's name area (for tests). */
+    [[nodiscard]] juce::Rectangle<int> getRowLabel(int row) const;
 
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -152,6 +187,7 @@ private:
     double playheadSeconds_ = 0.0;
     bool painting_ = false;
     bool paintOn_ = true;
+    int previewNote_ = -1;
     int lastRow_ = -1;
     int lastStep_ = -1;
 };
@@ -194,6 +230,12 @@ public:
     ClipEditor(session::Project& project, EditorState& editor);
     ~ClipEditor() override;
 
+    /** Sends a previewed note to a track's instrument (the piano roll's keys, the step sequencer's
+        row names): set by the main window. */
+    std::function<void(std::uint32_t trackId, const juce::MidiMessage&)> onPreviewMidi;
+    [[nodiscard]] PianoRoll& getPianoRoll() noexcept { return pianoRoll_; }
+    [[nodiscard]] StepSequencer& getStepSequencer() noexcept { return steps_; }
+
     void setPlayhead(double seconds);
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -216,6 +258,7 @@ private:
     juce::ToggleButton endsToggle_;
     juce::ComboBox baseNoteBox_;
 
+    std::uint32_t previewTrack_ = 0; ///< the track the previewed note plays on
     PianoRoll pianoRoll_;
     StepSequencer steps_;
     AudioClipInspector inspector_;

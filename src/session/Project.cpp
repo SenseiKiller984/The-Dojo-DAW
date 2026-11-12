@@ -1,5 +1,7 @@
 #include "session/Project.h"
 
+#include "session/MediaInfo.h"
+
 namespace dojo::session
 {
 
@@ -67,6 +69,7 @@ juce::Result Project::open(const juce::File& file)
         else
             assets_.request(audioFile, {});
     }
+    addMissingWholeFileClips();
 
     if (onDocumentStateChanged)
         onDocumentStateChanged();
@@ -101,6 +104,28 @@ juce::Result Project::saveAs(const juce::File& file)
     }
 
     return result;
+}
+
+void Project::addMissingWholeFileClips()
+{
+    // Sessions from before the Clip List had whole-file clips: one for every audio file used.
+    const bool wasLoading = loading_;
+    loading_ = true; // (not an edit: the session stays clean)
+    bool added = false;
+    for (const auto& t : session_.getAllTracks())
+        for (const auto& c : t)
+            if (c.hasType(ids::clip) && !session_.findWholeFileClip(clip::getFile(c)).isValid())
+            {
+                const auto info = readMediaFileInfo(assets_.getFormatManager(), clip::getFile(c));
+                if (!info.readable)
+                    continue;
+                session_.addWholeFileClip(clip::getFile(c), info.lengthSeconds, false,
+                                          info.timeReference.value_or(session_.getOriginalTimeStamp(c) - clip::getOffset(c)));
+                added = true;
+            }
+    if (added)
+        session_.getUndoManager().clearUndoHistory(); // (nothing to undo in a session just opened)
+    loading_ = wasLoading;
 }
 
 void Project::importFiles(const juce::StringArray& paths, const juce::ValueTree& targetTrack,
@@ -168,7 +193,13 @@ void Project::processFinishedImports()
                     next->insertAfterTrackId = static_cast<int>(track::getId(t));
         }
 
-        session_.addClip(t, item->file, item->start, item->asset->getLengthSeconds());
+        // The file's whole-file clip in the Clip List, and its time stamp: a BWF time reference, or
+        // where it was first placed.
+        const auto info = readMediaFileInfo(assets_.getFormatManager(), item->file);
+        const double stamp = info.timeReference.value_or(item->start);
+        session_.addWholeFileClip(item->file, item->asset->getLengthSeconds(), false, stamp);
+        auto c = session_.addClip(t, item->file, item->start, item->asset->getLengthSeconds());
+        c.setProperty(ids::timeStamp, stamp, nullptr);
     }
 
     if (!problems.isEmpty() && onImportProblem)

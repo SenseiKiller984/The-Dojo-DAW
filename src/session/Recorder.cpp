@@ -232,6 +232,7 @@ void Recorder::finish()
         {
             project_.getAssets().request(take.file, {});
             session.clearRange(t, keepFrom, keepTo); // the take replaces what was there
+            session.addWholeFileClip(take.file, length, false, start); // (time stamped where it was recorded)
             session.addClip(t, take.file, keepFrom, keepTo - keepFrom, keepFrom - start);
         }
         else

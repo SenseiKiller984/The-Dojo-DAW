@@ -1272,6 +1272,7 @@ juce::ValueTree Session::addClip(juce::ValueTree t, const juce::File& file, doub
     c.setProperty(ids::gain, 0.0, nullptr);
     c.setProperty(ids::stretch, 1.0, nullptr);
     c.setProperty(ids::pitch, 0.0, nullptr);
+    c.setProperty(ids::timeStamp, std::max(0.0, start) - std::max(0.0, offset), nullptr); // (where it was first placed)
 
     t.addChild(c, -1, &undo_);
     return c;
@@ -1289,6 +1290,7 @@ juce::ValueTree Session::addVideoClip(juce::ValueTree t, const juce::File& file,
     c.setProperty(ids::start, std::max(0.0, start), nullptr);
     c.setProperty(ids::length, std::max(kMinClipLength, length), nullptr);
     c.setProperty(ids::offset, std::max(0.0, offset), nullptr);
+    c.setProperty(ids::timeStamp, std::max(0.0, start) - std::max(0.0, offset), nullptr);
 
     t.addChild(c, -1, &undo_);
     return c;
@@ -1305,6 +1307,7 @@ juce::ValueTree Session::addMidiClip(juce::ValueTree t, double start, double len
     c.setProperty(ids::start, std::max(0.0, start), nullptr);
     c.setProperty(ids::length, std::max(kMinClipLength, length), nullptr);
     c.setProperty(ids::offset, 0.0, nullptr);
+    c.setProperty(ids::timeStamp, std::max(0.0, start), nullptr);
 
     t.addChild(c, -1, &undo_);
     return c;
@@ -1360,6 +1363,7 @@ juce::ValueTree Session::duplicateClip(const juce::ValueTree& original)
     auto copy = original.createCopy();
     reassignIds(copy);
     copy.setProperty(ids::start, clip::getEnd(original), nullptr);
+    nameDerivedClip(original, copy);
     parent.addChild(copy, -1, &undo_);
     return copy;
 }
@@ -1372,6 +1376,7 @@ juce::ValueTree Session::pasteClip(const juce::ValueTree& original, juce::ValueT
     auto copy = original.createCopy();
     reassignIds(copy);
     copy.setProperty(ids::start, std::max(0.0, start), nullptr);
+    nameDerivedClip(original, copy);
     t.addChild(copy, -1, &undo_);
     return copy;
 }
@@ -1461,6 +1466,7 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
         }
     }
 
+    nameDerivedClip(c, right);
     parent.addChild(right, parent.indexOf(c) + 1, &undo_);
     return right;
 }
@@ -1707,6 +1713,7 @@ std::vector<juce::ValueTree> Session::unloopClip(juce::ValueTree c)
             copy.setProperty(ids::fadeIn, 0.0, nullptr);
             copy.setProperty(ids::fadeOut, k == count - 1 ? fadeOut : 0.0, nullptr);
         }
+        nameDerivedClip(c, copy);
         parent.addChild(copy, parent.indexOf(pieces.back()) + 1, &undo_);
         pieces.push_back(copy);
     }
@@ -1748,7 +1755,7 @@ namespace
 void stripClipState(juce::ValueTree c)
 {
     for (const auto* id : {&ids::clipGroups, &ids::editLocked, &ids::timeLocked, &ids::looped, &ids::loopLength,
-                           &ids::syncPoint, &ids::rating})
+                           &ids::syncPoint, &ids::rating, &ids::listEntry, &ids::wholeFile, &ids::autoCreated})
         c.removeProperty(*id, nullptr);
 }
 } // namespace
@@ -1837,6 +1844,198 @@ juce::ValueTree Session::captureClip(const juce::ValueTree& track, double start,
     return entry;
 }
 
+juce::ValueTree Session::addWholeFileClip(const juce::File& file, double lengthSeconds, bool video, double timeStamp)
+{
+    if (auto existing = findWholeFileClip(file); existing.isValid())
+        return existing;
+
+    juce::ValueTree entry(video ? ids::videoClip : ids::clip);
+    entry.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    entry.setProperty(ids::name, file.getFileNameWithoutExtension(), nullptr);
+    entry.setProperty(ids::file, file.getFullPathName(), nullptr);
+    entry.setProperty(ids::start, 0.0, nullptr);
+    entry.setProperty(ids::length, std::max(kMinClipLength, lengthSeconds), nullptr);
+    entry.setProperty(ids::offset, 0.0, nullptr);
+    if (!video)
+    {
+        entry.setProperty(ids::fadeIn, 0.0, nullptr);
+        entry.setProperty(ids::fadeOut, 0.0, nullptr);
+        entry.setProperty(ids::gain, 0.0, nullptr);
+        entry.setProperty(ids::stretch, 1.0, nullptr);
+        entry.setProperty(ids::pitch, 0.0, nullptr);
+    }
+    entry.setProperty(ids::timeStamp, timeStamp, nullptr);
+    entry.setProperty(ids::wholeFile, true, nullptr);
+
+    auto list = state_.getChildWithName(ids::clipList);
+    if (!list.isValid())
+    {
+        list = juce::ValueTree(ids::clipList);
+        state_.addChild(list, -1, &undo_);
+    }
+    list.addChild(entry, -1, &undo_);
+    return entry;
+}
+
+juce::ValueTree Session::findWholeFileClip(const juce::File& file) const
+{
+    for (const auto& e : getClipListEntries())
+        if (e.getProperty(ids::wholeFile, false) && clip::getFile(e) == file)
+            return e;
+    return {};
+}
+
+std::vector<juce::ValueTree> Session::placeGroupCopy(std::uint32_t groupId, juce::ValueTree track, double seconds)
+{
+    const auto members = getGroupMembers(groupId);
+    if (members.empty() || !track.isValid())
+        return {};
+
+    const auto tracks = getAllTracks();
+    const auto indexOfTrack = [&tracks](const juce::ValueTree& t)
+    { return static_cast<int>(std::find(tracks.begin(), tracks.end(), t) - tracks.begin()); };
+    int topIndex = static_cast<int>(tracks.size());
+    double earliest = 1.0e12;
+    for (const auto& c : members)
+    {
+        topIndex = std::min(topIndex, indexOfTrack(c.getParent()));
+        earliest = std::min(earliest, clip::getStart(c));
+    }
+    const int targetIndex = indexOfTrack(track);
+
+    std::map<int, juce::ValueTree> newTracks; // track offset -> track made for it
+    std::vector<juce::ValueTree> copies;
+    for (const auto& c : members)
+    {
+        const int offset = indexOfTrack(c.getParent()) - topIndex;
+        const int index = targetIndex + offset;
+        juce::ValueTree target = index < static_cast<int>(tracks.size()) ? tracks[static_cast<std::size_t>(index)] : juce::ValueTree();
+        const auto kind = target.isValid() ? track::getKind(target) : TrackKind::audio;
+        const bool fits = target.isValid() && (clip::isMidi(c) ? holdsMidi(kind) : clip::isVideo(c) ? holdsVideo(kind) : holdsAudio(kind));
+        if (!fits)
+        {
+            auto& made = newTracks[offset];
+            if (!made.isValid())
+                made = addTrack(clip::isMidi(c) ? TrackKind::instrument : clip::isVideo(c) ? TrackKind::video : TrackKind::audio,
+                                track::getName(c.getParent()));
+            target = made;
+        }
+        auto copy = c.createCopy();
+        reassignIds(copy);
+        copy.setProperty(ids::start, std::max(0.0, seconds + clip::getStart(c) - earliest), nullptr);
+        target.addChild(copy, -1, &undo_);
+        copies.push_back(copy);
+    }
+    renewGroups(copies);
+    return copies;
+}
+
+double Session::getStartInParent(const juce::ValueTree& c) const
+{
+    return clip::isMidi(c) ? clip::getOffset(c) * 60.0 / getTempo() : clip::getOffset(c);
+}
+
+double Session::getEndInParent(const juce::ValueTree& c) const
+{
+    const double length = clip::isLooped(c) ? clip::getLoopLength(c) : clip::getLength(c);
+    if (c.hasType(ids::clip))
+        return getStartInParent(c) + length / std::max(kMinStretch, clip::getStretch(c));
+    return getStartInParent(c) + length;
+}
+
+double Session::getOriginalTimeStamp(const juce::ValueTree& c) const
+{
+    if (!c.hasProperty(ids::timeStamp))
+        return clip::getStart(c); // (older clips: where they are)
+    return static_cast<double>(c.getProperty(ids::timeStamp)) + getStartInParent(c);
+}
+
+double Session::getUserTimeStamp(const juce::ValueTree& c) const
+{
+    return getOriginalTimeStamp(c) + static_cast<double>(c.getProperty(ids::userTimeShift, 0.0));
+}
+
+void Session::setUserTimeStamp(juce::ValueTree c, double seconds)
+{
+    if (!c.isValid())
+        return;
+    if (!c.hasProperty(ids::timeStamp)) // (fix the original first, so the user one keeps its meaning)
+        c.setProperty(ids::timeStamp, clip::getStart(c) - getStartInParent(c), &undo_);
+    const double shift = seconds - getOriginalTimeStamp(c);
+    if (std::abs(shift) < 1.0e-9)
+        c.removeProperty(ids::userTimeShift, &undo_);
+    else
+        c.setProperty(ids::userTimeShift, shift, &undo_);
+}
+
+juce::String Session::formatAutoName(const juce::String& root, int number, int zeros, const juce::String& suffix)
+{
+    return root + juce::String(number).paddedLeft('0', std::max(0, zeros)) + suffix;
+}
+
+int Session::getNextAutoNumber(const juce::String& root) const
+{
+    for (const auto& a : state_.getChildWithName(ids::autoNames))
+        if (a.getProperty(ids::name).toString() == root)
+            return a.getProperty(ids::next, 1);
+    return 1;
+}
+
+namespace
+{
+void setNextAutoNumber(juce::ValueTree& state, const juce::String& root, int next, juce::UndoManager* um)
+{
+    auto list = state.getChildWithName(ids::autoNames);
+    if (!list.isValid())
+    {
+        list = juce::ValueTree(ids::autoNames);
+        state.addChild(list, -1, um);
+    }
+    for (auto a : list)
+        if (a.getProperty(ids::name).toString() == root)
+        {
+            a.setProperty(ids::next, next, um);
+            return;
+        }
+    juce::ValueTree a(ids::autoName);
+    a.setProperty(ids::name, root, nullptr);
+    a.setProperty(ids::next, next, nullptr);
+    list.addChild(a, -1, um);
+}
+} // namespace
+
+void Session::autoRenameClips(const std::vector<juce::ValueTree>& clips, const juce::String& root, int number, int zeros,
+                              const juce::String& suffix)
+{
+    int n = number;
+    for (auto c : clips)
+    {
+        if (!c.isValid())
+            continue;
+        c.setProperty(ids::name, formatAutoName(root, n++, zeros, suffix), &undo_);
+        c.setProperty(ids::userNamed, true, &undo_);
+        c.setProperty(ids::autoNameRoot, root, &undo_);
+        c.setProperty(ids::autoNameZeros, std::max(0, zeros), &undo_);
+        c.setProperty(ids::autoNameSuffix, suffix, &undo_);
+    }
+    setNextAutoNumber(state_, root, std::max(n, getNextAutoNumber(root)), &undo_);
+}
+
+void Session::nameDerivedClip(const juce::ValueTree& source, juce::ValueTree derived)
+{
+    if (!derived.isValid())
+        return;
+    derived.setProperty(ids::autoCreated, true, derived.getParent().isValid() ? &undo_ : nullptr);
+    if (!source.hasProperty(ids::autoNameRoot))
+        return;
+    const auto root = source.getProperty(ids::autoNameRoot).toString();
+    const int number = getNextAutoNumber(root);
+    derived.setProperty(ids::name, formatAutoName(root, number, source.getProperty(ids::autoNameZeros, 0), source.getProperty(ids::autoNameSuffix).toString()),
+                        derived.getParent().isValid() ? &undo_ : nullptr);
+    derived.removeProperty(ids::userNamed, derived.getParent().isValid() ? &undo_ : nullptr); // (made by editing)
+    setNextAutoNumber(state_, root, number + 1, &undo_);
+}
+
 void Session::removeClipListEntry(std::uint32_t entryId)
 {
     if (auto entry = findClipListEntry(entryId); entry.isValid())
@@ -1856,6 +2055,9 @@ juce::ValueTree Session::placeClipCopy(const juce::ValueTree& source, juce::Valu
     reassignIds(copy);
     stripClipState(copy);
     copy.setProperty(ids::start, std::max(0.0, seconds), nullptr);
+    copy.removeProperty(ids::wholeFile, nullptr);
+    if (source.getParent().hasType(ids::clipList))
+        copy.setProperty(ids::listEntry, static_cast<int>(clip::getId(source)), nullptr);
     if (clip::isLooped(source)) // keeps playing what it played
     {
         copy.setProperty(ids::looped, true, nullptr);

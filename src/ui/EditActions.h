@@ -205,21 +205,6 @@ struct CaptureRange
 /** Clip > Capture: the range becomes a Clip List entry called `name`. One undo step. */
 juce::ValueTree captureSelection(session::Session& session, EditorState& editor, const juce::String& name, juce::String& error);
 
-/** One row of the Clip List. */
-struct ClipListItem
-{
-    juce::ValueTree clip; ///< a captured entry, or a clip on a track
-    bool captured = false;
-    bool userDefined = false; ///< captured or renamed; others were created by editing (auto-created)
-};
-/** The Clip List: captured clips, then the clips on tracks that were renamed, then (with
-    `includeAutoCreated`) every other clip; each name, file and range once. */
-[[nodiscard]] std::vector<ClipListItem> getClipListItems(const session::Session& session, bool includeAutoCreated);
-/** Drops a Clip List item on `track` at `seconds` (on a new track of the right kind if `track` cannot
-    hold it). The new clip is selected. One undo step. */
-juce::ValueTree placeClipListItem(session::Session& session, EditorState& editor, const juce::ValueTree& source,
-                                  juce::ValueTree track, double seconds);
-
 /**
     File > Import Video (and video files dropped on the arranger): a video clip of the whole file at
     `seconds`, on `target` if it is a video track, else on the first video track, else on a new one

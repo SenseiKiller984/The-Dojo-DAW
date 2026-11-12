@@ -4,6 +4,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -151,6 +152,70 @@ private:
     bool numeric_ = false;
     juce::Label label_;
     juce::TextButton okButton_, cancelButton_{"Cancel"};
+};
+
+/**
+    Clip List > Auto Rename: Name (the root), Number (the first number), Zeros (digits at least) and
+    Suffix; the example shows the first name. The clips are renamed in order, and clips later made
+    from them by editing continue the numbering.
+*/
+class AutoRenamePanel final : public juce::Component
+{
+public:
+    AutoRenamePanel(const juce::String& rootName, int firstNumber, int numClips);
+
+    /** What OK does (also for tests): calls onRename and closes, unless the name is empty. */
+    void confirm();
+    [[nodiscard]] juce::String getExample() const;
+
+    std::function<void(const juce::String& name, int number, int zeros, const juce::String& suffix)> onRename;
+
+    juce::TextEditor name, number, zeros, suffix;
+
+    void resized() override;
+    void paint(juce::Graphics& g) override;
+
+    static void show(juce::Component* centreAround, const juce::String& rootName, int firstNumber, int numClips,
+                     std::function<void(const juce::String&, int, int, const juce::String&)> onRename);
+
+private:
+    void update();
+
+    std::array<juce::Label, 4> labels_;
+    juce::Label example_;
+    juce::TextButton okButton_{"Rename"}, cancelButton_{"Cancel"};
+    int numClips_ = 1;
+};
+
+/**
+    Clip List > Time Stamp: shows the clip's original time stamp (when its material was recorded) and
+    sets its user time stamp (SMPTE, 30 fps). "Current Time" takes the playhead's. With several clips,
+    the others move by as much as the first.
+*/
+class TimeStampPanel final : public juce::Component
+{
+public:
+    TimeStampPanel(const juce::String& clipName, int numClips, double originalSeconds, double userSeconds, double playheadSeconds);
+
+    /** What OK does (also for tests): calls onSet with the time typed and closes, unless it is not a
+        timecode. */
+    void confirm();
+
+    std::function<void(double seconds)> onSet;
+
+    juce::TextEditor user;
+    juce::TextButton currentButton{"Current Time"};
+
+    void resized() override;
+    void paint(juce::Graphics& g) override;
+
+    static void show(juce::Component* centreAround, const juce::String& clipName, int numClips, double originalSeconds, double userSeconds,
+                     double playheadSeconds, std::function<void(double)> onSet);
+
+private:
+    juce::Label title_, originalLabel_, original_, userLabel_;
+    juce::TextButton okButton_{"OK"}, cancelButton_{"Cancel"};
+    double playhead_ = 0.0;
 };
 
 } // namespace dojo::ui
