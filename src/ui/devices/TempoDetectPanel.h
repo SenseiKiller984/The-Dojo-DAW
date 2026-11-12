@@ -56,12 +56,18 @@ public:
     /** Asked when the detected tempo differs from the project's: by default a dialog that sets it
         on "Set Tempo". */
     std::function<void(double detected, double project)> onDifferentTempo;
+    /** "Set Click Tempo": the detected tempo for the click's own tempo (set by the Click's editor;
+        the button shows only then). */
+    std::function<void(double bpm)> onSetClickTempo;
+    /** What "Set Click Tempo" does (also for tests). */
+    void applyToClick();
 
     /** Range choices (min, max BPM) and the one in use. */
     void setRange(int index);
     [[nodiscard]] std::pair<double, double> getRange() const;
 
-    juce::TextButton detectButton, halfButton{"/2"}, doubleButton{"x2"}, applyButton{"Set Project Tempo"};
+    juce::TextButton detectButton, halfButton{"/2"}, doubleButton{"x2"}, applyButton{"Set Project Tempo"},
+        clickButton{"Set Click Tempo"};
     juce::ComboBox rangeBox;
 
     void paint(juce::Graphics& g) override;

@@ -159,8 +159,9 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Amp & Cabinet**: seven amp models (Clean to Heavy, and Bass) with 4x-oversampled gain stages, bass/middle/treble/presence, five cabinets and three microphone positions.
 - **Pitch Shift** for live input and instruments.
 - **Click**: a metronome that follows the transport's tempo, bar position and time signature, sample-accurately. It has four sounds (Beep, Woodblock, Rim, Cowbell), volume, an accented downbeat, and quarter, eighth or sixteenth clicks. It plays during playback and recording, or only while recording.
+  - **Own Tempo**: off (the default), the click always plays at the project tempo, whatever its own **Tempo** says. On, it plays at its own Tempo (20–400 BPM, two decimals), independently of the project: **x2** and **/2** double or halve it (and turn Own Tempo on), **= Project** copies the project tempo into it. The panel shows which tempo the click is playing at. Its beats count from the start of the timeline at its own tempo.
   - **Tempo detection**: the Click's panel lists the audio tracks. Tick one, or several (kick, snare, overheads...); selecting audio tracks in the arranger ticks them. **Detect Tempo** measures each track to two decimal places (for example Kick 121.12, Snare 121.48) and averages them.
-    - If the average differs from the project tempo, it asks whether to set the project to it. **Set Project Tempo** does that later (one undo step).
+    - If the average differs from the project tempo, it asks whether to set the project to it. **Set Project Tempo** does that later (one undo step). **Set Click Tempo** gives the detected tempo to the click alone (Own Tempo), leaving the project as it is.
     - The **range** (70–180 BPM by default) decides between half and double time; **/2** and **x2** correct the result afterwards. A track read at half or double the others' tempo is folded to agree before averaging, and shown as such.
     - How it works:
       - Onsets come from the spectral flux of the whole spectrum and of the band below 300 Hz (kick and snare body).
@@ -186,7 +187,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Preferences** (*Options > Preferences*, Ctrl+,)
 - **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on).
-- **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop). Applied instantly, remembered.
+- **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop); Sour, inspired by an album cover's pastel pop-punk look (Sour Lavender: lavender, sticker pink, smiley yellow and lime; Sour Midnight: the same after dark, with a baby-blue playhead). Applied instantly, remembered.
 - **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
 - **Surround**: surround monitoring: Standard, Classic Fold-Down, the Advanced Surround Virtualizer (headphones or speakers, room) or the Device 3D Virtualizer (see *Surround monitoring* above).
 
@@ -222,12 +223,14 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Ctrl+, | Preferences (playback options, themes, audio, shortcuts) |
 | Ctrl+Shift+A | Audio settings (device, inputs, MIDI inputs) |
 | F1 | Keyboard shortcuts (change them there) |
+| F11 | Full screen on-off (also *View > Full Screen*) |
 
 Mouse:
 - Right-click clips, track headers, automation lanes or empty lanes for context menus.
 - Drag in an empty part of the lanes for a rubber band: it selects the clips it touches and is the time selection (for Capture). Ctrl or Shift add to the selection.
 - Shift+wheel scrolls sideways; Ctrl+wheel zooms (also in the piano roll).
 - Double-click a fader, knob or slider to reset it.
+- The window's square button (or a double-click on its title bar) maximises it to the screen's work area and restores it again. From full screen (F11), F11 or the square button goes back to the window as it was, maximised or not.
 
 ### Command line
 

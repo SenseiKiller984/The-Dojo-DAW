@@ -407,7 +407,7 @@ TEST_CASE("Track menu commands in the main window; Scroll to Track moves the arr
     engine::PreviewService preview(engine, project.getAssets().getFormatManager());
     ui::Preferences preferences(*settings.getUserSettings());
     juce::ApplicationCommandManager commands;
-    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}};
+    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}, {}, {}};
 
     auto& session = project.getSession();
     std::vector<juce::ValueTree> tracks;

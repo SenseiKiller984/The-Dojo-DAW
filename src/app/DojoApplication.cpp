@@ -156,7 +156,8 @@ void DojoApplication::initialise(const juce::String&)
 
     commandManager_ = std::make_unique<juce::ApplicationCommandManager>();
     services_ = std::make_unique<ui::AppServices>(ui::AppServices{*project_, *controller_, *commandManager_, *plugins_,
-                                                                   *recorder_, *exporter_, *settings_, *preview_, *preferences_, {}});
+                                                                   *recorder_, *exporter_, *settings_, *preview_,
+                                                                   *preferences_, {}, {}, {}});
     mainWindow_ = std::make_unique<MainWindow>(*services_);
 
     if (options_.sessionFile != juce::File())
@@ -173,7 +174,7 @@ void DojoApplication::initialise(const juce::String&)
 
     if (options_.smokeTestSeconds > 0)
     {
-        smokeTest_ = std::make_unique<SmokeTest>(options_.smokeTestSeconds, mainWindow_->getMainComponent(),
+        smokeTest_ = std::make_unique<SmokeTest>(options_.smokeTestSeconds, *mainWindow_, *commandManager_,
                                                  *controller_,
                                                  [this](int exitCode)
                                                  {

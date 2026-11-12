@@ -118,6 +118,9 @@ TEST_CASE("Themes: every requested style, readable everywhere", "[ui][themes]")
     CHECK(perFamily["Japanese"] >= 2);
     CHECK(perFamily["Cherry Blossom"] >= 2);
     CHECK(perFamily["Manga"] >= 2);
+    CHECK(perFamily["Sour"] == 2);
+    CHECK_FALSE(ui::theme::findTheme("Sour Lavender").dark);
+    CHECK(ui::theme::findTheme("Sour Midnight").dark);
 
     for (const auto& theme : themes)
     {
@@ -183,7 +186,7 @@ TEST_CASE("Stop twice (or Home) brings the view back to the start when that pref
     engine::PreviewService preview(engine, project.getAssets().getFormatManager());
     ui::Preferences preferences(*settings.getUserSettings());
     juce::ApplicationCommandManager commands;
-    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}};
+    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}, {}, {}};
 
     {
         ui::MainComponent main(services);
@@ -248,7 +251,7 @@ TEST_CASE("Play after a stop at the end starts at bar 1, and the view follows wh
     engine::PreviewService preview(engine, project.getAssets().getFormatManager());
     ui::Preferences preferences(*settings.getUserSettings());
     juce::ApplicationCommandManager commands;
-    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}};
+    ui::AppServices services{project, controller, commands, plugins, recorder, exporter, settings, preview, preferences, {}, {}, {}};
 
     auto track = project.getSession().addTrack(session::TrackKind::instrument, "Keys");
     project.getSession().addMidiClip(track, 0.0, 0.5); // the arrangement ends at 0.5 s
@@ -294,6 +297,28 @@ TEST_CASE("Play after a stop at the end starts at bar 1, and the view follows wh
         CHECK(arranger.getScrollSeconds() == 0.0);
         telemetry = render(0.05);
         CHECK(telemetry.playheadSeconds < 0.1);
+
+        // View > Full Screen (F11): the main window's toggle (no window, no command), ticked while on.
+        const auto fullScreenInfo = [&]
+        {
+            juce::ApplicationCommandInfo info(ui::commands::toggleFullScreen);
+            main.getCommandInfo(ui::commands::toggleFullScreen, info);
+            return info;
+        };
+        CHECK((fullScreenInfo().flags & juce::ApplicationCommandInfo::isDisabled) != 0);
+        bool fullScreen = false;
+        services.toggleFullScreen = [&] { fullScreen = !fullScreen; };
+        services.isFullScreen = [&] { return fullScreen; };
+        CHECK((fullScreenInfo().flags & juce::ApplicationCommandInfo::isDisabled) == 0);
+        CHECK((fullScreenInfo().flags & juce::ApplicationCommandInfo::isTicked) == 0);
+        CHECK(fullScreenInfo().defaultKeypresses.contains(juce::KeyPress(juce::KeyPress::F11Key)));
+        REQUIRE(commands.invokeDirectly(ui::commands::toggleFullScreen, false));
+        CHECK(fullScreen);
+        CHECK((fullScreenInfo().flags & juce::ApplicationCommandInfo::isTicked) != 0);
+        REQUIRE(commands.invokeDirectly(ui::commands::toggleFullScreen, false));
+        CHECK_FALSE(fullScreen);
+        services.toggleFullScreen = nullptr;
+        services.isFullScreen = nullptr;
 
         commands.setFirstCommandTarget(nullptr);
     }

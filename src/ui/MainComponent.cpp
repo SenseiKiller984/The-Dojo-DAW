@@ -361,7 +361,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    quantizeClipsToGrid,
                                    bypassClipGain,
                                    renderClipGain,
-                                   showClipList};
+                                   showClipList,
+                                   toggleFullScreen};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -622,6 +623,12 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     case renderClipGain:
         info.setInfo("Render Clip Gain", "Apply the clip gain to the audio of the selected clips and reset it to 0 dB", categories::clip, 0);
         info.setActive(hasClipSelection);
+        break;
+    case toggleFullScreen:
+        info.setInfo("Full Screen", "The window covers the whole screen (F11 again to go back)", categories::view, 0);
+        info.setTicked(services_.isFullScreen && services_.isFullScreen());
+        info.setActive(services_.toggleFullScreen != nullptr);
+        info.addDefaultKeypress(juce::KeyPress::F11Key, 0);
         break;
     case showClipList:
         info.setInfo("Clip List", "Show the Clip List", categories::view, 0);
@@ -904,6 +911,10 @@ bool MainComponent::perform(const InvocationInfo& invocation)
     }
     case showClipList:
         showBottomTab(BottomTab::clips);
+        break;
+    case toggleFullScreen:
+        if (services_.toggleFullScreen)
+            services_.toggleFullScreen();
         break;
     case togglePunchOut:
         session.setPunchOutEnabled(!session.isPunchOutEnabled());

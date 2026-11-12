@@ -69,7 +69,9 @@ TempoDetectPanel::TempoDetectPanel(session::Session& session, EditorState& edito
     halfButton.onClick = [this] { setOctave(octave_ * 0.5); };
     doubleButton.onClick = [this] { setOctave(octave_ * 2.0); };
     applyButton.onClick = [this] { applyTempo(); };
-    for (auto* b : {&detectButton, &halfButton, &doubleButton, &applyButton})
+    clickButton.onClick = [this] { applyToClick(); };
+    clickButton.setTooltip("The click plays at the detected tempo, independently of the project (Own Tempo)");
+    for (auto* b : {&detectButton, &halfButton, &doubleButton, &applyButton, &clickButton})
     {
         b->setWantsKeyboardFocus(false);
         addAndMakeVisible(b);
@@ -279,6 +281,13 @@ void TempoDetectPanel::applyTempo()
     update();
 }
 
+void TempoDetectPanel::applyToClick()
+{
+    const double bpm = getDetectedTempo();
+    if (bpm > 0.0 && onSetClickTempo)
+        onSetClickTempo(bpm);
+}
+
 void TempoDetectPanel::askToChange(double detected, double project)
 {
     juce::Component::SafePointer<TempoDetectPanel> safe(this);
@@ -309,6 +318,8 @@ void TempoDetectPanel::update()
     halfButton.setEnabled(valid && !busy);
     doubleButton.setEnabled(valid && !busy);
     applyButton.setEnabled(valid && !busy && std::abs(getDetectedTempo() - session_.getTempo()) >= 0.005);
+    clickButton.setVisible(onSetClickTempo != nullptr);
+    clickButton.setEnabled(valid && !busy);
     repaint();
 }
 
@@ -331,6 +342,9 @@ void TempoDetectPanel::resized()
 
     auto area = getResultArea();
     detectButton.setBounds(area.removeFromTop(26));
+    clickButton.setVisible(onSetClickTempo != nullptr); // (set after construction by the Click's editor)
+    clickButton.setBounds(area.removeFromBottom(26));
+    area.removeFromBottom(4);
     auto bottom = area.removeFromBottom(26);
     halfButton.setBounds(bottom.removeFromLeft(40));
     bottom.removeFromLeft(4);
@@ -351,7 +365,7 @@ void TempoDetectPanel::paint(juce::Graphics& g)
     g.drawText("TRACKS", title.withTrimmedLeft(kListWidth - 50).withWidth(50), juce::Justification::centredRight, false);
     auto area = getResultArea();
     area.removeFromTop(26 + 6);
-    area.removeFromBottom(26 + 6);
+    area.removeFromBottom(26 + 4 + 26 + 6);
 
     // Project tempo at the bottom.
     g.setColour(colour::textMuted);

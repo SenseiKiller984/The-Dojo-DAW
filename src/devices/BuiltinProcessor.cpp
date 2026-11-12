@@ -55,14 +55,16 @@ BuiltinProcessor::~BuiltinProcessor() = default;
 
 juce::AudioParameterFloat* BuiltinProcessor::addFloat(const juce::String& id, const juce::String& name,
                                                       juce::NormalisableRange<float> range, float defaultValue,
-                                                      const juce::String& label, bool automatable)
+                                                      const juce::String& label, bool automatable, int decimals)
 {
-    // Readable values: 3 significant digits, "k" above 1000 (e.g. 2.50k Hz).
-    const auto format = [](float value, int maximumLength)
+    // Readable values: 3 significant digits, "k" above 1000 (e.g. 2.50k Hz), or fixed decimals.
+    const auto format = [decimals](float value, int maximumLength)
     {
         const float magnitude = std::abs(value);
         juce::String text;
-        if (magnitude >= 1000.0f)
+        if (decimals >= 0)
+            text = juce::String(value, decimals);
+        else if (magnitude >= 1000.0f)
             text = juce::String(value / 1000.0f, magnitude >= 10000.0f ? 1 : 2) + "k";
         else
             text = juce::String(value, magnitude >= 100.0f ? 0 : magnitude >= 10.0f ? 1 : 2);

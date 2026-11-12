@@ -66,9 +66,10 @@ protected:
     virtual void writeExtraState(juce::XmlElement&) const {}
     virtual void readExtraState(const juce::XmlElement&) {}
 
+    /** `decimals` >= 0 shows the value with that many decimals (otherwise 3 significant digits). */
     juce::AudioParameterFloat* addFloat(const juce::String& id, const juce::String& name,
                                         juce::NormalisableRange<float> range, float defaultValue,
-                                        const juce::String& label = {}, bool automatable = true);
+                                        const juce::String& label = {}, bool automatable = true, int decimals = -1);
     juce::AudioParameterBool* addBool(const juce::String& id, const juce::String& name, bool defaultValue);
     juce::AudioParameterChoice* addChoice(const juce::String& id, const juce::String& name,
                                           const juce::StringArray& choices, int defaultIndex, bool automatable = true);

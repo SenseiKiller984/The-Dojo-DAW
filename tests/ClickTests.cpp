@@ -41,6 +41,7 @@ std::vector<double> runClick(Click& click, ProcessorNode& node, double seconds, 
         transport.info.setIsRecording(recording);
         transport.info.setBpm(bpm);
         transport.info.setPpqPosition(ppq);
+        transport.info.setTimeInSeconds(done / kRate);
         transport.info.setPpqPositionOfLastBarStart(std::floor(ppq / 4.0) * 4.0);
         transport.info.setTimeSignature(juce::AudioPlayHead::TimeSignature{4, 4});
         buffer.clear();
@@ -125,6 +126,90 @@ TEST_CASE("The Click device ticks on the beat, accents the downbeat and follows 
         CHECK(onsets(out).size() == 2);
         CHECK(test::peak(out) <= 1.0);
     }
+}
+
+TEST_CASE("The Click's Own Tempo runs it at its own tempo, independently of the project", "[devices][click]")
+{
+    auto [node, click] = makeNode<Click>();
+    auto* own = click->getParameterById("ownTempo");
+    auto* tempo = click->getParameterById("tempo");
+    REQUIRE(own != nullptr);
+    REQUIRE(tempo != nullptr);
+    // (appended after the earlier parameters: automation lanes refer to parameters by index)
+    CHECK(click->getParameters().getLast() == tempo);
+
+    const auto spacedAt = [](const std::vector<std::size_t>& starts, double bpm)
+    {
+        for (std::size_t k = 0; k < starts.size(); ++k)
+            if (std::abs(static_cast<double>(starts[k]) - static_cast<double>(k) * 60.0 / bpm * kRate) > 1.5)
+                return false;
+        return true;
+    };
+
+    // Off (the default): the click follows the project, whatever its own Tempo says.
+    CHECK(own->getValue() == 0.0f);
+    setParameter(*click, "tempo", 60.0f);
+    CHECK(click->getEffectiveTempo(120.0) == 120.0);
+    auto starts = onsets(runClick(*click, *node, 2.6, true, false, 120.0));
+    CHECK(starts.size() == 6);
+    CHECK(spacedAt(starts, 120.0));
+    starts = onsets(runClick(*click, *node, 2.1, true, false, 90.0));
+    CHECK(starts.size() == 4);
+    CHECK(spacedAt(starts, 90.0));
+
+    // On, at double the project's tempo: twice the beats, accents every 4 of its own beats.
+    click->setOwnTempo(240.0, true);
+    CHECK(own->getValue() == 1.0f);
+    CHECK(click->getEffectiveTempo(120.0) == 240.0);
+    auto out = runClick(*click, *node, 2.6, true, false, 120.0);
+    starts = onsets(out);
+    REQUIRE(starts.size() == 11);
+    CHECK(spacedAt(starts, 240.0));
+    CHECK(peakAround(out, starts[0]) > peakAround(out, starts[1]) * 1.5);
+    CHECK(peakAround(out, starts[4]) > peakAround(out, starts[3]) * 1.5);
+    CHECK(peakAround(out, starts[8]) > peakAround(out, starts[7]) * 1.5);
+
+    // At half: the same whatever the project tempo is.
+    click->setOwnTempo(60.0, true);
+    for (const double projectBpm : {120.0, 90.0, 174.0})
+    {
+        starts = onsets(runClick(*click, *node, 2.1, true, false, projectBpm));
+        CHECK(starts.size() == 3);
+        CHECK(spacedAt(starts, 60.0));
+        CHECK(click->getEffectiveTempo(projectBpm) == 60.0);
+    }
+
+    // Any tempo, to two decimals.
+    click->setOwnTempo(133.33, true);
+    CHECK(tempo->getCurrentValueAsText() == "133.33");
+    CHECK_THAT(click->getEffectiveTempo(120.0), WithinAbs(133.33, 1e-4));
+    starts = onsets(runClick(*click, *node, 3.0, true, false, 120.0));
+    CHECK(starts.size() == 7);
+    CHECK(spacedAt(starts, click->getEffectiveTempo(120.0)));
+
+    // Off again: back with the project, the click's own tempo kept for next time.
+    setParameter(*click, "ownTempo", 0.0f);
+    CHECK(click->getEffectiveTempo(120.0) == 120.0);
+    CHECK(spacedAt(onsets(runClick(*click, *node, 2.6, true, false, 120.0)), 120.0));
+    CHECK(tempo->getCurrentValueAsText() == "133.33");
+    // Setting the tempo without turning it on leaves it off.
+    click->setOwnTempo(100.0, false);
+    CHECK(own->getValue() == 0.0f);
+    CHECK(click->getEffectiveTempo(120.0) == 120.0);
+
+    // Kept in range.
+    click->setOwnTempo(1000.0, true);
+    CHECK(click->getEffectiveTempo(120.0) == Click::kMaxTempo);
+    click->setOwnTempo(1.0, true);
+    CHECK(click->getEffectiveTempo(120.0) == Click::kMinTempo);
+
+    // Saved and restored with the device.
+    click->setOwnTempo(87.5, true);
+    juce::MemoryBlock state;
+    click->getStateInformation(state);
+    auto [node2, restored] = makeNode<Click>();
+    restored->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    CHECK(restored->getEffectiveTempo(120.0) == 87.5);
 }
 
 TEST_CASE("Create Click Track adds a mono aux input with the Click device", "[ui][click][tracks]")

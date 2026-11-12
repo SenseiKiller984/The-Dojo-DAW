@@ -27,6 +27,9 @@ struct AppServices
     Preferences& preferences;
     /** Opens the Preferences window on a tab (set by the main window). */
     std::function<void(Preferences::Tab)> showPreferences;
+    /** View > Full Screen: toggles it, and says whether it is on (set by the main window). */
+    std::function<void()> toggleFullScreen;
+    std::function<bool()> isFullScreen;
 };
 
 } // namespace dojo::ui

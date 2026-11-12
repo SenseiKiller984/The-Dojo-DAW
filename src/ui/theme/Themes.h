@@ -20,7 +20,7 @@ struct Palette
 struct Theme
 {
     juce::String name;
-    juce::String family; ///< "Standard", "Japanese", "Cherry Blossom", "Manga"
+    juce::String family; ///< "Standard", "Japanese", "Cherry Blossom", "Manga", "Sour"
     juce::String description;
     bool dark = true;
     Palette palette;

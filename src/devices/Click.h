@@ -18,6 +18,10 @@ namespace dojo::devices
     - Accent       the downbeat is accented
     - Subdivision  quarter notes, eighths or sixteenths
     - Play         during playback and recording, or only while recording
+    - Own Tempo    off: the click always follows the project tempo (whatever Tempo says); on: it
+                   clicks at Tempo instead, independently, its beats and bars counted from the
+                   start of the timeline
+    - Tempo        20 .. 400 BPM, to two decimals (used with Own Tempo)
 */
 class Click final : public BuiltinProcessor
 {
@@ -40,6 +44,15 @@ public:
     juce::AudioParameterBool* accent_ = nullptr;
     juce::AudioParameterChoice* subdivision_ = nullptr;
     juce::AudioParameterChoice* when_ = nullptr; ///< 0 = play and record, 1 = record only
+    juce::AudioParameterBool* ownTempo_ = nullptr;
+    juce::AudioParameterFloat* tempo_ = nullptr;
+
+    static constexpr float kMinTempo = 20.0f;
+    static constexpr float kMaxTempo = 400.0f;
+    /** Sets Tempo (clamped to the range); with `own`, also turns Own Tempo on. */
+    void setOwnTempo(double bpm, bool own);
+    /** The tempo the click plays at now: its own, or `projectBpm`. */
+    [[nodiscard]] double getEffectiveTempo(double projectBpm) const;
 
 protected:
     void prepareDsp(double sampleRate, int maximumBlockSize) override;

@@ -46,6 +46,8 @@ MainWindow::MainWindow(ui::AppServices& services)
     commandManager.getKeyMappings()->addChangeListener(this);
     services.preferences.addChangeListener(this);
     services.showPreferences = [this](ui::Preferences::Tab tab) { showPreferences(tab); };
+    services.toggleFullScreen = [this] { setFullScreenMode(!fullScreenMode_); };
+    services.isFullScreen = [this] { return fullScreenMode_; };
 
     // Fit the default size onto the current display (minus a margin for task bars / docks).
     const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
@@ -69,11 +71,126 @@ MainWindow::MainWindow(ui::AppServices& services)
 MainWindow::~MainWindow()
 {
     services_.showPreferences = nullptr;
+    services_.toggleFullScreen = nullptr;
+    services_.isFullScreen = nullptr;
     services_.preferences.removeChangeListener(this);
     services_.commands.getKeyMappings()->removeChangeListener(this);
     preferencesWindow_.reset();
     project_.onDocumentStateChanged = nullptr;
     setMenuBar(nullptr);
+}
+
+juce::Rectangle<int> MainWindow::getScreenArea(bool whole) const
+{
+    const auto& displays = juce::Desktop::getInstance().getDisplays();
+    const auto* display = displays.getDisplayForRect(getScreenBounds());
+    if (display == nullptr)
+        display = displays.getPrimaryDisplay();
+    if (display == nullptr)
+        return getBounds();
+    return (whole ? display->logicalBounds : display->userBounds).toNearestInt();
+}
+
+void MainWindow::setOwnBounds(juce::Rectangle<int> bounds)
+{
+    const juce::ScopedValueSetter<bool> setting(settingBounds_, true);
+    // (a screen smaller than the usual minimum size: the maximised window still fits it)
+    if (bounds.getWidth() < kMinWidth || bounds.getHeight() < kMinHeight)
+        setResizeLimits(std::min(kMinWidth, bounds.getWidth()), std::min(kMinHeight, bounds.getHeight()), 16384,
+                        16384);
+    zoomedBounds_ = bounds;
+    setBounds(bounds);
+}
+
+void MainWindow::maximiseButtonPressed()
+{
+    if (fullScreenMode_)
+        setFullScreenMode(false);
+    else
+        setMaximised(!maximised_);
+}
+
+void MainWindow::setMaximised(bool shouldBeMaximised)
+{
+    if (fullScreenMode_)
+        setFullScreenMode(false);
+    if (shouldBeMaximised == maximised_)
+        return;
+    if (shouldBeMaximised)
+    {
+        restoreBounds_ = getBounds();
+        maximised_ = true;
+        setOwnBounds(getScreenArea(false));
+    }
+    else
+    {
+        maximised_ = false;
+        const juce::ScopedValueSetter<bool> setting(settingBounds_, true);
+        if (!restoreBounds_.isEmpty() && restoreBounds_ != getBounds())
+            setBounds(restoreBounds_);
+        else
+            centreWithSize(std::min(getWidth(), getScreenArea(false).getWidth() * 3 / 4),
+                           std::min(getHeight(), getScreenArea(false).getHeight() * 3 / 4));
+    }
+    resized();
+}
+
+void MainWindow::setFullScreenMode(bool shouldBeFullScreen)
+{
+    if (shouldBeFullScreen == fullScreenMode_)
+        return;
+    if (shouldBeFullScreen)
+    {
+        maximisedBeforeFullScreen_ = maximised_;
+        if (!maximised_)
+            restoreBounds_ = getBounds();
+        maximised_ = false;
+        fullScreenMode_ = true;
+        setTitleBarHeight(0);
+        setOwnBounds(getScreenArea(true));
+    }
+    else
+    {
+        fullScreenMode_ = false;
+        setTitleBarHeight(30);
+        if (maximisedBeforeFullScreen_)
+        {
+            maximised_ = true;
+            setOwnBounds(getScreenArea(false));
+        }
+        else
+        {
+            const juce::ScopedValueSetter<bool> setting(settingBounds_, true);
+            setBounds(restoreBounds_.isEmpty() ? getScreenArea(false).reduced(80) : restoreBounds_);
+        }
+    }
+    services_.commands.commandStatusChanged();
+    resized();
+}
+
+void MainWindow::checkUserGeometry()
+{
+    if (settingBounds_ || (!maximised_ && !fullScreenMode_))
+        return;
+    if (getBounds() != zoomedBounds_ && !fullScreenMode_)
+        maximised_ = false; // (dragged or resized by the user: an ordinary window now)
+}
+
+void MainWindow::resized()
+{
+    juce::DocumentWindow::resized();
+    checkUserGeometry();
+    // The square shows "restore" while maximised (or full screen).
+    if (auto* button = getMaximiseButton())
+        button->setToggleState(maximised_ || fullScreenMode_, juce::dontSendNotification);
+}
+
+void MainWindow::moved()
+{
+    juce::DocumentWindow::moved();
+    checkUserGeometry();
+    if (auto* button = getMaximiseButton())
+        button->setToggleState(maximised_ || fullScreenMode_, juce::dontSendNotification);
 }
 
 void MainWindow::updateTitle()

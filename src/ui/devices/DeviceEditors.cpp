@@ -82,18 +82,38 @@ private:
     ParameterGrid grid_;
 };
 
-/** The Click: its parameters, and tempo detection of the selected tracks beside them. */
-class ClickEditor final : public juce::Component
+/** The Click: its parameters (with its own tempo: halve, double, take the project's), and tempo
+    detection of the selected tracks beside them. */
+class ClickEditor final : public juce::Component, private juce::Timer
 {
 public:
-    static constexpr int kParametersWidth = 3 * ParameterControl::kWidth + 16;
+    static constexpr int kParametersWidth = 4 * ParameterControl::kWidth + 16;
 
-    ClickEditor(juce::AudioProcessor& processor, const DeviceEditorContext& context)
-        : parameters_(processor, 16)
+    ClickEditor(devices::Click& click, const DeviceEditorContext& context)
+        : click_(click)
+        , session_(context.project.getSession())
+        , parameters_(click, 16)
         , tempo_(context.project.getSession(), context.editor)
     {
         addAndMakeVisible(parameters_);
         addAndMakeVisible(tempo_);
+        half_.setTooltip("Half the click's tempo (turns Own Tempo on)");
+        double_.setTooltip("Double the click's tempo (turns Own Tempo on)");
+        project_.setTooltip("The click's tempo becomes the project's");
+        half_.onClick = [this] { click_.setOwnTempo(click_.getEffectiveTempo(session_.getTempo()) * 0.5, true); };
+        double_.onClick = [this] { click_.setOwnTempo(click_.getEffectiveTempo(session_.getTempo()) * 2.0, true); };
+        project_.onClick = [this] { click_.setOwnTempo(session_.getTempo(), false); };
+        for (auto* b : {&half_, &double_, &project_})
+        {
+            b->setWantsKeyboardFocus(false);
+            addAndMakeVisible(b);
+        }
+        status_.setFont(theme::sans(11.5f));
+        status_.setColour(juce::Label::textColourId, theme::colour::textSecondary);
+        addAndMakeVisible(status_);
+        tempo_.onSetClickTempo = [this](double bpm) { click_.setOwnTempo(bpm, true); };
+        updateStatus();
+        startTimerHz(5);
     }
 
     void resized() override
@@ -101,12 +121,36 @@ public:
         auto area = getLocalBounds();
         tempo_.setBounds(area.removeFromRight(TempoDetectPanel::kPreferredWidth));
         area.removeFromRight(6);
+        auto bottom = area.removeFromBottom(26).reduced(6, 0);
+        half_.setBounds(bottom.removeFromLeft(36));
+        bottom.removeFromLeft(4);
+        double_.setBounds(bottom.removeFromLeft(36));
+        bottom.removeFromLeft(4);
+        project_.setBounds(bottom.removeFromLeft(80));
+        bottom.removeFromLeft(8);
+        status_.setBounds(bottom);
+        area.removeFromBottom(4);
         parameters_.setBounds(area);
     }
 
 private:
+    void timerCallback() override { updateStatus(); }
+    void updateStatus()
+    {
+        const double project = session_.getTempo();
+        const auto text = click_.ownTempo_->get()
+                              ? "Own tempo: " + juce::String(click_.getEffectiveTempo(project), 2) + " BPM"
+                              : "Follows the project: " + juce::String(project, 2) + " BPM";
+        if (text != status_.getText())
+            status_.setText(text, juce::dontSendNotification);
+    }
+
+    devices::Click& click_;
+    session::Session& session_;
     GenericEditor parameters_;
     TempoDetectPanel tempo_;
+    juce::TextButton half_{"/2"}, double_{"x2"}, project_{"= Project"};
+    juce::Label status_;
 };
 
 //==================================================================================================
@@ -1726,10 +1770,10 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
         preferredWidth = PagedEditor::preferredWidth(pages);
         return std::make_unique<PagedEditor>(processor, std::move(pages));
     }
-    if (dynamic_cast<devices::Click*>(&processor) != nullptr)
+    if (auto* click = dynamic_cast<devices::Click*>(&processor))
     {
         preferredWidth = ClickEditor::kParametersWidth + 6 + TempoDetectPanel::kPreferredWidth;
-        return std::make_unique<ClickEditor>(processor, context);
+        return std::make_unique<ClickEditor>(*click, context);
     }
     if (dynamic_cast<devices::Echo*>(&processor) != nullptr)
     {

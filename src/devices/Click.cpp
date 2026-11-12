@@ -20,6 +20,22 @@ Click::Click()
     accent_ = addBool("accent", "Accent", true);
     subdivision_ = addChoice("subdivision", "Subdivision", {"Quarter", "Eighth", "Sixteenth"}, 0);
     when_ = addChoice("when", "Play", {"Play and Record", "Record Only"}, 0);
+    // (added last: automation lanes refer to parameters by index)
+    ownTempo_ = addBool("ownTempo", "Own Tempo", false);
+    tempo_ = addFloat("tempo", "Tempo", {kMinTempo, kMaxTempo, 0.01f}, 120.0f, "BPM", true, 2);
+}
+
+void Click::setOwnTempo(double bpm, bool own)
+{
+    const auto value = juce::jlimit(kMinTempo, kMaxTempo, static_cast<float>(bpm));
+    tempo_->setValueNotifyingHost(tempo_->convertTo0to1(value));
+    if (own && !ownTempo_->get())
+        ownTempo_->setValueNotifyingHost(1.0f);
+}
+
+double Click::getEffectiveTempo(double projectBpm) const
+{
+    return ownTempo_->get() ? static_cast<double>(tempo_->get()) : projectBpm;
 }
 
 void Click::prepareDsp(double, int)
@@ -94,11 +110,21 @@ void Click::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) noe
         {
             const bool recording = info->getIsRecording();
             playing = info->getIsPlaying() && (when_->getIndex() == 0 || recording);
+            const double projectBpm = std::max(1.0, info->getBpm().orFallback(120.0));
             ppq = info->getPpqPosition().orFallback(0.0);
-            ppqPerSample = info->getBpm().orFallback(120.0) / 60.0 / sampleRate_;
+            ppqPerSample = projectBpm / 60.0 / sampleRate_;
             barStart = info->getPpqPositionOfLastBarStart().orFallback(std::floor(ppq / 4.0) * 4.0);
             if (const auto signature = info->getTimeSignature())
                 beatsPerBar = std::max(1, signature->numerator);
+            if (ownTempo_->get())
+            {
+                // Its own tempo: beats counted from the start of the timeline at that tempo.
+                const double bpm = std::max(1.0, static_cast<double>(tempo_->get()));
+                const double seconds = info->getTimeInSeconds().orFallback(ppq * 60.0 / projectBpm);
+                ppq = seconds * bpm / 60.0;
+                ppqPerSample = bpm / 60.0 / sampleRate_;
+                barStart = std::floor(ppq / beatsPerBar + 1.0e-9) * beatsPerBar;
+            }
         }
 
     const double ticksPerBeat = subdivision_->getIndex() == 2 ? 4.0 : subdivision_->getIndex() == 1 ? 2.0 : 1.0;

@@ -1,3 +1,4 @@
+#include "devices/Click.h"
 #include "session/TempoDetector.h"
 #include "TestAudio.h"
 #include "ui/EditorState.h"
@@ -303,4 +304,19 @@ TEST_CASE("The Click's tempo detection: the selected tracks, their average, and 
     REQUIRE(panel.waitUntilDone(120'000));
     REQUIRE(panel.getResult().tracks.size() == 1);
     CHECK_THAT(panel.getDetectedTempo(), WithinAbs(121.12, 0.011));
+
+    // In the Click's editor, "Set Click Tempo" gives the click the detected tempo as its own
+    // (x2 / /2 included), leaving the project's alone.
+    CHECK_FALSE(panel.clickButton.isVisible());
+    devices::Click click;
+    panel.onSetClickTempo = [&](double bpm) { click.setOwnTempo(bpm, true); };
+    panel.resized();
+    CHECK(panel.clickButton.isVisible());
+    CHECK(panel.clickButton.isEnabled());
+    const double project = session.getTempo();
+    panel.setOctave(2.0);
+    panel.applyToClick();
+    CHECK(click.getParameterById("ownTempo")->getValue() == 1.0f);
+    CHECK_THAT(click.getEffectiveTempo(project), WithinAbs(242.24, 0.021));
+    CHECK(session.getTempo() == project);
 }

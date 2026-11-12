@@ -123,6 +123,8 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addSeparator();
         menu.addCommandItem(cm, toggleClipRatings);
         menu.addCommandItem(cm, showVideo);
+        menu.addSeparator();
+        menu.addCommandItem(cm, toggleFullScreen);
         break;
     case 6:
         menu.addCommandItem(cm, preferences);

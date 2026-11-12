@@ -85,6 +85,7 @@ enum : juce::CommandID
     bypassClipGain,
     renderClipGain,
     showClipList,
+    toggleFullScreen,
 };
 
 namespace categories

@@ -87,6 +87,22 @@ std::vector<Theme> buildThemes()
                                 c(0xffff3b2f), c(0xffff6150), c(0xff1e6bff), c(0xff00a651), c(0xffff1f1f),
                                 c(0xfff1e6bf), c(0xff00a651), c(0xffe6b800), c(0xffff7a1a), c(0xffff1f1f),
                                 c(0xfffffaf0), c(0xfffff3da), c(0xffb8a978), c(0xffefe3bd), c(0xff1e6bff)}));
+
+    // --- Sour ---------------------------------------------------------------------------------------
+    // After the SOUR album art: its lavender cover, the face stickers (hot pink, smiley yellow,
+    // lime, purple), the baby-blue cheer uniform and the glossy black of the gloves.
+    themes.push_back(makeTheme("Sour Lavender", "Sour", "The album cover's lavender, sticker pink, smiley yellow and lime.", false,
+                               {c(0xffdcd3f5), c(0xffeae4fb), c(0xfff6f2ff), c(0xffd3c8f2), c(0xffe1d8f8), c(0xffd2c5f3), c(0xffc3b5ea), c(0xff9c89d6),
+                                c(0xff241a3f), c(0xff4f3f7c), c(0xff7e6fab),
+                                c(0xffd93a8b), c(0xfff05aa3), c(0xffd99a00), c(0xff3f9d32), c(0xffe0354a),
+                                c(0xffcfc3ef), c(0xff4fae2e), c(0xffe0a800), c(0xffef7a37), c(0xffe0354a),
+                                c(0xfff0ebfd), c(0xffe8e1fb), c(0xffb4a4e3), c(0xffd8cff5), c(0xff3e8edb)}));
+    themes.push_back(makeTheme("Sour Midnight", "Sour", "Lavender after dark: deep purple, glowing stickers, baby-blue playhead.", true,
+                               {c(0xff120e1f), c(0xff181329), c(0xff201936), c(0xff271f42), c(0xff31284f), c(0xff3c3160), c(0xff2e2548), c(0xff4d3f78),
+                                c(0xfff1ecff), c(0xffbcb0e3), c(0xff8276a8),
+                                c(0xffff5fa8), c(0xffff8cc2), c(0xffffd24d), c(0xffa6e85a), c(0xffff4d6a),
+                                c(0xff0c0917), c(0xffa6e85a), c(0xffffd24d), c(0xffff9a4d), c(0xffff4d6a),
+                                c(0xff151024), c(0xff1a1430), c(0xff3e3366), c(0xff241d3d), c(0xff8ec9f5)}));
     return themes;
 }
 
