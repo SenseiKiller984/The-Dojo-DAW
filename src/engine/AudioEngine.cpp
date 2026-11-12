@@ -693,7 +693,8 @@ void AudioEngine::processTrack(int graphIndex) noexcept
 
     case TrackKind::vca:
     case TrackKind::masterFader:
-        break; // control tracks: never in the render graph
+    case TrackKind::video:
+        break; // control and video tracks: never in the render graph
 
     case TrackKind::bus:
         sumBusSources(track, slot);

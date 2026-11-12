@@ -11,6 +11,7 @@
 #include "ui/EditActions.h"
 #include "ui/components/StatusBar.h"
 #include "ui/components/TransportBar.h"
+#include "ui/components/VideoWindow.h"
 #include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -122,6 +123,15 @@ private:
     void saveAs(std::function<void(bool saved)> onDone);
     void showOpenChooser();
     void showImportChooser();
+    void showImportVideoChooser();
+    /** Shows (or hides) the Video window. */
+    void showVideoWindow(bool show);
+
+public:
+    [[nodiscard]] video::FrameServer& getVideoFrames() noexcept { return videoFrames_; }
+    [[nodiscard]] VideoWindow* getVideoWindow() noexcept { return videoWindow_.get(); }
+
+private:
     void startNewSession();
     void afterDocumentLoaded();
 
@@ -167,6 +177,8 @@ private:
     int bottomHeight_ = 330;
 
     std::unique_ptr<juce::FileChooser> chooser_;
+    video::FrameServer videoFrames_; ///< decodes video for the arranger's thumbnails and the Video window
+    std::unique_ptr<VideoWindow> videoWindow_;
     juce::ScopedMessageBox messageBox_;
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow_;
 

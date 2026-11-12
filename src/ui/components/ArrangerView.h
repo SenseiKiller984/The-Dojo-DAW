@@ -4,6 +4,7 @@
 #include "engine/EngineController.h"
 #include "session/Project.h"
 #include "ui/EditorState.h"
+#include "video/FrameServer.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -48,7 +49,8 @@ class ArrangerView final : public juce::Component,
                            private juce::ValueTree::Listener,
                            private juce::ScrollBar::Listener,
                            private EditorState::Listener,
-                           private session::AudioAssetCache::Listener
+                           private session::AudioAssetCache::Listener,
+                           private juce::ChangeListener
 {
 public:
     /** Drag-and-drop description prefixes used by the browser. */
@@ -75,6 +77,11 @@ public:
     std::function<void(const juce::ValueTree& track, const juce::String& description)> onDeviceDropped;
     /** Runs an application command (the track menu's Duplicate..., Split into Mono, ...). */
     std::function<void(int commandId)> onCommand;
+    /** A video was imported (dropped): show the video window. */
+    std::function<void()> onVideoImported;
+
+    /** The decoder for video clip thumbnails (none: video clips show their name only). */
+    void setVideoFrames(video::FrameServer* frames);
 
     /** Track > Scroll to Track: brings `track` as close to the top as possible (opening the folders
         around it). */
@@ -256,6 +263,9 @@ private:
     void paintLanes(juce::Graphics& g) const;
     void paintAutomation(juce::Graphics& g, int rowIndex, const Row& row) const;
     void paintClip(juce::Graphics& g, const juce::ValueTree& clip, int row, juce::Colour colour) const;
+    /** A video clip's body: a strip of frames along it. */
+    void paintVideoFrames(juce::Graphics& g, const juce::ValueTree& clip, juce::Rectangle<float> area, juce::Colour colour) const;
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { repaint(getLaneArea()); }
     void paintWaveform(juce::Graphics& g, const juce::ValueTree& clip, juce::Rectangle<float> area,
                        juce::Colour colour) const;
     void paintMidiNotes(juce::Graphics& g, const juce::ValueTree& clip, juce::Rectangle<float> area,
@@ -303,6 +313,7 @@ private:
     session::Session& session_;
     engine::EngineController& controller_;
     EditorState& editor_;
+    video::FrameServer* videoFrames_ = nullptr;
 
     mutable std::vector<Row> rows_;
     mutable bool rowsDirty_ = true;

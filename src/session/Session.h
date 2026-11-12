@@ -29,6 +29,7 @@ using engine::TrackKind;
                       format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre
             CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, stretch, pitch,
                         sourceChannel, editLocked, timeLocked
+            VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
             MIDICLIP    id, name, start, length, offset (beats)
               NOTE        start, length (beats, relative to the clip content), note, velocity, channel
               CC          controller (0..127, 128 = pitch bend), beat, value (0..1), channel
@@ -49,6 +50,7 @@ inline const juce::Identifier master       {"MASTER"};
 inline const juce::Identifier track        {"TRACK"};
 inline const juce::Identifier clip         {"CLIP"};
 inline const juce::Identifier midiClip     {"MIDICLIP"};
+inline const juce::Identifier videoClip    {"VIDEOCLIP"};
 inline const juce::Identifier note         {"NOTE"};
 inline const juce::Identifier control      {"CC"};
 inline const juce::Identifier device       {"DEVICE"};
@@ -151,6 +153,8 @@ const std::array<juce::Colour, 8>& getTrackPalette();
 [[nodiscard]] bool holdsMidi(TrackKind kind);
 /** Tracks of this kind hold audio clips. */
 [[nodiscard]] bool holdsAudio(TrackKind kind);
+/** Tracks of this kind hold video clips (video tracks). */
+[[nodiscard]] bool holdsVideo(TrackKind kind);
 /** Tracks of this kind make sound of their own (and have a place in the render graph). */
 [[nodiscard]] bool isRendered(TrackKind kind);
 
@@ -261,6 +265,7 @@ namespace clip
 {
 std::uint32_t getId(const juce::ValueTree& c);
 bool isMidi(const juce::ValueTree& c);
+bool isVideo(const juce::ValueTree& c);
 juce::String getName(const juce::ValueTree& c);
 juce::File getFile(const juce::ValueTree& c);
 double getStart(const juce::ValueTree& c);
@@ -516,8 +521,10 @@ public:
     [[nodiscard]] static juce::ValueTree getTrackOf(const juce::ValueTree& clip) { return clip.getParent(); }
     [[nodiscard]] static bool isClip(const juce::ValueTree& tree)
     {
-        return tree.hasType(ids::clip) || tree.hasType(ids::midiClip);
+        return tree.hasType(ids::clip) || tree.hasType(ids::midiClip) || tree.hasType(ids::videoClip);
     }
+    /** A video clip on a video track: `length` seconds of `file` from `offset` seconds in. */
+    juce::ValueTree addVideoClip(juce::ValueTree track, const juce::File& file, double start, double length, double offset = 0.0);
 
     /** Moves a clip in time and (optionally) to another track of a compatible kind. An edit-locked
         clip does not move; a time-locked one only changes track (it keeps its start). */

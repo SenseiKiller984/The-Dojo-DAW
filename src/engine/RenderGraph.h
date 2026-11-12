@@ -41,6 +41,7 @@ enum class TrackKind : std::uint8_t
     midi,       ///< MIDI clips (and live MIDI), sent to an instrument track's instrument; no audio
     vca,        ///< VCA Master: its fader, mute and solo control its member tracks; no audio of its own
     masterFader, ///< a last gain stage (fader, mute, post-fader devices) on the main output or a bus
+    video,      ///< video clips, shown in the video window; no audio (never in the render graph)
 };
 
 enum class MonitorMode : std::uint8_t

@@ -1,6 +1,7 @@
 #include "ui/EditActions.h"
 
 #include "session/Project.h"
+#include "video/VideoSource.h"
 
 #include <vector>
 
@@ -169,7 +170,9 @@ bool pasteClips(session::Session& session, EditorState& editor, double seconds)
     for (const auto& e : entries)
     {
         const bool midi = session::clip::isMidi(e.clip);
-        const auto wanted = midi ? session::TrackKind::instrument : session::TrackKind::audio;
+        const auto wanted = midi ? session::TrackKind::instrument
+                            : session::clip::isVideo(e.clip) ? session::TrackKind::video
+                                                             : session::TrackKind::audio;
         const int index = targetFirst + (e.trackIndex - firstTrack);
         juce::ValueTree target = index >= 0 && index < static_cast<int>(tracks.size()) ? tracks[static_cast<std::size_t>(index)] : juce::ValueTree();
         if (!target.isValid() || session::track::getKind(target) != wanted)
@@ -321,6 +324,7 @@ juce::String getName(NewTrackType type)
     case NewTrackType::masterFader: return "Master Fader";
     case NewTrackType::clickTrack:  return "Click Track";
     case NewTrackType::folder:      return "Folder";
+    case NewTrackType::video:       return "Video Track";
     case NewTrackType::audio:       break;
     }
     return "Audio Track";
@@ -385,6 +389,7 @@ std::vector<juce::ValueTree> addNewTracks(session::Session& session, EditorState
                 session.addDevice(t, "builtin:click", "Click");
                 break;
             case NewTrackType::folder:     t = session.addFolder(name); break;
+            case NewTrackType::video:      t = session.addTrack(session::TrackKind::video, name); break;
             }
             if (!t.isValid())
                 continue;
@@ -594,6 +599,51 @@ juce::ValueTree createClickTrack(session::Session& session, EditorState& editor)
     row.type = NewTrackType::clickTrack;
     const auto created = addNewTracks(session, editor, {row});
     return created.empty() ? juce::ValueTree() : created.front();
+}
+
+juce::ValueTree importVideo(session::Session& session, EditorState& editor, const juce::File& file, double seconds,
+                            const juce::ValueTree& target, juce::String& error)
+{
+    auto source = video::openVideo(file, error);
+    if (source == nullptr)
+        return {};
+    const auto& info = source->getInfo();
+
+    juce::ValueTree t = target.isValid() && session::track::getKind(target) == session::TrackKind::video ? target : juce::ValueTree();
+    if (!t.isValid())
+        for (const auto& candidate : session.getAllTracks())
+            if (session::track::getKind(candidate) == session::TrackKind::video)
+            {
+                t = candidate;
+                break;
+            }
+
+    session.beginTransaction("Import Video");
+    if (!t.isValid())
+        t = session.addTrack(session::TrackKind::video, {}, 0); // video sits on top, like the picture above the mix
+
+    const double length = info.durationSeconds > 0.0 ? info.durationSeconds : 1.0;
+    auto c = session.addVideoClip(t, file, std::max(0.0, seconds), length);
+    editor.selectTrack(session::track::getId(t));
+    editor.setSelectedClips({session::clip::getId(c)});
+    return c;
+}
+
+VideoAtTime findVideoAt(const session::Session& session, double seconds)
+{
+    for (const auto& t : session.getAllTracks())
+    {
+        if (session::track::getKind(t) != session::TrackKind::video || session::track::isMuted(t) || !session::Session::isEffectivelyActive(t))
+            continue;
+        // Overlapping clips: the one drawn on top (added last) is the one seen.
+        for (int i = t.getNumChildren(); --i >= 0;)
+        {
+            const auto c = t.getChild(i);
+            if (c.hasType(session::ids::videoClip) && seconds >= session::clip::getStart(c) && seconds < session::clip::getEnd(c))
+                return {c, session::clip::getFile(c), session::clip::getOffset(c) + (seconds - session::clip::getStart(c))};
+        }
+    }
+    return {};
 }
 
 juce::ValueTree getTrackByNumber(const session::Session& session, int number)

@@ -33,6 +33,7 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, saveSessionAs);
         menu.addSeparator();
         menu.addCommandItem(cm, importAudio);
+        menu.addCommandItem(cm, importVideo);
         menu.addCommandItem(cm, exportAudio);
         menu.addSeparator();
         menu.addCommandItem(cm, juce::StandardApplicationCommandIDs::quit);
@@ -92,6 +93,8 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, showMixer);
         menu.addCommandItem(cm, showDevices);
         menu.addCommandItem(cm, showEditor);
+        menu.addSeparator();
+        menu.addCommandItem(cm, showVideo);
         break;
     case 6:
         menu.addCommandItem(cm, preferences);

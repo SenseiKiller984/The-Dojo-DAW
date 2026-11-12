@@ -43,6 +43,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **MIDI track**: MIDI clips (and live MIDI when armed) that play the instrument track picked in its menu (*MIDI Output*). Muting it silences its notes; soloing the instrument keeps it playing.
   - **VCA Master**: no audio of its own. Its fader (and volume automation) scales its member tracks, its mute mutes them and its solo solos them; VCAs can be nested. Assign tracks with *VCA* in the track menu (it applies to the whole selection).
   - **Master Fader**: one last fader, with mute, volume automation and post-fader devices, on the main output or on a bus (*Controls* in its menu; one per path).
+  - **Video Track**: video clips for scoring to picture (see *Video* below).
   - **Click Track**: a mono aux input with the **Click** device already inserted (also *Track > Create Click Track*).
 - **Duplicate...** (Alt+Shift+D) makes any number of copies of the selected tracks. You choose whether the copies get the clips, automation, devices (with their current settings) and sends. Each copy goes right after its source, or all of them after the last selected track. A folder is copied with its contents; routing inside it points at the copies.
 - **Delete** removes the selected tracks (undoable). Deleting a VCA Master coalesces it: its fader and automation are added into each member's own volume (and a muted VCA mutes them), so they sound exactly as before.
@@ -54,6 +55,18 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Make Inactive / Make Active**: an inactive track (or everything in an inactive folder) is not played and its devices use no CPU. Tracks routed into an inactive bus are silent. Inactive tracks are dimmed and can't be soloed, muted or recorded.
 - **Clear All Clip Indicators** (Alt+C) clears the red clip lights of every meter, in the mixer and on the master. They light when a signal goes over 0 dBFS and stay lit until cleared.
 - **Scroll to Track...** takes a track number (or a pick from the list), selects that track and brings it to the top of the arranger (opening collapsed folders) and the left of the mixer.
+
+**Video**
+- **File > Import Video...** (Ctrl+Shift+I), or drop a video file on the arranger.
+  - The video goes onto a video track (the one it's dropped on, or the first one; a new one at the top if there is none), at the playhead or the drop point.
+  - The **Video window** (*View > Video*, Ctrl+Shift+V) opens. It shows the picture at the playhead while playing, locating and scrubbing, with the timecode (hh:mm:ss:ff at the video's frame rate) and the clip's name.
+- Video clips show a **filmstrip** of their frames and edit like audio clips: move, trim, split, copy and paste, Edit and Time Lock. Muting a video track hides its picture, and the topmost video track with a clip at the playhead is the one shown.
+- Frames are decoded in the background, so the picture never holds up the interface or the audio.
+- Formats:
+  - **Motion-JPEG AVI** on every platform (built in).
+  - **MP4, MOV, MKV, WebM, AVI** (H.264, HEVC, VP9, ProRes, ...) with **FFmpeg** on Linux, found at build time (`libavformat-dev libavcodec-dev libswscale-dev`, installed by `scripts/setup-linux.sh`).
+  - **Windows Media Foundation** on Windows (MP4, MOV, AVI, WMV with H.264, HEVC, ...).
+- The demo project has a short picture track.
 
 **Recording and MIDI**
 - Pick each audio track's input (mono channel or stereo pair), arm it (R) and record (R key or the record button). Each track's monitoring is AUTO, IN (always the input) or OFF.
@@ -220,6 +233,7 @@ Sanitizer presets need Clang's runtimes (`libclang-rt-<ver>-dev` on Debian/Ubunt
 | CLAP hosting | Our own host on the official [CLAP SDK](https://github.com/free-audio/clap) 1.2.10 (MIT) |
 | Time-stretch / pitch | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) 1.4.0 (MIT) |
 | MP3 encoding | [LAME](https://lame.sourceforge.io) 3.100 (LGPL), vendored in `third_party/lame` |
+| Video decoding | Built-in Motion-JPEG AVI reader; [FFmpeg](https://ffmpeg.org) (LGPL, the system's shared libraries, optional) on Linux; Media Foundation on Windows |
 | Audio back-ends | Windows: ASIO, WASAPI, DirectSound. Linux: ALSA (incl. PulseAudio/PipeWire via ALSA), JACK (incl. PipeWire-JACK) |
 | Tests | Catch2 v3 |
 
@@ -240,6 +254,8 @@ src/devices   native devices: EQ, compressor, limiter, reverb, delay, Echo, Util
               pitch shift, Click; instruments: Wavetable, Operator, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
+src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),
+              Media Foundation (Windows); background frame server for the Video window and thumbnails
 src/session   the document (tracks, clips, MIDI, devices, sends, automation) with undo, audio
               decoding/streaming, device instances, graph compiler, recorder, exporter, save/open
 src/ui        arranger, mixer, devices panel + editors, piano roll, step sequencer, browser,
@@ -260,6 +276,7 @@ third_party/  vendored LAME
 7. ✅ **Instruments**: Drum Rack, Sampler, Impulse, Wavetable, Operator
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems
 9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning
+10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) with a surround panner, video tracks and a Video window
 
 ## Licensing
 

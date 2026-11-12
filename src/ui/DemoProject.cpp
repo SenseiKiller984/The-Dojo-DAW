@@ -2,6 +2,7 @@
 
 #include "devices/Dynamics.h"
 #include "devices/Instruments.h"
+#include "video/VideoSource.h"
 
 #include <cmath>
 
@@ -89,6 +90,46 @@ std::vector<float> bassLoop(double tempo)
     return s;
 }
 } // namespace
+
+/** The demo's picture: a title card with a bar/beat counter and a progress bar, `bars` long. */
+static bool writeDemoVideo(const juce::File& file, double tempo, int bars)
+{
+    constexpr double frameRate = 10.0;
+    constexpr int width = 320;
+    constexpr int height = 180;
+    const double beat = 60.0 / tempo;
+    const double length = bars * 4.0 * beat;
+    std::vector<juce::Image> frames;
+    for (int f = 0; f < static_cast<int>(std::ceil(length * frameRate)); ++f)
+    {
+        const double t = f / frameRate;
+        const int beatIndex = static_cast<int>(t / beat);
+        juce::Image image(juce::Image::RGB, width, height, true);
+        juce::Graphics g(image);
+        const float hue = static_cast<float>(std::fmod(0.02 + 0.08 * (beatIndex / 4), 1.0));
+        g.setGradientFill(juce::ColourGradient(juce::Colour::fromHSV(hue, 0.55f, 0.32f, 1.0f), 0.0f, 0.0f,
+                                               juce::Colour(0xff101014), static_cast<float>(width), static_cast<float>(height), false));
+        g.fillAll();
+        g.setColour(juce::Colour(0xffe0533d));
+        g.fillEllipse(24.0f, 52.0f, 44.0f, 44.0f);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions(30.0f, juce::Font::bold));
+        g.drawText("THE DOJO", juce::Rectangle<int>(80, 46, 220, 34), juce::Justification::centredLeft);
+        g.setFont(juce::FontOptions(16.0f));
+        g.drawText("Bar " + juce::String(beatIndex / 4 + 1) + "   Beat " + juce::String(beatIndex % 4 + 1),
+                   juce::Rectangle<int>(80, 82, 220, 22), juce::Justification::centredLeft);
+        // The beat flashes; a bar along the bottom shows where we are.
+        const double phase = std::fmod(t, beat) / beat;
+        g.setColour(juce::Colours::white.withAlpha(static_cast<float>(0.85 * (1.0 - phase))));
+        g.fillEllipse(36.0f, 64.0f, 20.0f, 20.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.25f));
+        g.fillRect(24, 150, width - 48, 4);
+        g.setColour(juce::Colour(0xffe0533d));
+        g.fillRect(24, 150, static_cast<int>((width - 48) * t / length), 4);
+        frames.push_back(image);
+    }
+    return video::writeMjpegAvi(file, frames, frameRate, 0.85f);
+}
 
 juce::Result createDemoProject(session::Project& project, const juce::File& folder)
 {
@@ -189,6 +230,15 @@ juce::Result createDemoProject(session::Project& project, const juce::File& fold
             mix->setValueNotifyingHost(mix->convertTo0to1(100.0f));
     session.addSend(keys, reverb, -8.0);
     session.addSend(drums, reverb, -18.0);
+
+    // Picture: a video track on top (View > Video shows it).
+    const auto videoFile = folder.getChildFile("Demo Picture.avi");
+    if (writeDemoVideo(videoFile, tempo, 8))
+    {
+        auto picture = session.addTrack(session::TrackKind::video, "Picture", 0);
+        session.addVideoClip(picture, videoFile, 0.0, 8.0 * bar);
+        session::track::setColour(picture, session::getTrackPalette()[6], um);
+    }
 
     // Master.
     session.addDevice(session.getMaster(), devices::Limiter::kTypeId, "Limiter");

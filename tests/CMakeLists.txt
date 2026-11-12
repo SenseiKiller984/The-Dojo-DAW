@@ -17,6 +17,7 @@ add_executable(dojo_tests
     ClickTests.cpp
     ClipLockTests.cpp
     MultichannelTests.cpp
+    VideoTests.cpp
     DeviceTests.cpp
     EditorDropTests.cpp
     EffectTests.cpp
@@ -47,7 +48,7 @@ endif()
 target_compile_definitions(dojo_tests PRIVATE
     DOJO_EXPECT_ALLOCATION_TRAP=$<BOOL:${DOJO_ALLOCATION_TRAP_COMPATIBLE}>)
 
-target_link_libraries(dojo_tests PRIVATE dojo::ui dojo::session dojo::plugins Catch2::Catch2WithMain)
+target_link_libraries(dojo_tests PRIVATE dojo::ui dojo::session dojo::plugins dojo::video Catch2::Catch2WithMain)
 
 # A real CLAP binary (two plug-ins) for the hosting tests, and the out-of-process scanner.
 add_library(dojo_test_clap MODULE clap/DojoTestPlugins.cpp)

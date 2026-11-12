@@ -70,6 +70,7 @@ juce::String defaultTrackName(TrackKind kind, bool folder, int number)
     case TrackKind::midi:        return "MIDI " + juce::String(number);
     case TrackKind::vca:         return "VCA " + juce::String(number);
     case TrackKind::masterFader: return "Master " + juce::String(number);
+    case TrackKind::video:       return "Video " + juce::String(number);
     case TrackKind::audio:       break;
     }
     return "Audio " + juce::String(number);
@@ -100,6 +101,7 @@ juce::String toString(TrackKind kind)
     case TrackKind::midi:        return "midi";
     case TrackKind::vca:         return "vca";
     case TrackKind::masterFader: return "masterFader";
+    case TrackKind::video:       return "video";
     case TrackKind::audio:       break;
     }
     return "audio";
@@ -204,12 +206,15 @@ TrackKind trackKindFromString(const juce::String& text)
         return TrackKind::vca;
     if (text == "masterFader")
         return TrackKind::masterFader;
+    if (text == "video")
+        return TrackKind::video;
     return TrackKind::audio;
 }
 
 bool holdsMidi(TrackKind kind) { return kind == TrackKind::instrument || kind == TrackKind::midi; }
 bool holdsAudio(TrackKind kind) { return kind == TrackKind::audio; }
-bool isRendered(TrackKind kind) { return kind != TrackKind::vca && kind != TrackKind::masterFader; }
+bool holdsVideo(TrackKind kind) { return kind == TrackKind::video; }
+bool isRendered(TrackKind kind) { return kind != TrackKind::vca && kind != TrackKind::masterFader && kind != TrackKind::video; }
 
 //==================================================================================================
 // Track accessors
@@ -356,6 +361,7 @@ namespace clip
 {
 std::uint32_t getId(const juce::ValueTree& c) { return readId(c); }
 bool isMidi(const juce::ValueTree& c) { return c.hasType(ids::midiClip); }
+bool isVideo(const juce::ValueTree& c) { return c.hasType(ids::videoClip); }
 juce::String getName(const juce::ValueTree& c) { return c.getProperty(ids::name).toString(); }
 juce::File getFile(const juce::ValueTree& c) { return juce::File(c.getProperty(ids::file).toString()); }
 double getStart(const juce::ValueTree& c) { return c.getProperty(ids::start, 0.0); }
@@ -842,7 +848,7 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
         for (int i = node.getNumChildren(); --i >= 0;)
         {
             const auto child = node.getChild(i);
-            const bool drop = ((child.hasType(ids::clip) || child.hasType(ids::midiClip)) && !options.clips)
+            const bool drop = (isClip(child) && !options.clips)
                               || (child.hasType(ids::device) && !options.devices) || (child.hasType(ids::send) && !options.sends)
                               || (child.hasType(ids::automation) && !options.automation);
             if (drop)
@@ -1192,6 +1198,23 @@ juce::ValueTree Session::addClip(juce::ValueTree t, const juce::File& file, doub
     return c;
 }
 
+juce::ValueTree Session::addVideoClip(juce::ValueTree t, const juce::File& file, double start, double length, double offset)
+{
+    if (!t.isValid())
+        return {};
+
+    juce::ValueTree c(ids::videoClip);
+    c.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    c.setProperty(ids::name, file.getFileNameWithoutExtension(), nullptr);
+    c.setProperty(ids::file, file.getFullPathName(), nullptr);
+    c.setProperty(ids::start, std::max(0.0, start), nullptr);
+    c.setProperty(ids::length, std::max(kMinClipLength, length), nullptr);
+    c.setProperty(ids::offset, std::max(0.0, offset), nullptr);
+
+    t.addChild(c, -1, &undo_);
+    return c;
+}
+
 juce::ValueTree Session::addMidiClip(juce::ValueTree t, double start, double length, const juce::String& name)
 {
     if (!t.isValid())
@@ -1230,9 +1253,9 @@ void Session::moveClip(juce::ValueTree c, juce::ValueTree targetTrack, double ne
     if (!targetTrack.isValid() || targetTrack == currentTrack || !currentTrack.isValid())
         return;
 
-    // Audio clips live on audio tracks, MIDI clips on instrument tracks.
+    // Audio clips live on audio tracks, MIDI clips on instrument and MIDI tracks, video clips on video tracks.
     const auto kind = track::getKind(targetTrack);
-    const bool compatible = clip::isMidi(c) ? holdsMidi(kind) : holdsAudio(kind);
+    const bool compatible = clip::isMidi(c) ? holdsMidi(kind) : clip::isVideo(c) ? holdsVideo(kind) : holdsAudio(kind);
     if (!compatible)
         return;
 
@@ -1667,15 +1690,16 @@ std::vector<juce::File> Session::getReferencedFiles() const
 
 namespace
 {
+/** Every clip that refers to a media file (audio and video). */
 template <typename Fn>
-void forEachAudioClip(juce::ValueTree parent, Fn&& fn)
+void forEachMediaClip(juce::ValueTree parent, Fn&& fn)
 {
     for (auto child : parent)
     {
-        if (child.hasType(ids::clip))
+        if (child.hasType(ids::clip) || child.hasType(ids::videoClip))
             fn(child);
         else if (child.hasType(ids::track))
-            forEachAudioClip(child, fn);
+            forEachMediaClip(child, fn);
     }
 }
 } // namespace
@@ -1686,7 +1710,7 @@ juce::Result Session::save(const juce::File& file) const
     copy.setProperty(ids::version, kFileFormatVersion, nullptr);
 
     const auto folder = file.getParentDirectory();
-    forEachAudioClip(copy, [&](juce::ValueTree c)
+    forEachMediaClip(copy, [&](juce::ValueTree c)
                      { c.setProperty(ids::fileRelative, clip::getFile(c).getRelativePathFrom(folder), nullptr); });
 
     const auto xml = copy.createXml();
@@ -1715,7 +1739,7 @@ juce::Result Session::load(const juce::File& file)
 
     // Prefer the path relative to the session file, so projects can be moved or copied as a folder.
     const auto folder = file.getParentDirectory();
-    forEachAudioClip(loaded,
+    forEachMediaClip(loaded,
                      [&](juce::ValueTree c)
                      {
                          const auto relative = c.getProperty(ids::fileRelative).toString();

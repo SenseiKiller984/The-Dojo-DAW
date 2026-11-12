@@ -62,6 +62,8 @@ enum : juce::CommandID
     createClickTrack,
     toggleEditLock,
     toggleTimeLock,
+    importVideo,
+    showVideo,
 };
 
 namespace categories

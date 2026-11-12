@@ -6,6 +6,7 @@
 #include "ui/Commands.h"
 #include "ui/EditActions.h"
 #include "ui/theme/DojoTheme.h"
+#include "video/VideoSource.h"
 
 #include <algorithm>
 #include <cmath>
@@ -87,6 +88,7 @@ juce::String kindLabel(const juce::ValueTree& t)
     case session::TrackKind::midi:        return "MIDI";
     case session::TrackKind::vca:         return "VCA";
     case session::TrackKind::masterFader: return "Master Fader";
+    case session::TrackKind::video:       return "Video";
     case session::TrackKind::audio:       break;
     }
     return "Audio";
@@ -145,9 +147,20 @@ ArrangerView::ArrangerView(session::Project& project, engine::EngineController& 
 
 ArrangerView::~ArrangerView()
 {
+    setVideoFrames(nullptr);
     project_.getAssets().removeListener(this);
     editor_.removeListener(this);
     session_.getState().removeListener(this);
+}
+
+void ArrangerView::setVideoFrames(video::FrameServer* frames)
+{
+    if (videoFrames_ != nullptr)
+        videoFrames_->removeChangeListener(this);
+    videoFrames_ = frames;
+    if (videoFrames_ != nullptr)
+        videoFrames_->addChangeListener(this);
+    repaint();
 }
 
 //==================================================================================================
@@ -1055,6 +1068,17 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
             for (int k = 0; k < 3; ++k)
                 g.fillEllipse(box.getX() + 2.5f + static_cast<float>(k) * 3.0f, box.getCentreY() - 1.0f, 2.0f, 2.0f);
         }
+        else if (kind == session::TrackKind::video)
+        {
+            // A strip of film: a frame with sprocket holes.
+            g.drawRect(box, 1.2f);
+            for (int k = 0; k < 3; ++k)
+            {
+                const float y = box.getY() + 1.5f + static_cast<float>(k) * (box.getHeight() - 3.0f) / 2.0f - 0.75f;
+                g.fillRect(box.getX() + 1.5f, y, 1.5f, 1.5f);
+                g.fillRect(box.getRight() - 3.0f, y, 1.5f, 1.5f);
+            }
+        }
         else if (kind == session::TrackKind::vca || kind == session::TrackKind::masterFader)
         {
             // A fader: a slot and a cap (two caps for a VCA's group).
@@ -1087,8 +1111,9 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
         g.drawText(text, box, juce::Justification::centred, false);
     };
 
-    paintToggle(getHeaderButton(rowIndex, 0), "A", session::track::isShowingAutomation(t), colour::textSecondary);
-    if (kind != session::TrackKind::masterFader) // (a master fader is not soloed)
+    if (kind != session::TrackKind::video) // (video has nothing to automate, nothing to solo)
+        paintToggle(getHeaderButton(rowIndex, 0), "A", session::track::isShowingAutomation(t), colour::textSecondary);
+    if (kind != session::TrackKind::masterFader && kind != session::TrackKind::video) // (a master fader is not soloed)
         paintToggle(getHeaderButton(rowIndex, 1), "S", session::track::isSoloed(t), colour::play);
     paintToggle(getHeaderButton(rowIndex, 2), "M", session::track::isMuted(t), colour::gold);
     if (canArm(kind))
@@ -1118,6 +1143,18 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
     {
         const auto members = session_.getVcaMembers(t).size();
         info = "VCA  " + formatDb(session::track::getVolumeDb(t)) + "  " + juce::String(members) + (members == 1 ? " track" : " tracks");
+    }
+    else if (kind == session::TrackKind::video)
+    {
+        // The picture format of its first clip: "Video  1920x1080  25 fps  h264".
+        info = "Video";
+        const auto first = t.getChildWithName(session::ids::videoClip);
+        if (first.isValid() && videoFrames_ != nullptr)
+            if (const auto videoInfo = videoFrames_->getInfo(session::clip::getFile(first)))
+                info << "  " << videoInfo->width << "x" << videoInfo->height << "  " << juce::String(videoInfo->frameRate, 2).trimCharactersAtEnd("0").trimCharactersAtEnd(".")
+                     << " fps  " << videoInfo->codec;
+        if (session::track::isMuted(t))
+            info << "  (hidden)";
     }
     else if (kind == session::TrackKind::masterFader)
     {
@@ -1328,6 +1365,53 @@ void ArrangerView::paintAutomation(juce::Graphics& g, int rowIndex, const Row& r
     }
 }
 
+void ArrangerView::paintVideoFrames(juce::Graphics& g, const juce::ValueTree& c, juce::Rectangle<float> body, juce::Colour colour) const
+{
+    using namespace theme;
+    const auto file = session::clip::getFile(c);
+    const auto message = [&](const juce::String& text, juce::Colour textColour)
+    {
+        g.setColour(textColour);
+        g.setFont(sans(11.0f));
+        g.drawText(text, body.reduced(6.0f, 2.0f), juce::Justification::centredLeft, true);
+    };
+    if (!file.existsAsFile())
+        return message("Missing: " + file.getFileName(), colour::meterClip);
+    if (videoFrames_ == nullptr)
+        return message(file.getFileName(), colour::textMuted);
+
+    juce::String error;
+    const auto info = videoFrames_->getInfo(file, &error);
+    if (!info.has_value())
+        return message(error, colour::meterClip);
+
+    // Frames side by side from the clip start, each showing the moment at its left edge.
+    const int height = juce::roundToInt(body.getHeight()) - 2;
+    if (height < 8 || info->width <= 0 || info->height <= 0)
+        return;
+    const float tileWidth = static_cast<float>(height) * static_cast<float>(info->width) / static_cast<float>(info->height);
+    const auto visible = body.getIntersection(g.getClipBounds().toFloat());
+    if (visible.isEmpty())
+        return;
+
+    g.saveState();
+    g.reduceClipRegion(body.toNearestInt());
+    const double offset = session::clip::getOffset(c);
+    for (float x = body.getX() + std::floor((visible.getX() - body.getX()) / tileWidth) * tileWidth; x < visible.getRight(); x += tileWidth)
+    {
+        const auto tile = juce::Rectangle<float>(x, body.getY() + 1.0f, tileWidth, static_cast<float>(height));
+        const auto image = videoFrames_->getThumbnail(file, offset + static_cast<double>(x - body.getX()) / pixelsPerSecond_, height);
+        if (image.isValid() && image.getWidth() > 1)
+            g.drawImage(image, tile.reduced(0.5f, 0.0f), juce::RectanglePlacement::stretchToFit);
+        else
+        {
+            g.setColour(colour.withAlpha(0.12f));
+            g.fillRect(tile.reduced(1.0f));
+        }
+    }
+    g.restoreState();
+}
+
 void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int row, juce::Colour colour) const
 {
     using namespace theme;
@@ -1367,8 +1451,13 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
     g.drawText(name, titleText, juce::Justification::centredLeft, true);
 
     const auto body = bounds.withTrimmedTop(kClipTitleHeight);
+    const bool video = session::clip::isVideo(c);
 
-    if (midi)
+    if (video)
+    {
+        paintVideoFrames(g, c, body, colour);
+    }
+    else if (midi)
     {
         paintMidiNotes(g, c, body.reduced(2.0f, 3.0f), colour.brighter(0.3f));
     }
@@ -1385,7 +1474,7 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
                    juce::Justification::centredLeft, true);
     }
 
-    if (!midi)
+    if (!midi && !video)
     {
         // Fades: shade the attenuated part and draw the ramp.
         const float fadeInWidth = static_cast<float>(session::clip::getFadeIn(c) * pixelsPerSecond_);
@@ -1757,7 +1846,7 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
     // Solo, mute and arm switch every selected track when the clicked one is part of the selection.
     const auto targets = inSelection ? selectedTracksInOrder(false) : std::vector<juce::ValueTree>{t};
     const auto kind = session::track::getKind(t);
-    if (getHeaderButton(rowIndex, 0).contains(position))
+    if (kind != session::TrackKind::video && getHeaderButton(rowIndex, 0).contains(position))
     {
         if (session::Session::getAutomationLanes(t).empty())
             session_.getAutomation(t, session::automation::volumeTarget(), true, currentValueFor(t, session::automation::volumeTarget()));
@@ -1766,7 +1855,7 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
             session::automation::setVisible(lane, true, nullptr);
         return;
     }
-    if (kind != session::TrackKind::masterFader && getHeaderButton(rowIndex, 1).contains(position))
+    if (kind != session::TrackKind::masterFader && kind != session::TrackKind::video && getHeaderButton(rowIndex, 1).contains(position))
     {
         session_.beginTransaction("Solo");
         const bool on = !session::track::isSoloed(t);
@@ -2882,11 +2971,29 @@ void ArrangerView::updateDropTarget(int x, int y)
 void ArrangerView::dropFiles(const juce::StringArray& files)
 {
     juce::StringArray audioFiles;
+    juce::StringArray videoFiles;
     for (const auto& path : files)
-        if (project_.getAssets().canRead(juce::File(path)))
+    {
+        if (video::isVideoFile(juce::File(path)))
+            videoFiles.add(path);
+        else if (project_.getAssets().canRead(juce::File(path)))
             audioFiles.add(path);
+    }
 
+    // Videos go onto a video track (the one they were dropped on, or the first, or a new one).
     auto target = dropRow_ >= 0 ? rows()[static_cast<std::size_t>(dropRow_)].track : juce::ValueTree();
+    bool importedVideo = false;
+    for (const auto& path : videoFiles)
+    {
+        juce::String error;
+        if (actions::importVideo(session_, editor_, juce::File(path), dropTime_, target, error).isValid())
+            importedVideo = true;
+        else
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Import Video", error);
+    }
+    if (importedVideo && onVideoImported)
+        onVideoImported();
+
     if (target.isValid() && session::track::getKind(target) != session::TrackKind::audio)
         target = {};
     if (target.isValid())
@@ -2902,7 +3009,7 @@ void ArrangerView::dropFiles(const juce::StringArray& files)
 bool ArrangerView::isInterestedInFileDrag(const juce::StringArray& files)
 {
     for (const auto& path : files)
-        if (project_.getAssets().canRead(juce::File(path)))
+        if (project_.getAssets().canRead(juce::File(path)) || video::isVideoFile(juce::File(path)))
             return true;
     return false;
 }

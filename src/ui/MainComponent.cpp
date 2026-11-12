@@ -144,6 +144,8 @@ MainComponent::MainComponent(AppServices& services)
         showImportChooser();
     };
     arranger_.onCommand = [this](int commandId) { commandManager_.invokeDirectly(commandId, true); };
+    arranger_.setVideoFrames(&videoFrames_);
+    arranger_.onVideoImported = [this] { showVideoWindow(true); };
     browser_.onFileActivated = [this](const juce::File& file)
     {
         importAudioFiles({file.getFullPathName()});
@@ -161,6 +163,9 @@ MainComponent::MainComponent(AppServices& services)
 
 MainComponent::~MainComponent()
 {
+    // The video decoder outlives nothing that watches it.
+    videoWindow_.reset();
+    arranger_.setVideoFrames(nullptr);
     services_.recorder.onStateChanged = nullptr;
     project_.getSession().getUndoManager().removeChangeListener(this);
     project_.onImportProblem = nullptr;
@@ -324,7 +329,9 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    clearClipIndicators,
                                    createClickTrack,
                                    toggleEditLock,
-                                   toggleTimeLock};
+                                   toggleTimeLock,
+                                   importVideo,
+                                   showVideo};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -358,6 +365,15 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     case importAudio:
         info.setInfo("Import Audio...", "Import audio files as clips", categories::file, 0);
         info.addDefaultKeypress('i', cmd);
+        break;
+    case importVideo:
+        info.setInfo("Import Video...", "Import a video file onto a video track (MP4, MOV, AVI, MKV, ...)", categories::file, 0);
+        info.addDefaultKeypress('i', cmd | shift);
+        break;
+    case showVideo:
+        info.setInfo("Video", "Show the Video window: the picture of the video track at the playhead", categories::view, 0);
+        info.setTicked(videoWindow_ != nullptr && videoWindow_->isVisible());
+        info.addDefaultKeypress('v', cmd | shift);
         break;
     case juce::StandardApplicationCommandIDs::quit:
         info.setInfo("Quit", "Quit The Dojo", categories::file, 0);
@@ -618,6 +634,12 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case saveSessionAs:
         saveAs({});
+        break;
+    case importVideo:
+        showImportVideoChooser();
+        break;
+    case showVideo:
+        showVideoWindow(videoWindow_ == nullptr || !videoWindow_->isVisible());
         break;
     case importAudio:
         showImportChooser();
@@ -939,6 +961,52 @@ void MainComponent::showImportChooser()
                           });
 }
 
+void MainComponent::showImportVideoChooser()
+{
+    chooser_ = std::make_unique<juce::FileChooser>("Import Video", juce::File::getSpecialLocation(juce::File::userMoviesDirectory),
+                                                   video::getVideoFileWildcard());
+    juce::Component::SafePointer<MainComponent> safe(this);
+    chooser_->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe](const juce::FileChooser& chooser)
+                          {
+                              if (safe == nullptr || !chooser.getResult().existsAsFile())
+                                  return;
+                              auto& session = safe->project_.getSession();
+                              juce::String error;
+                              const auto target = session.findTrack(safe->editor_.getSelectedTrack());
+                              if (actions::importVideo(session, safe->editor_, chooser.getResult(), safe->arranger_.getPlayheadSeconds(), target, error).isValid())
+                                  safe->showVideoWindow(true);
+                              else
+                                  safe->showMessage("Import Video", error);
+                          });
+}
+
+void MainComponent::showVideoWindow(bool show)
+{
+    if (show && videoWindow_ == nullptr)
+    {
+        videoWindow_ = std::make_unique<VideoWindow>(project_.getSession(), videoFrames_, [this] { return arranger_.getPlayheadSeconds(); });
+        videoWindow_->onClosed = [this] { commandManager_.commandStatusChanged(); };
+        // Top right of the main window.
+        if (auto* top = getTopLevelComponent())
+        {
+            const auto area = top->getScreenBounds();
+            videoWindow_->setBounds(area.getRight() - 680, area.getY() + 120, 660, 400);
+        }
+        else
+        {
+            videoWindow_->centreWithSize(660, 400);
+        }
+    }
+    if (videoWindow_ != nullptr)
+    {
+        videoWindow_->setVisible(show);
+        if (show)
+            videoWindow_->toFront(false);
+    }
+    commandManager_.commandStatusChanged();
+}
+
 void MainComponent::openDemoProject()
 {
     controller_.stop();
@@ -951,7 +1019,9 @@ void MainComponent::openDemoProject()
         return;
     }
     afterDocumentLoaded();
-    editor_.selectTrack(project_.getSession().getNumTracks() > 1 ? session::track::getId(project_.getSession().getTrack(1)) : 0u);
+    for (const auto& t : project_.getSession().getAllTracks())
+        if (session::track::getName(t) == "Drums")
+            editor_.selectTrack(session::track::getId(t));
     showBottomTab(BottomTab::devices);
 }
 

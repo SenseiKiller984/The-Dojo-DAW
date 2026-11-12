@@ -33,6 +33,8 @@ add_library(dojo_ui STATIC
     components/ExportDialog.h
     components/TrackDialogs.cpp
     components/TrackDialogs.h
+    components/VideoWindow.cpp
+    components/VideoWindow.h
     components/IconButton.cpp
     components/IconButton.h
     components/LevelMeter.cpp
@@ -59,7 +61,7 @@ add_library(dojo_ui STATIC
 add_library(dojo::ui ALIAS dojo_ui)
 
 target_link_libraries(dojo_ui
-    PUBLIC  dojo::session dojo::plugins
+    PUBLIC  dojo::session dojo::plugins dojo::video
     PRIVATE dojo::resources)
 dojo_apply_project_warnings(dojo_ui)
 set_target_properties(dojo_ui PROPERTIES FOLDER "Dojo")

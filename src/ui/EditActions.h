@@ -90,6 +90,7 @@ enum class NewTrackType
     masterFader, ///< a last fader (and post-fader devices) on the main output or a bus
     clickTrack,  ///< a mono aux input with the Click device: a metronome that follows the transport
     folder,
+    video,       ///< video clips, shown in the video window (View > Video)
 };
 [[nodiscard]] juce::String getName(NewTrackType type);
 /** Whether the type has a format choice (mono, stereo or a multichannel format): audio tracks, aux
@@ -141,6 +142,24 @@ bool setSelectedTracksActive(session::Session& session, EditorState& editor, boo
 /** Track > Create Click Track: a mono aux input named "Click" with the Click device inserted, after
     the current track (selected). One undo step. */
 juce::ValueTree createClickTrack(session::Session& session, EditorState& editor);
+
+/**
+    File > Import Video (and video files dropped on the arranger): a video clip of the whole file at
+    `seconds`, on `target` if it is a video track, else on the first video track, else on a new one
+    at the top. Selects the clip. Invalid (and `error` set) if the file cannot be decoded.
+*/
+juce::ValueTree importVideo(session::Session& session, EditorState& editor, const juce::File& file, double seconds,
+                            const juce::ValueTree& target, juce::String& error);
+
+/** What the video window shows at `seconds`: the clip of the topmost active, unmuted video track
+    there, and the time within its file. */
+struct VideoAtTime
+{
+    juce::ValueTree clip;
+    juce::File file;
+    double fileSeconds = 0.0;
+};
+[[nodiscard]] VideoAtTime findVideoAt(const session::Session& session, double seconds);
 
 /** Track numbers (Scroll to Track): 1 = the first track in the arranger, counting tracks inside folders. */
 [[nodiscard]] juce::ValueTree getTrackByNumber(const session::Session& session, int number);
