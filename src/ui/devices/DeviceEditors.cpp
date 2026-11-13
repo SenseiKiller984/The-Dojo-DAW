@@ -9,6 +9,7 @@
 #include "devices/Operator.h"
 #include "devices/TimeEffects.h"
 #include "devices/WavetableSynth.h"
+#include "session/Presets.h"
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
 #include "ui/devices/MoreDeviceEditors.h"
@@ -690,7 +691,7 @@ public:
         dragging_ = nullptr;
     }
 
-    bool isInterestedInFileDrag(const juce::StringArray& files) override { return !files.isEmpty(); }
+    bool isInterestedInFileDrag(const juce::StringArray& files) override { return session::presets::hasNonPresetFile(files); }
     void fileDragEnter(const juce::StringArray&, int, int) override
     {
         dropping_ = true;
@@ -861,7 +862,7 @@ public:
         rack_.triggerPad(pad, 0.8f + 0.2f * (1.0f - e.position.y / static_cast<float>(getHeight())));
     }
 
-    bool isInterestedInFileDrag(const juce::StringArray& files) override { return !files.isEmpty(); }
+    bool isInterestedInFileDrag(const juce::StringArray& files) override { return session::presets::hasNonPresetFile(files); }
     void fileDragMove(const juce::StringArray&, int x, int y) override
     {
         dropPad_ = padAt({x, y});
@@ -1414,7 +1415,7 @@ public:
     }
 
     // Files from the file manager...
-    bool isInterestedInFileDrag(const juce::StringArray& files) override { return !files.isEmpty(); }
+    bool isInterestedInFileDrag(const juce::StringArray& files) override { return session::presets::hasNonPresetFile(files); }
     void fileDragMove(const juce::StringArray&, int x, int y) override
     {
         dropSlot_ = slotAt({x, y});

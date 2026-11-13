@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Synth Bite: one preset, settings for two devices. An EQ loads the "builtin:eq" entry, a
+     Channel EQ the "builtin:channeleq" entry; both shape the sound the same way:
+       - the sub-bass rumble below ~80 Hz goes (headroom, a tighter low end),
+       - the boxy, muddy low mids come down (where overlapping parts mask each other),
+       - the 3 kHz presence region comes up hard (the "bite": attack, edge, upfront),
+       - a high shelf opens up the top (no longer dark),
+       - the output is trimmed so the change is not just "louder". -->
+<DOJO_PRESET version="1" name="Synth Bite"
+             description="Makes a sound more aggressive, present and upfront in the mix: for an instrument that is too soft, too dark, or masked by the tracks around it.">
+  <DEVICE key="builtin:eq" name="EQ">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="90.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="350.0"/>
+      <PARAM id="band2Gain" value="-3.0"/>
+      <PARAM id="band2Q" value="1.1"/>
+      <PARAM id="band3On" value="1.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="3000.0"/>
+      <PARAM id="band3Gain" value="6.0"/>
+      <PARAM id="band3Q" value="0.8"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="7000.0"/>
+      <PARAM id="band4Gain" value="4.5"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="-1.5"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:channeleq" name="Channel EQ">
+    <DOJO_DEVICE type="builtin:channeleq" version="1">
+      <PARAM id="lowcut" value="1.0"/>
+      <PARAM id="low" value="-3.0"/>
+      <PARAM id="midfreq" value="3000.0"/>
+      <PARAM id="mid" value="6.0"/>
+      <PARAM id="high" value="5.5"/>
+      <PARAM id="output" value="-1.5"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

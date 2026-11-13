@@ -2,6 +2,7 @@
 
 #include "engine/Preview.h"
 #include "plugins/PluginManager.h"
+#include "session/Presets.h"
 #include "ui/DeviceActions.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -19,6 +20,10 @@ namespace dojo::ui
                               plug-in, grouped, with a search field. Drag one onto a track or the
                               Devices panel, or double-click (Return) to add it to the selected track.
                               Scan / rescan / search folders / blacklist live in its "..." menu.
+                              Below the devices: PRESETS, the built-in presets and the user's
+                              (.dojopreset files in the presets folder). Drag a preset onto a
+                              device to load it, or onto the Devices panel to add a device that
+                              starts from it; double-click uses it on the selected track.
     FOLDERS (bottom)          Starts empty: add the folders you keep samples in ("+", or drop a folder
                               from the file manager). Each is a tree of its sub-folders and audio
                               files, with its own search field (searches every added folder,
@@ -41,11 +46,15 @@ public:
     std::function<void(const juce::File&)> onFileActivated;
     /** Called when a device or plug-in is double-clicked. */
     std::function<void(const deviceActions::DeviceChoice&)> onDeviceActivated;
+    /** Called when a preset is double-clicked. */
+    std::function<void(const session::presets::Preset&)> onPresetActivated;
 
     /** Refreshes the device and plug-in list (after a scan). */
     void refreshPlugins();
     /** Starts a background plug-in scan. */
     void scanPlugins(bool rescanAll);
+    /** Reads the presets again (the browser also notices changes in the presets folder itself). */
+    void refreshPresets();
 
     // --- Folders ---------------------------------------------------------------------------------
     void addFolder(const juce::File& folder);
@@ -61,6 +70,10 @@ public:
     void setDeviceSearch(const juce::String& query);
     /** Names of the devices and plug-ins currently listed (tests). */
     [[nodiscard]] juce::StringArray getListedDeviceNames() const;
+    /** Names of the presets currently listed (tests). */
+    [[nodiscard]] juce::StringArray getListedPresetNames() const;
+    /** The drag description of the listed preset called `name` (tests; empty when not listed). */
+    [[nodiscard]] juce::String getPresetDragDescription(const juce::String& name) const;
 
     // --- Preview ---------------------------------------------------------------------------------
     void setPreviewEnabled(bool enabled);
@@ -123,6 +136,7 @@ private:
     bool wasPlaying_ = false;
     juce::File shownPreviewFile_;
     int slowTicks_ = 0;
+    juce::String presetFolderSignature_; ///< what the presets folder held when last read
 
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::Rectangle<int> devicesHeader_;

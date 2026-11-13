@@ -4,6 +4,7 @@
 #include "core/rt/RealtimeGuard.h"
 #include "ui/Commands.h"
 #include "ui/EditActions.h"
+#include "ui/PresetActions.h"
 #include "engine/AudioEngine.h"
 #include "ui/DemoProject.h"
 #include "ui/components/ExportDialog.h"
@@ -123,6 +124,12 @@ MainComponent::MainComponent(AppServices& services)
     };
     arranger_.onDeviceDropped = [this](const juce::ValueTree& target, const juce::String& description)
     {
+        if (presetActions::isPresetDrag(description))
+        {
+            if (const auto preset = presetActions::fromDragDescription(description))
+                usePreset(*preset, target);
+            return;
+        }
         if (const auto choice = deviceActions::fromDragDescription(description, services_.plugins))
             addDevice(*choice, target);
     };
@@ -131,6 +138,8 @@ MainComponent::MainComponent(AppServices& services)
         auto& session = project_.getSession();
         addDevice(choice, editor_.isMasterSelected() ? session.getMaster() : session.findTrack(editor_.getSelectedTrack()));
     };
+    browser_.onPresetActivated = [this](const session::presets::Preset& preset)
+    { usePreset(preset, presetActions::selectedOwner(project_.getSession(), editor_)); };
     mixer_.onShowDevices = [this] { showBottomTab(BottomTab::devices); };
     services_.recorder.onStateChanged = [this]
     {
@@ -1278,6 +1287,21 @@ void MainComponent::toggleRecording()
 void MainComponent::addDevice(const deviceActions::DeviceChoice& choice, juce::ValueTree target)
 {
     deviceActions::addDevice(project_.getSession(), editor_, std::move(target), choice);
+    showBottomTab(BottomTab::devices);
+}
+
+void MainComponent::usePreset(const session::presets::Preset& preset, const juce::ValueTree& target)
+{
+    const auto outcome = presetActions::useOn(project_, services_.plugins, editor_, target, preset);
+    if (!outcome.ok)
+    {
+        showMessage("Preset", outcome.message);
+        return;
+    }
+    if (target.hasType(session::ids::track))
+        editor_.selectTrack(session::track::getId(target));
+    else if (target.hasType(session::ids::master))
+        editor_.selectMaster();
     showBottomTab(BottomTab::devices);
 }
 

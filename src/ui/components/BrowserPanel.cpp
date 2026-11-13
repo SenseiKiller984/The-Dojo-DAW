@@ -1,6 +1,7 @@
 #include "ui/components/BrowserPanel.h"
 
 #include "ui/BrowserDrag.h"
+#include "ui/PresetActions.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <algorithm>
@@ -369,6 +370,12 @@ public:
         rebuild();
     }
 
+    void setPresets(std::vector<session::presets::Preset> presets)
+    {
+        presets_ = std::move(presets);
+        rebuild();
+    }
+
     void setQuery(const juce::String& query)
     {
         query_ = query;
@@ -384,6 +391,23 @@ public:
         return names;
     }
 
+    [[nodiscard]] juce::StringArray getListedPresetNames() const
+    {
+        juce::StringArray names;
+        for (const auto& row : rows_)
+            if (row.preset != nullptr)
+                names.add(row.preset->name);
+        return names;
+    }
+
+    [[nodiscard]] juce::String getPresetDragDescription(const juce::String& name) const
+    {
+        for (const auto& row : rows_)
+            if (row.preset != nullptr && row.preset->name == name)
+                return presetActions::toDragDescription(*row.preset);
+        return {};
+    }
+
     void resized() override { list_.setBounds(getLocalBounds()); }
 
 private:
@@ -391,6 +415,7 @@ private:
     {
         juce::String heading;
         const deviceActions::DeviceChoice* choice = nullptr;
+        const session::presets::Preset* preset = nullptr;
     };
 
     void rebuild()
@@ -407,13 +432,23 @@ private:
                 if (!matchesAll(choice.name + " " + choice.category, terms))
                     continue;
                 if (first)
-                    rows_.push_back({heading, nullptr});
+                    rows_.push_back({heading, nullptr, nullptr});
                 first = false;
-                rows_.push_back({{}, &choice});
+                rows_.push_back({{}, &choice, nullptr});
             }
         };
         addGroup("INSTRUMENTS", false, true);
         addGroup("AUDIO EFFECTS", false, false);
+        bool firstPreset = true;
+        for (const auto& preset : presets_)
+        {
+            if (!matchesAll(preset.name + " preset " + preset.getDeviceNames().joinIntoString(" "), terms))
+                continue;
+            if (firstPreset)
+                rows_.push_back({"PRESETS", nullptr, nullptr});
+            firstPreset = false;
+            rows_.push_back({{}, nullptr, &preset});
+        }
         addGroup("PLUG-IN INSTRUMENTS", true, true);
         addGroup("PLUG-IN EFFECTS", true, false);
         list_.deselectAllRows();
@@ -434,6 +469,23 @@ private:
         if (row < 0 || row >= getNumRows())
             return;
         const auto& r = rows_[static_cast<std::size_t>(row)];
+        if (r.preset != nullptr)
+        {
+            if (selected)
+                g.fillAll(colour::accent.withAlpha(0.28f));
+            juce::Path diamond;
+            const float cy = static_cast<float>(height) * 0.5f;
+            diamond.addQuadrilateral(15.0f, cy - 4.0f, 19.0f, cy, 15.0f, cy + 4.0f, 11.0f, cy);
+            g.setColour(r.preset->builtIn ? colour::accent : colour::textSecondary);
+            g.fillPath(diamond);
+            g.setColour(colour::textPrimary);
+            g.setFont(sans(12.5f));
+            g.drawText(r.preset->name, 26, 0, width - 30, height, juce::Justification::centredLeft, true);
+            g.setColour(colour::textMuted);
+            g.setFont(sans(10.5f));
+            g.drawText(r.preset->getDeviceNames().joinIntoString(", "), 26, 0, width - 32, height, juce::Justification::centredRight, true);
+            return;
+        }
         if (r.choice == nullptr)
         {
             g.setColour(colour::textMuted);
@@ -454,10 +506,17 @@ private:
         g.drawText(r.choice->category, 26, 0, width - 32, height, juce::Justification::centredRight, true);
     }
 
+    [[nodiscard]] const session::presets::Preset* presetAt(int row) const
+    {
+        return row >= 0 && row < static_cast<int>(rows_.size()) ? rows_[static_cast<std::size_t>(row)].preset : nullptr;
+    }
+
     void activate(int row)
     {
         if (const auto* choice = choiceAt(row); choice != nullptr && browser_.onDeviceActivated)
             browser_.onDeviceActivated(*choice);
+        if (const auto* preset = presetAt(row); preset != nullptr && browser_.onPresetActivated)
+            browser_.onPresetActivated(*preset);
     }
 
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override { activate(row); }
@@ -467,12 +526,18 @@ private:
     {
         if (rows.isEmpty())
             return {};
+        if (const auto* preset = presetAt(rows[0]))
+            return presetActions::toDragDescription(*preset);
         const auto* choice = choiceAt(rows[0]);
         return choice != nullptr ? juce::var(deviceActions::toDragDescription(*choice)) : juce::var();
     }
 
     juce::String getTooltipForRow(int row) override
     {
+        if (const auto* preset = presetAt(row))
+            return (preset->description.isNotEmpty() ? preset->description + "\n" : juce::String()) + "Preset for " +
+                   preset->getDeviceNames().joinIntoString(", ") +
+                   " - drag onto a device to load it, or double-click to use it on the selected track";
         const auto* choice = choiceAt(row);
         if (choice == nullptr)
             return {};
@@ -481,6 +546,7 @@ private:
 
     BrowserPanel& browser_;
     std::vector<deviceActions::DeviceChoice> all_;
+    std::vector<session::presets::Preset> presets_;
     std::vector<Row> rows_;
     juce::String query_;
     juce::ListBox list_;
@@ -739,6 +805,7 @@ BrowserPanel::BrowserPanel(const juce::String& audioWildcard, plugins::PluginMan
     search_ = std::make_unique<SearchThread>(*this);
 
     refreshPlugins();
+    refreshPresets();
     startTimerHz(kTimerHz);
 }
 
@@ -863,6 +930,37 @@ juce::StringArray BrowserPanel::getListedDeviceNames() const
     return deviceList_->getListedNames();
 }
 
+namespace
+{
+/** The preset files in the presets folder, with their sizes and times (to notice changes). */
+juce::String presetFolderSignature()
+{
+    juce::String signature;
+    const auto folder = session::presets::getUserFolder();
+    if (folder.isDirectory())
+        for (const auto& entry : juce::RangedDirectoryIterator(folder, true, session::presets::kWildcard, juce::File::findFiles))
+            signature << entry.getFile().getFullPathName() << '|' << entry.getFileSize() << '|'
+                      << entry.getModificationTime().toMilliseconds() << '\n';
+    return signature;
+}
+} // namespace
+
+void BrowserPanel::refreshPresets()
+{
+    presetFolderSignature_ = presetFolderSignature();
+    deviceList_->setPresets(session::presets::getAll());
+}
+
+juce::StringArray BrowserPanel::getListedPresetNames() const
+{
+    return deviceList_->getListedPresetNames();
+}
+
+juce::String BrowserPanel::getPresetDragDescription(const juce::String& name) const
+{
+    return deviceList_->getPresetDragDescription(name);
+}
+
 void BrowserPanel::refreshPlugins()
 {
     auto choices = deviceActions::getNativeChoices();
@@ -980,6 +1078,8 @@ void BrowserPanel::timerCallback()
     {
         slowTicks_ = 0;
         preview_.collectGarbage();
+        if (presetFolderSignature() != presetFolderSignature_)
+            refreshPresets();
         if (!plugins_.isScanning() && scanStatus_.startsWith("Scanning"))
             refreshPlugins();
         else if (plugins_.isScanning())

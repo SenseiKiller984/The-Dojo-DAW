@@ -1,4 +1,5 @@
 #include "engine/AudioEngine.h"
+#include "session/Presets.h"
 #include "ui/BrowserDrag.h"
 #include "ui/components/BrowserPanel.h"
 #include "TestAudio.h"
@@ -145,6 +146,45 @@ TEST_CASE("Browser device search filters devices and plug-ins", "[browser]")
 
     browser->setDeviceSearch({});
     CHECK(browser->getListedDeviceNames().size() == all.size());
+}
+
+TEST_CASE("The browser lists presets (built-in and the user's), searchable and draggable", "[browser][presets]")
+{
+    BrowserRig rig;
+    const auto folder = rig.temp.dir.getChildFile("Presets");
+    session::presets::setUserFolder(folder);
+    auto browser = rig.makeBrowser();
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
+    CHECK(browser->getPresetDragDescription("Synth Bite") == "DojoPreset:builtin:Synth Bite");
+
+    // A preset saved into the presets folder (by The Dojo or copied there) shows up.
+    session::presets::Preset mine;
+    mine.name = "Glassy Pad";
+    session::presets::DeviceSettings settings;
+    settings.key = "builtin:reverb";
+    settings.deviceName = "Reverb";
+    juce::MemoryBlock state;
+    juce::AudioProcessor::copyXmlToBinary(juce::XmlElement("DOJO_DEVICE"), state);
+    settings.state = state;
+    mine.put(settings);
+    REQUIRE(mine.save(folder.getChildFile("Pads/Glassy Pad")).wasOk());
+    browser->refreshPresets();
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite", "Glassy Pad"});
+    CHECK(browser->getPresetDragDescription("Glassy Pad") ==
+          "DojoPreset:" + folder.getChildFile("Pads/Glassy Pad.dojopreset").getFullPathName());
+
+    // Search: by name, by the devices it is for, or "preset".
+    browser->setDeviceSearch("bite");
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
+    browser->setDeviceSearch("channel eq");
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Channel EQ"});
+    browser->setDeviceSearch("reverb");
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Glassy Pad"});
+    browser->setDeviceSearch("preset");
+    CHECK(browser->getListedPresetNames().size() == 2);
+    browser->setDeviceSearch({});
+    session::presets::setUserFolder({});
 }
 
 TEST_CASE("Selecting a file previews it unless preview is switched off", "[browser]")

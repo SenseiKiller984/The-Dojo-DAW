@@ -1,5 +1,7 @@
 #include "app/MainWindow.h"
 
+#include "app/WindowManager.h"
+
 #include <optional>
 
 #include "core/Version.h"
@@ -102,35 +104,80 @@ void MainWindow::setOwnBounds(juce::Rectangle<int> bounds)
     setBounds(bounds);
 }
 
+juce::Rectangle<int> MainWindow::defaultBounds() const
+{
+    const auto area = getScreenArea(false);
+    const int width = juce::jlimit(kMinWidth, juce::jmax(kMinWidth, area.getWidth() - 40), kDefaultWidth);
+    const int height = juce::jlimit(kMinHeight, juce::jmax(kMinHeight, area.getHeight() - 40), kDefaultHeight);
+    return juce::Rectangle<int>(width, height).withCentre(area.getCentre());
+}
+
+juce::Rectangle<int> MainWindow::sensibleRestoreBounds(juce::Rectangle<int> bounds) const
+{
+    // Restoring to something that covers the screen would look like nothing happened.
+    const auto area = getScreenArea(false);
+    if (bounds.isEmpty() || (bounds.getWidth() >= area.getWidth() - 8 && bounds.getHeight() >= area.getHeight() - 8))
+        return defaultBounds();
+    return bounds;
+}
+
+void MainWindow::applyRestoreBounds()
+{
+    const juce::ScopedValueSetter<bool> setting(settingBounds_, true);
+    setBounds(sensibleRestoreBounds(restoreBounds_));
+}
+
+void MainWindow::leaveWindowManagerZoom()
+{
+    // Ask the window manager to let go first: while it holds the window maximised (or full
+    // screen) it ignores the window's own size. Then set the size, and once more a moment later
+    // for window managers that put back their own idea of it.
+    ignoreManagerUntil_ = juce::Time::getMillisecondCounter() + 800;
+    windowmanager::requestFullScreen(getPeer(), false);
+    windowmanager::requestMaximised(getPeer(), false);
+    applyRestoreBounds();
+    juce::Component::SafePointer<MainWindow> safe(this);
+    juce::Timer::callAfterDelay(250,
+                                [safe]
+                                {
+                                    if (safe == nullptr || safe->maximised_ || safe->fullScreenMode_)
+                                        return;
+                                    const auto area = safe->getScreenArea(false);
+                                    if (safe->getWidth() >= area.getWidth() - 8 && safe->getHeight() >= area.getHeight() - 8)
+                                    {
+                                        safe->ignoreManagerUntil_ = juce::Time::getMillisecondCounter() + 800;
+                                        windowmanager::requestMaximised(safe->getPeer(), false);
+                                        safe->applyRestoreBounds();
+                                    }
+                                });
+}
+
 void MainWindow::maximiseButtonPressed()
 {
     if (fullScreenMode_)
         setFullScreenMode(false);
     else
-        setMaximised(!maximised_);
+        setMaximised(!(maximised_ || windowmanager::isMaximised(getPeer())));
 }
 
 void MainWindow::setMaximised(bool shouldBeMaximised)
 {
     if (fullScreenMode_)
         setFullScreenMode(false);
-    if (shouldBeMaximised == maximised_)
-        return;
     if (shouldBeMaximised)
     {
-        restoreBounds_ = getBounds();
+        if (!maximised_)
+            restoreBounds_ = sensibleRestoreBounds(getBounds());
         maximised_ = true;
+        windowmanager::requestMaximised(getPeer(), true);
         setOwnBounds(getScreenArea(false));
     }
     else
     {
+        if (!maximised_ && !windowmanager::isMaximised(getPeer()))
+            return;
         maximised_ = false;
-        const juce::ScopedValueSetter<bool> setting(settingBounds_, true);
-        if (!restoreBounds_.isEmpty() && restoreBounds_ != getBounds())
-            setBounds(restoreBounds_);
-        else
-            centreWithSize(std::min(getWidth(), getScreenArea(false).getWidth() * 3 / 4),
-                           std::min(getHeight(), getScreenArea(false).getHeight() * 3 / 4));
+        leaveWindowManagerZoom();
     }
     resized();
 }
@@ -141,12 +188,13 @@ void MainWindow::setFullScreenMode(bool shouldBeFullScreen)
         return;
     if (shouldBeFullScreen)
     {
-        maximisedBeforeFullScreen_ = maximised_;
-        if (!maximised_)
-            restoreBounds_ = getBounds();
+        maximisedBeforeFullScreen_ = maximised_ || windowmanager::isMaximised(getPeer());
+        if (!maximisedBeforeFullScreen_)
+            restoreBounds_ = sensibleRestoreBounds(getBounds());
         maximised_ = false;
         fullScreenMode_ = true;
         setTitleBarHeight(0);
+        windowmanager::requestFullScreen(getPeer(), true);
         setOwnBounds(getScreenArea(true));
     }
     else
@@ -156,12 +204,13 @@ void MainWindow::setFullScreenMode(bool shouldBeFullScreen)
         if (maximisedBeforeFullScreen_)
         {
             maximised_ = true;
+            windowmanager::requestFullScreen(getPeer(), false);
+            windowmanager::requestMaximised(getPeer(), true);
             setOwnBounds(getScreenArea(false));
         }
         else
         {
-            const juce::ScopedValueSetter<bool> setting(settingBounds_, true);
-            setBounds(restoreBounds_.isEmpty() ? getScreenArea(false).reduced(80) : restoreBounds_);
+            leaveWindowManagerZoom();
         }
     }
     services_.commands.commandStatusChanged();
@@ -170,9 +219,21 @@ void MainWindow::setFullScreenMode(bool shouldBeFullScreen)
 
 void MainWindow::checkUserGeometry()
 {
-    if (settingBounds_ || (!maximised_ && !fullScreenMode_))
+    if (settingBounds_ || fullScreenMode_)
         return;
-    if (getBounds() != zoomedBounds_ && !fullScreenMode_)
+    // The window manager maximised the window by itself (its placement policy, a shortcut, a
+    // double-click it handled): take it as maximised, so that the square button restores it.
+    if (juce::Time::getMillisecondCounter() >= ignoreManagerUntil_ && windowmanager::isMaximised(getPeer()))
+    {
+        if (!maximised_)
+        {
+            maximised_ = true;
+            restoreBounds_ = sensibleRestoreBounds(restoreBounds_);
+        }
+        zoomedBounds_ = getBounds();
+        return;
+    }
+    if (maximised_ && getBounds() != zoomedBounds_ && !windowmanager::isMaximised(getPeer()))
         maximised_ = false; // (dragged or resized by the user: an ordinary window now)
 }
 

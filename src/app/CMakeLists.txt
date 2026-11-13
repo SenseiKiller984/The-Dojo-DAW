@@ -13,7 +13,9 @@ target_sources(TheDojo PRIVATE
     MainWindow.cpp
     MainWindow.h
     SmokeTest.cpp
-    SmokeTest.h)
+    SmokeTest.h
+    WindowManager.cpp
+    WindowManager.h)
 
 # Development builds carry the real-time allocation trap (see src/core/rt/AllocationTrap.cpp);
 # the violation counter is shown in the status bar.

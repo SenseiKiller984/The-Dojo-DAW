@@ -5,6 +5,7 @@
 
 #include "ui/Commands.h"
 #include "ui/EditActions.h"
+#include "ui/PresetActions.h"
 #include "ui/ClipList.h"
 #include "ui/components/VideoWindow.h"
 #include "ui/theme/DojoTheme.h"
@@ -3332,12 +3333,13 @@ bool ArrangerView::isInterestedInDragSource(const SourceDetails& details)
 {
     const auto description = details.description.toString();
     return browserDrag::isFileDrag(details.description) || description.startsWith(kDeviceDragPrefix)
-           || description.startsWith(cliplist::kDragPrefix);
+           || description.startsWith(presetActions::kDragPrefix) || description.startsWith(cliplist::kDragPrefix);
 }
 
 void ArrangerView::itemDragEnter(const SourceDetails& details)
 {
-    dropIsDevice_ = details.description.toString().startsWith(kDeviceDragPrefix);
+    const auto description = details.description.toString();
+    dropIsDevice_ = description.startsWith(kDeviceDragPrefix) || description.startsWith(presetActions::kDragPrefix);
     updateDropTarget(details.localPosition.x, details.localPosition.y);
 }
 
@@ -3354,7 +3356,7 @@ void ArrangerView::itemDropped(const SourceDetails& details)
     updateDropTarget(details.localPosition.x, details.localPosition.y);
     const auto description = details.description.toString();
 
-    if (description.startsWith(kDeviceDragPrefix))
+    if (description.startsWith(kDeviceDragPrefix) || description.startsWith(presetActions::kDragPrefix))
     {
         dropActive_ = false;
         const auto target = dropRow_ >= 0 ? rows()[static_cast<std::size_t>(dropRow_)].track : juce::ValueTree();

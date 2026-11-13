@@ -141,6 +141,8 @@ private:
     // Recording, devices
     void toggleRecording();
     void addDevice(const deviceActions::DeviceChoice& choice, juce::ValueTree target);
+    /** Uses a preset on a track's chain (or the master's): loads it into a device it fits, or adds one. */
+    void usePreset(const session::presets::Preset& preset, const juce::ValueTree& target);
 
     // Dialogs
     void showAudioSettings();

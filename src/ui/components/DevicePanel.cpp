@@ -2,9 +2,12 @@
 
 #include "devices/Dynamics.h"
 #include "ui/DeviceActions.h"
+#include "ui/PresetActions.h"
 #include "ui/components/ArrangerView.h"
 #include "ui/devices/DeviceEditors.h"
 #include "ui/theme/DojoTheme.h"
+
+#include <algorithm>
 
 namespace dojo::ui
 {
@@ -13,6 +16,38 @@ namespace
 constexpr int kHeaderHeight = 26;
 constexpr int kCardHeaderHeight = 28;
 constexpr int kAddCardWidth = 120;
+constexpr int kNoticeMilliseconds = 4500;
+
+/** The card header's presets button: three lines, like a list. */
+class PresetsButton final : public juce::Button
+{
+public:
+    PresetsButton()
+        : juce::Button("Presets")
+    {
+        setWantsKeyboardFocus(false);
+    }
+
+    void paintButton(juce::Graphics& g, bool over, bool down) override
+    {
+        using namespace theme;
+        const auto r = getLocalBounds().toFloat().reduced(0.5f);
+        g.setColour(down ? colour::accent.withAlpha(0.35f) : over ? colour::outlineStrong.withAlpha(0.45f) : colour::panelRaised);
+        g.fillRoundedRectangle(r, 3.0f);
+        g.setColour(colour::outline);
+        g.drawRoundedRectangle(r, 3.0f, 1.0f);
+        g.setColour(over || down ? colour::textPrimary : colour::textSecondary);
+        const float width = std::min(11.0f, r.getWidth() - 8.0f);
+        const float x = r.getCentreX() - width * 0.5f;
+        for (int line = -1; line <= 1; ++line)
+            g.fillRoundedRectangle(x, r.getCentreY() + static_cast<float>(line) * 3.5f - 0.75f, width, 1.5f, 0.75f);
+    }
+};
+
+bool anyPresetFile(const juce::StringArray& files)
+{
+    return std::any_of(files.begin(), files.end(), [](const juce::String& f) { return session::presets::isPresetFile(juce::File(f)); });
+}
 } // namespace
 
 //==================================================================================================
@@ -60,12 +95,16 @@ private:
 };
 
 //==================================================================================================
-/** One device: header controls above its editor. */
-class DeviceCard final : public juce::Component
+/** One device: header controls above its editor. Presets dropped on it load into the device. */
+class DeviceCard final : public juce::Component,
+                         public juce::DragAndDropTarget,
+                         public juce::FileDragAndDropTarget,
+                         private juce::Timer
 {
 public:
     DeviceCard(DevicePanel& panel, session::Project& project, EditorState& editor, juce::ValueTree device, juce::ValueTree owner)
-        : project_(project)
+        : panel_(panel)
+        , project_(project)
         , device_(std::move(device))
         , owner_(std::move(owner))
     {
@@ -127,6 +166,13 @@ public:
                                                 session.removeDevice(deviceTree);
                                             });
         };
+
+        if (node_ != nullptr)
+        {
+            presets_.setTooltip("Presets: load one, or save this device's settings as a preset (or drop a preset here)");
+            presets_.onClick = [this] { showPresetMenu(); };
+            addAndMakeVisible(presets_);
+        }
 
         if (node_ != nullptr && node_->getProcessor().hasEditor() && session::device::getType(device_) == plugins::PluginManager::kDeviceType)
         {
@@ -190,6 +236,138 @@ public:
         repaint();
     }
 
+    // --- Presets ---------------------------------------------------------------------------------
+    void showNotice(const juce::String& text, bool ok)
+    {
+        notice_ = text;
+        noticeOk_ = ok;
+        startTimer(kNoticeMilliseconds);
+        repaint();
+    }
+
+    [[nodiscard]] const juce::String& getNotice() const noexcept { return notice_; }
+
+    void buildPresetMenu(juce::PopupMenu& menu)
+    {
+        namespace presets = session::presets;
+        const auto name = session::device::getName(device_);
+        const auto fitting = presets::getFor(presets::keyOf(device_));
+        juce::Component::SafePointer<DevicePanel> panel(&panel_);
+        auto* project = &project_;
+        const auto device = device_;
+        const auto owner = owner_;
+
+        const auto addPresets = [&](bool builtIn, const juce::String& heading)
+        {
+            bool first = true;
+            for (const auto& preset : fitting)
+            {
+                if (preset.builtIn != builtIn)
+                    continue;
+                if (first)
+                    menu.addSectionHeader(heading);
+                first = false;
+                menu.addItem(preset.name, [panel, project, device, preset]
+                             {
+                                 const auto outcome = presetActions::load(*project, preset, device);
+                                 if (panel != nullptr)
+                                     panel->showNotice(device, outcome.message, outcome.ok);
+                             });
+            }
+        };
+        addPresets(true, "Built-in Presets");
+        addPresets(false, "My Presets");
+        if (fitting.empty())
+            menu.addItem("No presets for " + name + " yet", false, false, [] {});
+
+        const auto report = [panel, device](const presetActions::Outcome& outcome)
+        {
+            if (panel != nullptr)
+                panel->showNotice(device, outcome.message, outcome.ok);
+        };
+        const auto folder = presets::getUserFolder();
+        menu.addSeparator();
+        menu.addItem("Save Preset...", [panel, project, device, folder, name, report]
+                     {
+                         if (panel != nullptr)
+                             panel->choosePresetFile("Save " + name + " Preset", true, folder.getChildFile(presets::fileNameFor(name + " Preset")),
+                                                     [project, device, report](const juce::File& file)
+                                                     { report(presetActions::save(*project, device, file)); });
+                     });
+        menu.addItem("Add to Preset File...", [panel, project, device, folder, name, report]
+                     {
+                         if (panel != nullptr)
+                             panel->choosePresetFile("Add " + name + " to a Preset File", false, folder,
+                                                     [project, device, report](const juce::File& file)
+                                                     { report(presetActions::addToFile(*project, device, file)); });
+                     });
+        menu.addItem("Save Whole Chain as Preset...", session::Session::getDevices(owner).size() > 1, false,
+                     [panel, project, owner, folder, report]
+                     {
+                         if (panel != nullptr)
+                             panel->choosePresetFile("Save the Whole Chain as a Preset", true, folder.getChildFile(presets::fileNameFor("Chain Preset")),
+                                                     [project, owner, report](const juce::File& file)
+                                                     { report(presetActions::saveChain(*project, owner, file)); });
+                     });
+        menu.addItem("Load Preset File...", [panel, project, device, folder, name, report]
+                     {
+                         if (panel != nullptr)
+                             panel->choosePresetFile("Load a Preset into " + name, false, folder,
+                                                     [project, device, report](const juce::File& file)
+                                                     { report(presetActions::loadFirstFitting(*project, {file.getFullPathName()}, device)); });
+                     });
+        menu.addSeparator();
+        menu.addItem("Open Presets Folder", [folder]
+                     {
+                         (void) folder.createDirectory();
+                         folder.startAsProcess();
+                     });
+    }
+
+    // Presets dragged from the browser...
+    bool isInterestedInDragSource(const SourceDetails& details) override
+    {
+        return node_ != nullptr && presetActions::isPresetDrag(details.description);
+    }
+    void itemDragEnter(const SourceDetails& details) override { showDrop(presetActions::fromDragDescription(details.description)); }
+    void itemDragExit(const SourceDetails&) override { showDrop(std::nullopt); }
+    void itemDropped(const SourceDetails& details) override
+    {
+        showDrop(std::nullopt);
+        if (const auto preset = presetActions::fromDragDescription(details.description))
+            report(presetActions::load(project_, *preset, device_));
+        else
+            showNotice("That preset is no longer there.", false);
+    }
+
+    // ...and preset files from the file manager.
+    bool isInterestedInFileDrag(const juce::StringArray& files) override { return node_ != nullptr && anyPresetFile(files); }
+    void fileDragEnter(const juce::StringArray& files, int, int) override
+    {
+        std::optional<session::presets::Preset> shown;
+        for (const auto& path : files)
+        {
+            juce::String error;
+            if (!session::presets::isPresetFile(juce::File(path)))
+                continue;
+            if (auto preset = session::presets::Preset::load(juce::File(path), error))
+            {
+                const bool fits = preset->fits(session::presets::keyOf(device_));
+                if (fits || !shown)
+                    shown = std::move(preset);
+                if (fits)
+                    break;
+            }
+        }
+        showDrop(shown);
+    }
+    void fileDragExit(const juce::StringArray&) override { showDrop(std::nullopt); }
+    void filesDropped(const juce::StringArray& files, int, int) override
+    {
+        showDrop(std::nullopt);
+        report(presetActions::loadFirstFitting(project_, files, device_));
+    }
+
     void resized() override
     {
         auto area = getLocalBounds().reduced(1);
@@ -199,6 +377,11 @@ public:
         right_.setBounds(header.removeFromRight(20));
         left_.setBounds(header.removeFromRight(20));
         header.removeFromRight(4);
+        if (presets_.isVisible())
+        {
+            presets_.setBounds(header.removeFromRight(22));
+            header.removeFromRight(4);
+        }
         if (window_.isVisible())
         {
             window_.setBounds(header.removeFromRight(28));
@@ -242,7 +425,76 @@ public:
         }
     }
 
+    void paintOverChildren(juce::Graphics& g) override
+    {
+        using namespace theme;
+        juce::String banner = notice_;
+        bool ok = noticeOk_;
+        if (drop_ != Drop::none)
+        {
+            ok = drop_ == Drop::fits;
+            banner = dropText_;
+            g.setColour(ok ? colour::play : colour::meterClip);
+            g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.5f), 5.0f, 2.0f);
+        }
+        if (banner.isEmpty())
+            return;
+        auto area = getLocalBounds().withTrimmedTop(kCardHeaderHeight).reduced(8, 8).removeFromBottom(32).toFloat();
+        g.setColour(colour::panelHeader.withAlpha(0.96f));
+        g.fillRoundedRectangle(area, 4.0f);
+        g.setColour(ok ? colour::play : colour::meterClip);
+        g.drawRoundedRectangle(area, 4.0f, 1.0f);
+        g.setColour(colour::textPrimary);
+        g.setFont(sans(11.5f));
+        g.drawFittedText(banner, area.toNearestInt().reduced(8, 3), juce::Justification::centred, 2);
+    }
+
 private:
+    enum class Drop
+    {
+        none,
+        fits,
+        mismatch
+    };
+
+    void timerCallback() override
+    {
+        stopTimer();
+        notice_.clear();
+        repaint();
+    }
+
+    void report(const presetActions::Outcome& outcome) { showNotice(outcome.message, outcome.ok); }
+
+    void showPresetMenu()
+    {
+        juce::PopupMenu menu;
+        buildPresetMenu(menu);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&presets_));
+    }
+
+    /** Outlines the card while a preset is dragged over it: does it fit this device? */
+    void showDrop(const std::optional<session::presets::Preset>& preset)
+    {
+        if (!preset)
+        {
+            drop_ = Drop::none;
+            dropText_.clear();
+        }
+        else if (preset->fits(session::presets::keyOf(device_)))
+        {
+            drop_ = Drop::fits;
+            dropText_ = "Drop to load \"" + preset->name + "\"";
+        }
+        else
+        {
+            drop_ = Drop::mismatch;
+            dropText_ = "\"" + preset->name + "\" is for " + preset->getDeviceNames().joinIntoString(", ");
+        }
+        repaint();
+    }
+
+    DevicePanel& panel_;
     session::Project& project_;
     juce::ValueTree device_;
     juce::ValueTree owner_;
@@ -252,12 +504,17 @@ private:
     juce::TextButton right_;
     juce::TextButton remove_;
     juce::TextButton window_;
+    PresetsButton presets_;
     juce::ComboBox sidechain_;
     std::vector<std::uint32_t> sidechainIds_;
     std::unique_ptr<juce::Component> editorComponent_;
     juce::Rectangle<int> nameArea_;
     juce::String error_;
     int preferredWidth_ = 260;
+    juce::String notice_;
+    bool noticeOk_ = true;
+    Drop drop_ = Drop::none;
+    juce::String dropText_;
 };
 
 //==================================================================================================
@@ -390,13 +647,123 @@ void DevicePanel::showAddMenu()
 
 bool DevicePanel::isInterestedInDragSource(const SourceDetails& details)
 {
-    return details.description.toString().startsWith(ArrangerView::kDeviceDragPrefix);
+    return details.description.toString().startsWith(ArrangerView::kDeviceDragPrefix) || presetActions::isPresetDrag(details.description);
 }
 
 void DevicePanel::itemDropped(const SourceDetails& details)
 {
+    if (presetActions::isPresetDrag(details.description))
+    {
+        if (const auto preset = presetActions::fromDragDescription(details.description))
+            dropPreset(*preset);
+        return;
+    }
     if (const auto choice = deviceActions::fromDragDescription(details.description.toString(), plugins_))
         deviceActions::addDevice(project_.getSession(), editor_, getOwner(), *choice);
+}
+
+bool DevicePanel::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    return anyPresetFile(files);
+}
+
+void DevicePanel::filesDropped(const juce::StringArray& files, int, int)
+{
+    juce::String error;
+    for (const auto& path : files)
+        if (session::presets::isPresetFile(juce::File(path)))
+        {
+            if (const auto preset = session::presets::Preset::load(juce::File(path), error))
+            {
+                dropPreset(*preset);
+                return;
+            }
+        }
+    setPanelNotice(error);
+}
+
+void DevicePanel::dropPreset(const session::presets::Preset& preset)
+{
+    juce::String message;
+    (void) presetActions::addDevice(project_, plugins_, editor_, getOwner(), preset, &message);
+    setPanelNotice(message);
+}
+
+void DevicePanel::setPanelNotice(const juce::String& text)
+{
+    panelNotice_ = text;
+    const auto serial = ++panelNoticeSerial_;
+    repaint();
+    juce::Component::SafePointer<DevicePanel> safe(this);
+    juce::Timer::callAfterDelay(kNoticeMilliseconds, [safe, serial]
+                                {
+                                    if (safe != nullptr && safe->panelNoticeSerial_ == serial)
+                                    {
+                                        safe->panelNotice_.clear();
+                                        safe->repaint();
+                                    }
+                                });
+}
+
+void DevicePanel::choosePresetFile(const juce::String& title, bool forSaving, const juce::File& initial,
+                                   std::function<void(const juce::File&)> onChosen)
+{
+    (void) (initial.isDirectory() || initial.getFileExtension().isEmpty() ? initial : initial.getParentDirectory()).createDirectory();
+    chooser_ = std::make_unique<juce::FileChooser>(title, initial, session::presets::kWildcard);
+    const int chooserFlags = forSaving ? juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
+                                      juce::FileBrowserComponent::warnAboutOverwriting
+                                : juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    chooser_->launchAsync(chooserFlags, [forSaving, done = std::move(onChosen)](const juce::FileChooser& chooser)
+                          {
+                              auto file = chooser.getResult();
+                              if (file == juce::File())
+                                  return;
+                              if (forSaving && !session::presets::isPresetFile(file))
+                                  file = file.withFileExtension(session::presets::kExtension);
+                              done(file);
+                          });
+}
+
+void DevicePanel::showNotice(const juce::ValueTree& device, const juce::String& text, bool ok)
+{
+    if (auto* card = dynamic_cast<DeviceCard*>(findCard(device)))
+        card->showNotice(text, ok);
+    else
+        setPanelNotice(text);
+}
+
+juce::Component* DevicePanel::findCard(const juce::ValueTree& device) const
+{
+    for (const auto& card : cards_)
+        if (card->getDevice() == device)
+            return card.get();
+    return nullptr;
+}
+
+juce::String DevicePanel::getNotice(const juce::ValueTree& device) const
+{
+    if (const auto* card = dynamic_cast<const DeviceCard*>(findCard(device)))
+        return card->getNotice();
+    return {};
+}
+
+juce::StringArray DevicePanel::getPresetMenuItems(const juce::ValueTree& device) const
+{
+    juce::StringArray items;
+    if (auto* card = dynamic_cast<DeviceCard*>(findCard(device)))
+    {
+        juce::PopupMenu menu;
+        card->buildPresetMenu(menu);
+        for (juce::PopupMenu::MenuItemIterator it(menu); it.next();)
+        {
+            const auto& item = it.getItem();
+            if (item.isSectionHeader)
+                items.add("[" + item.text + "]");
+            else if (!item.isSeparator)
+                items.add(item.text);
+        }
+    }
+    return items;
 }
 
 void DevicePanel::editorStateChanged()
@@ -455,9 +822,10 @@ void DevicePanel::paint(juce::Graphics& g)
     else if (owner.isValid())
         title << "  -  " << session::track::getName(owner).toUpperCase();
     g.drawText(title, header.reduced(14, 0), juce::Justification::centredLeft, false);
-    g.setColour(colour::textMuted);
+    g.setColour(panelNotice_.isNotEmpty() ? colour::textPrimary : colour::textMuted);
     g.setFont(sans(11.0f));
-    g.drawText("Signal flows left to right  |  drop devices or plug-ins here", header.reduced(14, 0), juce::Justification::centredRight, false);
+    g.drawText(panelNotice_.isNotEmpty() ? panelNotice_ : juce::String("Signal flows left to right  |  drop devices, plug-ins or presets here"),
+               header.reduced(14, 0), juce::Justification::centredRight, true);
     g.setColour(colour::outline);
     g.fillRect(header.removeFromBottom(1));
 

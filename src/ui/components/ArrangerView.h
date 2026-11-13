@@ -75,7 +75,7 @@ public:
     std::function<void()> onImportRequested;
     /** A clip was double-clicked (or "Edit" chosen): open it in the editor. */
     std::function<void(std::uint32_t clipId)> onOpenClip;
-    /** A device (browser drag description) was dropped onto a track. */
+    /** A device or a preset (browser drag description) was dropped onto a track (or below them). */
     std::function<void(const juce::ValueTree& track, const juce::String& description)> onDeviceDropped;
     /** Runs an application command (the track menu's Duplicate..., Split into Mono, ...). */
     std::function<void(int commandId)> onCommand;

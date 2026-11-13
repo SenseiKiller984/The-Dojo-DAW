@@ -23,6 +23,8 @@ add_library(dojo_ui STATIC
     Preferences.h
     PreferencesWindow.cpp
     PreferencesWindow.h
+    PresetActions.cpp
+    PresetActions.h
     components/ArrangerView.cpp
     components/ArrangerView.h
     components/BrowserPanel.cpp

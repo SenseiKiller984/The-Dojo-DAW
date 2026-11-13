@@ -229,6 +229,23 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
 - **Surround**: surround monitoring: Standard, Classic Fold-Down, the Advanced Surround Virtualizer (headphones or speakers, room) or the Device 3D Virtualizer (see *Surround monitoring* above).
 
+**Presets** (`.dojopreset` files): every device, native or plug-in, can save its settings as a preset and load one back.
+- A preset keeps **all** of a device's settings at the moment it is saved (for a native device every parameter by name and value, readable as XML like a `.dojo` session; for a plug-in its own state).
+- One preset file can hold settings for **several devices** that serve the same purpose, one entry per kind of device. A device loading it takes **its own** entry (an EQ the EQ settings, a Channel EQ the Channel EQ settings), and a preset with nothing for a device says what it is for instead.
+- The **≡ button** in a device's header opens its presets menu:
+  - the **built-in presets** and **My Presets** that fit that device (click one to load it);
+  - **Save Preset...**: this device's settings as a new preset file;
+  - **Add to Preset File...**: adds this device's settings to an existing preset file (replacing the settings for this kind of device if it already has some), so one file can serve several devices;
+  - **Save Whole Chain as Preset...**: every device on the track in one file;
+  - **Load Preset File...** and **Open Presets Folder**.
+- **Drag and drop**: drop a preset onto a device (from the browser's **PRESETS** list, or a `.dojopreset` file from the file manager) to load it into that device. The device is outlined green when the preset fits, red when it does not. Dropped on the Devices panel's empty space, a preset adds a device that starts from it; dropped on a track in the arranger (or double-clicked in the browser), it loads into the first device on that track it fits, or else adds one.
+- Loading a preset is one undo step.
+- Your presets live in *Documents/The Dojo/Presets* (sub-folders too) and show up in the browser and the presets menus as soon as they are saved or copied there.
+- **Built-in preset: Synth Bite** (for the EQ and the Channel EQ). Makes a sound more aggressive, present and upfront in the mix: use it when an instrument is too soft, too dark, or masked by the tracks around it. One file, two versions, each tuned for its device to the same result:
+  - **EQ**: low cut at 90 Hz (no sub rumble), -3 dB at 350 Hz (Q 1.1, less boxy mud where parts mask each other), +6 dB at 3 kHz (Q 0.8, the bite), a +4.5 dB high shelf from 7 kHz (no longer dark) and -1.5 dB output, so the change is not just "louder".
+  - **Channel EQ**: low cut (80 Hz), low shelf -3 dB, mid +6 dB at 3 kHz, high shelf +5.5 dB, output -1.5 dB.
+  - Net result on either device: about -18 dB at 35 Hz, +4.5 dB at 3 kHz and +2.5 to +3.5 dB from 10 kHz up.
+
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 
 ## Using it
@@ -236,7 +253,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
 2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop.
 3. The bottom panel has four tabs: **Mixer** (F3), **Devices** of the selected track (F4), the **Editor** (F5) for the clip you double-clicked and the **Clip List** (F6). In the mixer, double-click the volume or pan value under a fader (or the master's GAIN) to type it: `-6`, `-inf`, `C`, `L20`, `R35`.
-4. The browser lists devices and plug-ins at the top (with search; drag one onto a track or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
+4. The browser lists devices, plug-ins and presets at the top (with search; drag one onto a track, a device or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
 5. Export with **Ctrl+R**; save with **Ctrl+S**.
 
 | Keys | Action |
@@ -269,6 +286,7 @@ Mouse:
 - Shift+wheel scrolls sideways; Ctrl+wheel zooms (also in the piano roll).
 - Double-click a fader, knob or slider to reset it.
 - The window's square button (or a double-click on its title bar) maximises it to the screen's work area and restores it again. From full screen (F11), F11 or the square button goes back to the window as it was, maximised or not.
+  - On Linux this goes through the window manager (the EWMH maximised and full-screen states), so it also works on KDE, GNOME, XWayland and other window managers that maximise a window themselves: a window the window manager has maximised (at start, by a shortcut or by its own title-bar double-click) is restored by the square button to a normal-sized window.
 
 ### Command line
 
@@ -341,7 +359,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning, the threadin
 ```
 cmake/        build options, compiler policy, pinned dependencies
 docs/         architecture
-resources/    embedded fonts
+resources/    embedded fonts and built-in presets (presets/*.dojopreset)
 scripts/      setup and build helpers (bash + PowerShell)
 src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), musical time
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
@@ -356,7 +374,8 @@ src/scanner   dojo-plugin-scanner, the scanner child process
 src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),
               Media Foundation (Windows); background frame server for the Video window and thumbnails
 src/session   the document (tracks, clips, MIDI, devices, sends, automation) with undo, audio
-              decoding/streaming, device instances, graph compiler, recorder, exporter, save/open
+              decoding/streaming, device instances, graph compiler, recorder, exporter, save/open,
+              device presets (.dojopreset)
 src/ui        arranger, mixer, devices panel + editors, piano roll, step sequencer, browser,
               transport, export dialog, menus, look-and-feel
 src/app       application entry point, main window, settings

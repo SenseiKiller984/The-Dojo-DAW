@@ -37,6 +37,8 @@ public:
     [[nodiscard]] bool isFullScreenMode() const noexcept { return fullScreenMode_; }
     /** The display the window is on: its work area (without task bars / docks), or all of it. */
     [[nodiscard]] juce::Rectangle<int> getScreenArea(bool wholeScreen) const;
+    /** The size the window opens at, centred on its display. */
+    [[nodiscard]] juce::Rectangle<int> defaultBounds() const;
 
     void resized() override;
     void moved() override;
@@ -56,8 +58,14 @@ private:
     void rebuildMainComponent();
     /** Sets the window's bounds itself (not the user dragging it). */
     void setOwnBounds(juce::Rectangle<int> bounds);
-    /** The user moved or resized a maximised window: it is an ordinary window again. */
+    /** The user moved or resized a maximised window: it is an ordinary window again. Or the
+        window manager maximised it: it is maximised. */
     void checkUserGeometry();
+    /** `bounds`, or the default size when they cover the screen (or are empty). */
+    [[nodiscard]] juce::Rectangle<int> sensibleRestoreBounds(juce::Rectangle<int> bounds) const;
+    void applyRestoreBounds();
+    /** Back to an ordinary window: the window manager lets go, then the restore bounds apply. */
+    void leaveWindowManagerZoom();
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
 
     ui::AppServices& services_;
@@ -72,6 +80,7 @@ private:
     bool settingBounds_ = false;
     juce::Rectangle<int> restoreBounds_; ///< the window before it was maximised / full screen
     juce::Rectangle<int> zoomedBounds_;  ///< what maximising / full screen set
+    juce::uint32 ignoreManagerUntil_ = 0; ///< (just restored: the window manager's state may lag)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
 };
