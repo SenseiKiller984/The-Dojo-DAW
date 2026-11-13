@@ -11,6 +11,11 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Every track has volume, pan, mute, solo, phase invert, a meter, an **output** (the master, its folder or any bus) and **sends** (pre- or post-fader) to busses. Feedback loops are refused.
 - Solo follows the routing: soloing a track keeps the busses it feeds audible, soloing a bus keeps its sources audible.
 - **Plug-in delay compensation** aligns every path that meets at a bus or the master.
+- **Delay readouts**: you can see how much delay (latency) each device adds and what a whole chain adds up to.
+  - **Each device** shows its delay in milliseconds in a badge in its header (in gold when it adds any). Hover the badge to see the samples and the chain's delay up to and including that device.
+  - **The Devices panel's header** shows the whole chain's delay (CHAIN DELAY), the sum over the devices that are on. Its tooltip also gives the whole project's delay after compensation.
+  - **The status bar** shows the project's delay compensation (PDC) in milliseconds and samples.
+  - Everything follows changes as you make them: a lookahead or mode that changes a device's delay, bypassing a device (a bypassed device adds no delay), and the sample rate.
 - The graph renders on **all CPU cores**: independent tracks run in parallel.
 - Audio tracks and aux inputs (busses) are **mono or stereo**. A mono track plays its clips as one signal, or one chosen channel of each clip's file. It also records one input channel.
 

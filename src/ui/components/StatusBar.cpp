@@ -1,6 +1,7 @@
 #include "ui/components/StatusBar.h"
 
 #include "core/Version.h"
+#include "ui/Latency.h"
 #include "ui/theme/DojoTheme.h"
 
 namespace dojo::ui
@@ -60,7 +61,8 @@ juce::String StatusBar::describeEngine() const
     if (info_.scanningPlugins)
         text << "Scanning plug-ins" << kSeparator;
     if (info_.latencySamples > 0)
-        text << "PDC " << info_.latencySamples << " smp" << kSeparator;
+        text << "PDC " << latency::formatMilliseconds(info_.latencySamples, info_.device.sampleRate) << " (" << info_.latencySamples
+             << " smp)" << kSeparator;
 
     if (info_.device.xrunCount >= 0)
         text << "XRuns " << info_.device.xrunCount << kSeparator;

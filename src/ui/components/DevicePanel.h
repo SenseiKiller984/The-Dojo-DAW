@@ -16,6 +16,7 @@ namespace dojo::ui
 {
 
 class DeviceCard;
+class LatencyBadge;
 
 /**
     The device chain of the selected track (or the master bus), left to right in signal order.
@@ -27,7 +28,11 @@ class DeviceCard;
 
     Presets (session/Presets.h): a card's presets menu loads the presets that fit its device and
     saves its settings (as a new preset file, into an existing one, or with the whole chain). A
-    preset dropped onto a card (from the browser, or a .dojopreset file from the file manager) loads
+    Delay: each card's header shows how much delay (latency) its device adds, in milliseconds (the
+    samples and the chain's delay up to that device in its tooltip), and the panel's header shows
+    the whole chain's delay (the devices that are on). They follow lookahead, mode and bypass changes.
+
+    A preset dropped onto a card (from the browser, or a .dojopreset file from the file manager) loads
     into that device; dropped anywhere else on the panel it adds a device that starts from it (a
     chain preset adds its whole chain, also offered in the "+ Add Device" menu).
 */
@@ -36,7 +41,8 @@ class DevicePanel final : public juce::Component,
                           public juce::FileDragAndDropTarget,
                           private juce::ValueTree::Listener,
                           private EditorState::Listener,
-                          private juce::AsyncUpdater
+                          private juce::AsyncUpdater,
+                          private juce::Timer
 {
 public:
     DevicePanel(session::Project& project, plugins::PluginManager& plugins, EditorState& editor);
@@ -66,6 +72,16 @@ public:
     [[nodiscard]] juce::String getNotice(const juce::ValueTree& device) const;
     /** The message the panel itself shows right now (a preset dropped on it). */
     [[nodiscard]] const juce::String& getPanelNotice() const noexcept { return panelNotice_; }
+    /** The delay a card shows for `device` ("1.27 ms"), and its tooltip. */
+    [[nodiscard]] juce::String getLatencyText(const juce::ValueTree& device) const;
+    [[nodiscard]] juce::String getLatencyTooltip(const juce::ValueTree& device) const;
+    /** The chain's delay in the header ("CHAIN DELAY 2.27 ms"), its tooltip, and in samples. */
+    [[nodiscard]] juce::String getChainLatencyText() const;
+    [[nodiscard]] juce::String getChainLatencyTooltip() const;
+    [[nodiscard]] int getChainLatencySamples() const noexcept { return chainLatencySamples_; }
+    /** Reads every device's delay again (also done five times a second). */
+    void refreshLatencies();
+
     /** The preset chains the "+ Add Device" menu offers. */
     [[nodiscard]] juce::StringArray getAddMenuChainItems();
     /** What the presets menu of the card of `device` lists (section headers in brackets). */
@@ -82,6 +98,9 @@ private:
     [[nodiscard]] static bool ownerTakesDevices(const juce::ValueTree& owner);
     void closeStaleWindows();
     void dropPreset(const session::presets::Preset& preset);
+    void layoutHeader();
+    [[nodiscard]] juce::String getHeaderTitle() const;
+    void timerCallback() override { refreshLatencies(); }
     void addChainItems(juce::PopupMenu& menu);
     void setPanelNotice(const juce::String& text);
 
@@ -105,6 +124,8 @@ private:
     bool shownMaster_ = false;
     std::map<std::uint32_t, std::unique_ptr<PluginWindow>> windows_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    std::unique_ptr<LatencyBadge> chainLatency_;
+    int chainLatencySamples_ = 0;
     juce::String panelNotice_;
     juce::uint32 panelNoticeSerial_ = 0;
 };

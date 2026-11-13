@@ -2,6 +2,7 @@
 
 #include "devices/Dynamics.h"
 #include "ui/DeviceActions.h"
+#include "ui/Latency.h"
 #include "ui/PresetActions.h"
 #include "ui/components/ArrangerView.h"
 #include "ui/devices/DeviceEditors.h"
@@ -18,6 +19,72 @@ constexpr int kCardHeaderHeight = 28;
 constexpr int kAddCardWidth = 120;
 constexpr int kNoticeMilliseconds = 4500;
 
+} // namespace
+
+/** A small pill with a delay ("2.27 ms"); highlighted when the delay is real (more than nothing). */
+class LatencyBadge final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit LatencyBadge(juce::String prefix = {})
+        : prefix_(std::move(prefix))
+    {
+        setInterceptsMouseClicks(true, false); // (for its tooltip)
+    }
+
+    /** Returns true when the text changed (its width may have). */
+    bool set(const juce::String& value, bool active, const juce::String& tooltip)
+    {
+        setTooltip(tooltip);
+        if (value == value_ && active == active_)
+            return false;
+        const bool resized = value.length() != value_.length();
+        value_ = value;
+        active_ = active;
+        repaint();
+        return resized;
+    }
+
+    [[nodiscard]] juce::String getText() const { return prefix_.isNotEmpty() ? prefix_ + " " + value_ : value_; }
+    [[nodiscard]] bool isActive() const noexcept { return active_; }
+
+    [[nodiscard]] int getPreferredWidth() const
+    {
+        int width = juce::GlyphArrangement::getStringWidthInt(theme::mono(10.5f), value_) + 12;
+        if (prefix_.isNotEmpty())
+            width += juce::GlyphArrangement::getStringWidthInt(theme::label(9.5f), prefix_) + 6;
+        return width;
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        const auto bounds = getLocalBounds().toFloat().reduced(0.5f, 2.5f);
+        g.setColour(active_ ? colour::gold.withAlpha(0.16f) : colour::panelRaised);
+        g.fillRoundedRectangle(bounds, bounds.getHeight() * 0.5f);
+        g.setColour(active_ ? colour::gold.withAlpha(0.75f) : colour::outline);
+        g.drawRoundedRectangle(bounds, bounds.getHeight() * 0.5f, 1.0f);
+        auto text = getLocalBounds().reduced(6, 0);
+        if (prefix_.isNotEmpty())
+        {
+            g.setColour(colour::textMuted);
+            g.setFont(label(9.5f));
+            const int w = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), prefix_);
+            g.drawText(prefix_, text.removeFromLeft(w), juce::Justification::centredLeft, false);
+            text.removeFromLeft(6);
+        }
+        g.setColour(active_ ? colour::gold : colour::textMuted);
+        g.setFont(mono(10.5f));
+        g.drawText(value_, text, juce::Justification::centred, false);
+    }
+
+private:
+    juce::String prefix_;
+    juce::String value_ = "0 ms";
+    bool active_ = false;
+};
+
+namespace
+{
 /** The card header's presets button: three lines, like a list. */
 class PresetsButton final : public juce::Button
 {
@@ -167,6 +234,8 @@ public:
                                             });
         };
 
+        addAndMakeVisible(latency_);
+
         if (node_ != nullptr)
         {
             presets_.setTooltip("Presets: load one, or save this device's settings as a preset (or drop a preset here)");
@@ -235,6 +304,37 @@ public:
         bypass_.setToggleState(!session::device::isBypassed(device_), juce::dontSendNotification);
         repaint();
     }
+
+    // --- Delay ------------------------------------------------------------------------------------
+    /** The delay this device adds now (none while bypassed or missing). */
+    [[nodiscard]] int getActiveLatency() const
+    {
+        return node_ != nullptr && !session::device::isBypassed(device_) ? std::max(0, node_->getLatencySamples()) : 0;
+    }
+
+    /** Shows this device's delay; `chainSoFar` is the chain's delay up to and including it. */
+    void showLatency(double sampleRate, int chainSoFar)
+    {
+        using namespace latency;
+        const int own = node_ != nullptr ? std::max(0, node_->getLatencySamples()) : 0;
+        const bool bypassed = session::device::isBypassed(device_);
+        const auto rate = formatRate(sampleRate);
+        juce::String tooltip;
+        if (node_ == nullptr)
+            tooltip = "Not available: adds no delay.";
+        else if (bypassed)
+            tooltip = "Bypassed: adds no delay now (" + formatMilliseconds(own, sampleRate) + ", " + formatSamples(own) + ", when on).";
+        else if (own == 0)
+            tooltip = "Adds no delay.";
+        else
+            tooltip = "Adds " + formatMilliseconds(own, sampleRate) + " of delay (" + formatSamples(own) + " at " + rate + ").";
+        tooltip << "\nChain delay up to here: " << formatMilliseconds(chainSoFar, sampleRate) << " (" << formatSamples(chainSoFar) << ").";
+        if (latency_.set(formatMilliseconds(bypassed ? 0 : own, sampleRate), own > 0 && !bypassed, tooltip))
+            resized();
+    }
+
+    [[nodiscard]] const LatencyBadge& getLatencyBadge() const noexcept { return latency_; }
+    [[nodiscard]] LatencyBadge& getLatencyBadge() noexcept { return latency_; }
 
     // --- Presets ---------------------------------------------------------------------------------
     void showNotice(const juce::String& text, bool ok)
@@ -391,6 +491,12 @@ public:
         header.removeFromLeft(6);
         if (sidechain_.isVisible())
             sidechain_.setBounds(header.removeFromRight(std::min(130, header.getWidth() / 2)));
+        if (latency_.isVisible())
+        {
+            header.removeFromRight(2);
+            latency_.setBounds(header.removeFromRight(std::min(latency_.getPreferredWidth(), header.getWidth() / 2)));
+            header.removeFromRight(4);
+        }
         nameArea_ = header;
         if (editorComponent_ != nullptr)
             editorComponent_->setBounds(area.reduced(6, 4));
@@ -505,6 +611,7 @@ private:
     juce::TextButton remove_;
     juce::TextButton window_;
     PresetsButton presets_;
+    LatencyBadge latency_;
     juce::ComboBox sidechain_;
     std::vector<std::uint32_t> sidechainIds_;
     std::unique_ptr<juce::Component> editorComponent_;
@@ -534,13 +641,18 @@ DevicePanel::DevicePanel(session::Project& project, plugins::PluginManager& plug
     addButton_.onClick = [this] { showAddMenu(); };
     holder_.addAndMakeVisible(addButton_);
 
+    chainLatency_ = std::make_unique<LatencyBadge>("CHAIN DELAY");
+    addAndMakeVisible(*chainLatency_);
+
     project_.getSession().getState().addListener(this);
     editor_.addListener(this);
     rebuild();
+    startTimerHz(5);
 }
 
 DevicePanel::~DevicePanel()
 {
+    stopTimer();
     windows_.clear();
     editor_.removeListener(this);
     project_.getSession().getState().removeListener(this);
@@ -572,7 +684,80 @@ void DevicePanel::rebuild()
     addButton_.setVisible(shownOwner_.isValid() && ownerTakesDevices(shownOwner_));
     closeStaleWindows();
     layoutCards();
+    refreshLatencies();
+    layoutHeader();
     repaint();
+}
+
+void DevicePanel::refreshLatencies()
+{
+    using namespace latency;
+    const double sampleRate = project_.getDevices().getSampleRate();
+    int total = 0;
+    for (auto& card : cards_)
+    {
+        total += card->getActiveLatency();
+        card->showLatency(sampleRate, total);
+    }
+    chainLatencySamples_ = total;
+
+    juce::String tooltip;
+    if (!shownOwner_.isValid() || !ownerTakesDevices(shownOwner_))
+        tooltip = "No devices here.";
+    else
+    {
+        const auto who = shownOwner_.hasType(session::ids::track) ? juce::String("This track's") : juce::String("The master's");
+        tooltip << who << " devices delay its sound by " << formatMilliseconds(total, sampleRate) << " (" << formatSamples(total) << " at "
+                << formatRate(sampleRate) << "), the sum of the delays of the devices that are on.";
+        const int project = project_.getCompiler().getTotalLatency();
+        tooltip << "\nThe Dojo delays the other tracks to match (delay compensation): everything plays "
+                << formatMilliseconds(project, sampleRate) << " (" << formatSamples(project) << ") after the timeline.";
+    }
+    if (chainLatency_->set(formatMilliseconds(total, sampleRate), total > 0, tooltip))
+        layoutHeader();
+    chainLatency_->setVisible(shownOwner_.isValid() && ownerTakesDevices(shownOwner_));
+}
+
+juce::String DevicePanel::getHeaderTitle() const
+{
+    const auto owner = getOwner();
+    juce::String title = "DEVICES";
+    if (editor_.isMasterSelected())
+        title << "  -  MASTER";
+    else if (owner.isValid())
+        title << "  -  " << session::track::getName(owner).toUpperCase();
+    return title;
+}
+
+void DevicePanel::layoutHeader()
+{
+    const int titleWidth = juce::GlyphArrangement::getStringWidthInt(theme::label(11.0f), getHeaderTitle());
+    const int width = chainLatency_->getPreferredWidth();
+    chainLatency_->setBounds(14 + titleWidth + 14, 2, width, kHeaderHeight - 4);
+}
+
+juce::String DevicePanel::getLatencyText(const juce::ValueTree& device) const
+{
+    if (const auto* card = dynamic_cast<const DeviceCard*>(findCard(device)))
+        return card->getLatencyBadge().getText();
+    return {};
+}
+
+juce::String DevicePanel::getLatencyTooltip(const juce::ValueTree& device) const
+{
+    if (auto* card = dynamic_cast<DeviceCard*>(findCard(device)))
+        return card->getLatencyBadge().getTooltip();
+    return {};
+}
+
+juce::String DevicePanel::getChainLatencyText() const
+{
+    return chainLatency_->getText();
+}
+
+juce::String DevicePanel::getChainLatencyTooltip() const
+{
+    return chainLatency_->getTooltip();
 }
 
 void DevicePanel::layoutCards()
@@ -835,13 +1020,19 @@ void DevicePanel::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Id
             if (card->getDevice() == tree)
                 card->syncFromModel();
     if (tree == shownOwner_ && property == session::ids::name)
+    {
+        layoutHeader();
         repaint();
+    }
+    if (tree.hasType(session::ids::device) && property == session::ids::bypassed)
+        refreshLatencies();
 }
 
 void DevicePanel::resized()
 {
     viewport_.setBounds(getLocalBounds().withTrimmedTop(kHeaderHeight));
     layoutCards();
+    layoutHeader();
 }
 
 void DevicePanel::paint(juce::Graphics& g)
@@ -854,16 +1045,14 @@ void DevicePanel::paint(juce::Graphics& g)
     g.setColour(colour::textSecondary);
     g.setFont(label(11.0f));
     const auto owner = getOwner();
-    juce::String title = "DEVICES";
-    if (editor_.isMasterSelected())
-        title << "  -  MASTER";
-    else if (owner.isValid())
-        title << "  -  " << session::track::getName(owner).toUpperCase();
-    g.drawText(title, header.reduced(14, 0), juce::Justification::centredLeft, false);
+    g.drawText(getHeaderTitle(), header.reduced(14, 0), juce::Justification::centredLeft, false);
     g.setColour(panelNotice_.isNotEmpty() ? colour::textPrimary : colour::textMuted);
     g.setFont(sans(11.0f));
+    auto hint = header.reduced(14, 0);
+    if (chainLatency_->isVisible())
+        hint.setLeft(chainLatency_->getRight() + 14);
     g.drawText(panelNotice_.isNotEmpty() ? panelNotice_ : juce::String("Signal flows left to right  |  drop devices, plug-ins or presets here"),
-               header.reduced(14, 0), juce::Justification::centredRight, true);
+               hint, juce::Justification::centredRight, true);
     g.setColour(colour::outline);
     g.fillRect(header.removeFromBottom(1));
 

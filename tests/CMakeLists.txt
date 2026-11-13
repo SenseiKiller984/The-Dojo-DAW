@@ -30,6 +30,7 @@ add_executable(dojo_tests
     EffectTests.cpp
     EngineGraphTests.cpp
     InstrumentTests.cpp
+    LatencyDisplayTests.cpp
     LfoTests.cpp
     LimiterTests.cpp
     PluginTests.cpp

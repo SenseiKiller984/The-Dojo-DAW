@@ -177,6 +177,8 @@ private:
     ClipEditor clipEditor_;
     ClipListPanel clipList_;
     StatusBar statusBar_;
+    /** Shows every control's tooltip (after the mouse rests on it for a moment). */
+    juce::TooltipWindow tooltips_{this, 700};
 
     class Divider;
     std::unique_ptr<Divider> divider_;
