@@ -11,6 +11,8 @@
 #include "devices/WavetableSynth.h"
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
+#include "ui/devices/MoreDeviceEditors.h"
+#include "ui/devices/PagedEditor.h"
 #include "ui/devices/ParameterControl.h"
 #include "ui/devices/TempoDetectPanel.h"
 #include "ui/theme/DojoTheme.h"
@@ -1037,99 +1039,6 @@ void setChoiceFromUser(juce::AudioParameterChoice* parameter, int index)
 }
 
 //==================================================================================================
-/** Pages of parameter grids, picked with tabs; a page may show a display beside its grid. */
-class PagedEditor final : public juce::Component
-{
-public:
-    struct Page
-    {
-        juce::String title;
-        std::vector<std::pair<juce::String, juce::String>> parameters; ///< id, caption
-        std::function<std::unique_ptr<juce::Component>()> makeDisplay;
-        int displayWidth = 0;
-    };
-
-    static constexpr int kTabHeight = 22;
-    static constexpr int kRows = 2;
-
-    PagedEditor(juce::AudioProcessor& processor, std::vector<Page> pages)
-        : processor_(processor)
-        , pages_(std::move(pages))
-    {
-        for (std::size_t i = 0; i < pages_.size(); ++i)
-        {
-            auto tab = std::make_unique<juce::TextButton>(pages_[i].title);
-            tab->setRadioGroupId(4242);
-            tab->setClickingTogglesState(true);
-            tab->setWantsKeyboardFocus(false);
-            tab->setColour(juce::TextButton::buttonOnColourId, theme::colour::controlHover);
-            tab->onClick = [this, i] { showPage(i); };
-            addAndMakeVisible(*tab);
-            tabs_.push_back(std::move(tab));
-        }
-        addAndMakeVisible(grid_);
-        showPage(0);
-    }
-
-    /** Width that fits the widest page in two rows (and every tab). */
-    static int preferredWidth(const std::vector<Page>& pages)
-    {
-        int width = 0;
-        int tabs = 0;
-        for (const auto& page : pages)
-        {
-            const int columns = (static_cast<int>(page.parameters.size()) + kRows - 1) / kRows;
-            width = std::max(width, columns * ParameterControl::kWidth + page.displayWidth + 28); // card margins
-            tabs += tabWidth(page.title);
-        }
-        return std::max(width, tabs + 8);
-    }
-
-    void showPage(std::size_t index)
-    {
-        page_ = std::min(index, pages_.size() - 1);
-        for (std::size_t i = 0; i < tabs_.size(); ++i)
-            tabs_[i]->setToggleState(i == page_, juce::dontSendNotification);
-
-        grid_.clear();
-        for (const auto& [id, caption] : pages_[page_].parameters)
-            if (auto* parameter = findParameter(processor_, id))
-                grid_.add(*parameter, caption);
-
-        display_.reset();
-        if (pages_[page_].makeDisplay)
-        {
-            display_ = pages_[page_].makeDisplay();
-            addAndMakeVisible(*display_);
-        }
-        resized();
-    }
-
-    [[nodiscard]] std::size_t getPage() const noexcept { return page_; }
-
-    void resized() override
-    {
-        auto area = getLocalBounds();
-        auto tabs = area.removeFromTop(kTabHeight);
-        for (std::size_t i = 0; i < tabs_.size(); ++i)
-            tabs_[i]->setBounds(tabs.removeFromLeft(tabWidth(pages_[i].title)).reduced(1, 0));
-        area.removeFromTop(4);
-        if (display_ != nullptr)
-            display_->setBounds(area.removeFromLeft(pages_[page_].displayWidth).reduced(2));
-        grid_.setBounds(area);
-    }
-
-private:
-    static int tabWidth(const juce::String& title) { return 18 + 7 * title.length(); }
-
-    juce::AudioProcessor& processor_;
-    std::vector<Page> pages_;
-    std::vector<std::unique_ptr<juce::TextButton>> tabs_;
-    ParameterGrid grid_;
-    std::unique_ptr<juce::Component> display_;
-    std::size_t page_ = 0;
-};
-
 //==================================================================================================
 /** One Wavetable oscillator's current frame (follows Position and its modulation). */
 class WavetableDisplay final : public juce::Component, private juce::Timer
@@ -1727,6 +1636,8 @@ std::vector<PagedEditor::Page> echoPages()
 std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node, const DeviceEditorContext& context, int& preferredWidth)
 {
     auto& processor = node.getProcessor();
+    if (auto more = createMoreDeviceEditor(processor, context, preferredWidth))
+        return more;
 
     if (auto* eq = dynamic_cast<devices::Equaliser*>(&processor))
     {

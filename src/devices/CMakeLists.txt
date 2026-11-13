@@ -1,22 +1,44 @@
 add_library(dojo_devices STATIC
     AmpCabinet.cpp
     AmpCabinet.h
+    AnalogSynth.cpp
+    AnalogSynth.h
+    AutoFilter.cpp
+    AutoFilter.h
     BuiltinProcessor.cpp
     BuiltinProcessor.h
+    ChannelEq.cpp
+    ChannelEq.h
     DeviceRegistry.cpp
     DeviceRegistry.h
+    Drive.cpp
+    DriftSynth.cpp
+    DriftSynth.h
+    Drive.h
     Dynamics.cpp
     Dynamics.h
     Echo.cpp
     Echo.h
     Equaliser.cpp
     Equaliser.h
+    Gate.cpp
+    Gate.h
     Impulse.cpp
     Impulse.h
     Instruments.cpp
     Instruments.h
+    LfoDevice.cpp
+    LfoDevice.h
+    Meld.cpp
+    Meld.h
+    Modulators.cpp
+    Modulators.h
+    MultibandDynamics.cpp
+    MultibandDynamics.h
     Operator.cpp
     Operator.h
+    Roar.cpp
+    Roar.h
     SampleSlot.cpp
     SampleSlot.h
     TimeEffects.cpp
@@ -27,9 +49,13 @@ add_library(dojo_devices STATIC
     Utility.h
     WavetableSynth.cpp
     WavetableSynth.h
+    dsp/AnalogFilters.h
     dsp/Biquad.h
+    dsp/Modulation.h
+    dsp/Oversampler.h
     dsp/SynthCore.cpp
-    dsp/SynthCore.h)
+    dsp/SynthCore.h
+    dsp/VirtualAnalog.h)
 add_library(dojo::devices ALIAS dojo_devices)
 
 target_link_libraries(dojo_devices

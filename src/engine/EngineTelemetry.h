@@ -51,6 +51,12 @@ struct EngineTelemetry
     /** Post-fader track peaks, [slot * kMaxChannels + channel], max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks) * kMaxChannels> trackPeaks{};
 
+    /** Each track's fader and pan as the engine applies them while a modulator or automation moves
+        them (linear gain, -1..1); NaN when they are just the track's own settings. By slot. */
+    std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks)> trackVolumes{};
+    std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks)> trackPans{};
+    std::atomic<float> masterVolume{0.0f}; ///< likewise for the master fader (linear; NaN = its own)
+
     /** Master peaks per channel of the master's layout, max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxChannels)> masterPeaks{};
     std::atomic<int> masterChannels{2};

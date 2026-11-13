@@ -1,5 +1,7 @@
 #include "session/GraphCompiler.h"
 
+#include "core/ModulationSource.h"
+
 #include "engine/dsp/ClipStretcher.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -675,6 +677,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             for (const auto& [source, s] : incomingSends[i])
             {
                 engine::RenderSend rs;
+                rs.sendId = send::getId(s);
                 rs.sourceIndex = source;
                 rs.gain = dbToGain(send::getGainDb(s));
                 rs.preFader = send::isPreFader(s);
@@ -829,6 +832,91 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             bus.postDevices = std::move(chain);
             bus.parameterLanes.insert(bus.parameterLanes.end(), lanes.begin(), lanes.end());
         }
+    }
+
+    // --- Modulators (LFO devices) and what they move --------------------------------------------------
+    if (devices != nullptr)
+    {
+        const auto compileModulator = [&](const juce::ValueTree& d)
+        {
+            const auto mappings = Session::getModulations(d);
+            auto node = devices->getNode(d);
+            auto* source = node != nullptr ? dynamic_cast<ModulationSource*>(&node->getProcessor()) : nullptr;
+            if (source == nullptr)
+                return;
+            engine::RenderModulator modulator;
+            modulator.node = node.get();
+            modulator.source = source;
+            for (const auto& mapping : mappings)
+            {
+                engine::ModulationTarget t;
+                t.minimum = modulation::getMinimum(mapping);
+                t.maximum = modulation::getMaximum(mapping);
+                t.base = modulation::getBase(mapping);
+                const auto target = modulation::getTarget(mapping);
+                const auto trackId = modulation::getTrack(mapping);
+                const int index = trackId != 0 ? indexOf(trackId) : -1;
+                std::uint32_t id = 0;
+                int parameterIndex = 0;
+                bool resolved = false;
+                if (automation::parseParameterTarget(target, id, parameterIndex))
+                {
+                    if (auto targetNode = devices->findNode(id); targetNode != nullptr && parameterIndex < targetNode->getProcessor().getParameters().size())
+                    {
+                        t.kind = engine::ModulationTarget::Kind::parameter;
+                        t.parameter = targetNode->getProcessor().getParameters()[parameterIndex];
+                        graph->keepAlive.push_back(std::move(targetNode));
+                        resolved = true;
+                    }
+                }
+                else if (target == automation::volumeTarget() || target == automation::panTarget())
+                {
+                    const bool volume = target == automation::volumeTarget();
+                    if (trackId == 0 && volume)
+                    {
+                        t.kind = engine::ModulationTarget::Kind::masterVolume;
+                        resolved = true;
+                    }
+                    else if (index >= 0)
+                    {
+                        t.kind = volume ? engine::ModulationTarget::Kind::volume : engine::ModulationTarget::Kind::pan;
+                        t.slot = graph->tracks[static_cast<std::size_t>(index)].slot;
+                        resolved = true;
+                    }
+                }
+                else if (std::uint32_t sendId = 0; automation::parseSendTarget(target, sendId))
+                {
+                    // Sends are rendered by the bus they feed.
+                    for (std::size_t b = 0; b < graph->tracks.size() && !resolved; ++b)
+                    {
+                        const auto& sends = graph->tracks[b].sends;
+                        for (std::size_t k = 0; k < sends.size(); ++k)
+                            if (sends[k].sendId == sendId && k < static_cast<std::size_t>(engine::kMaxModulatedSends))
+                            {
+                                t.kind = engine::ModulationTarget::Kind::send;
+                                t.slot = graph->tracks[b].slot;
+                                t.sendIndex = static_cast<int>(k);
+                                resolved = true;
+                                break;
+                            }
+                    }
+                }
+                if (resolved)
+                    modulator.targets.push_back(t);
+            }
+            // (an LFO with no targets still runs: its display moves)
+            graph->modulators.push_back(std::move(modulator));
+            graph->keepAlive.push_back(std::move(node));
+        };
+        for (const auto& t : trees)
+            for (const auto& d : Session::getDevices(t))
+                compileModulator(d);
+        if (masterTree.isValid())
+            for (const auto& d : Session::getDevices(masterTree))
+                compileModulator(d);
+        for (const auto& fader : masterFaders)
+            for (const auto& d : Session::getDevices(fader))
+                compileModulator(d);
     }
 
     // --- Plug-in delay compensation ---------------------------------------------------------------

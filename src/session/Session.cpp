@@ -623,6 +623,20 @@ engine::AutomationCurve toCurve(const juce::ValueTree& lane)
 }
 } // namespace automation
 
+namespace modulation
+{
+std::uint32_t getTrack(const juce::ValueTree& m) { return static_cast<std::uint32_t>(static_cast<int>(m.getProperty(ids::modTrack, 0))); }
+juce::String getTarget(const juce::ValueTree& m) { return m.getProperty(ids::target).toString(); }
+double getMinimum(const juce::ValueTree& m) { return juce::jlimit(0.0, 1.0, static_cast<double>(m.getProperty(ids::minimum, 0.0))); }
+double getMaximum(const juce::ValueTree& m) { return juce::jlimit(0.0, 1.0, static_cast<double>(m.getProperty(ids::maximum, 1.0))); }
+double getBase(const juce::ValueTree& m) { return juce::jlimit(0.0, 1.0, static_cast<double>(m.getProperty(ids::base, 0.5))); }
+void setRange(juce::ValueTree m, double minimum, double maximum, juce::UndoManager* um)
+{
+    m.setProperty(ids::minimum, juce::jlimit(0.0, 1.0, minimum), um);
+    m.setProperty(ids::maximum, juce::jlimit(0.0, 1.0, maximum), um);
+}
+} // namespace modulation
+
 //==================================================================================================
 // Session
 
@@ -2182,11 +2196,21 @@ void Session::removeDevice(juce::ValueTree d)
     if (!parent.isValid())
         return;
 
-    // Automation of the device's parameters goes with it.
+    // Automation of the device's parameters goes with it, and so do modulators' mappings to them.
     const auto prefix = "param:" + juce::String(static_cast<int>(device::getId(d))) + ":";
     for (auto lane : getAutomationLanes(parent))
         if (automation::getTarget(lane).startsWith(prefix))
             parent.removeChild(lane, &undo_);
+    const auto removeMappingsTo = [&](const juce::ValueTree& owner)
+    {
+        for (const auto& modulator : getDevices(owner))
+            for (auto mapping : getModulations(modulator))
+                if (modulation::getTarget(mapping).startsWith(prefix))
+                    removeModulation(mapping);
+    };
+    removeMappingsTo(getMaster());
+    for (const auto& t : getAllTracks())
+        removeMappingsTo(t);
 
     parent.removeChild(d, &undo_);
 }
@@ -2290,6 +2314,60 @@ juce::ValueTree Session::getAutomation(juce::ValueTree owner, const juce::String
 
     owner.addChild(lane, -1, &undo_);
     return lane;
+}
+
+juce::ValueTree Session::addModulation(juce::ValueTree modulatorDevice, std::uint32_t trackId, const juce::String& target, double base)
+{
+    if (!modulatorDevice.isValid() || target.isEmpty())
+        return {};
+    const auto existing = getModulations(modulatorDevice);
+    if (static_cast<int>(existing.size()) >= modulation::kMaxMappings)
+        return {};
+    for (const auto& m : existing)
+        if (modulation::getTrack(m) == trackId && modulation::getTarget(m) == target)
+            return {};
+
+    juce::ValueTree mapping(ids::modulation);
+    mapping.setProperty(ids::id, static_cast<int>(allocateId()), nullptr);
+    mapping.setProperty(ids::modTrack, static_cast<int>(trackId), nullptr);
+    mapping.setProperty(ids::target, target, nullptr);
+    mapping.setProperty(ids::minimum, 0.0, nullptr);
+    mapping.setProperty(ids::maximum, 1.0, nullptr);
+    mapping.setProperty(ids::base, juce::jlimit(0.0, 1.0, base), nullptr);
+    modulatorDevice.addChild(mapping, -1, &undo_);
+    return mapping;
+}
+
+void Session::removeModulation(juce::ValueTree mapping)
+{
+    auto parent = mapping.getParent();
+    if (parent.isValid())
+        parent.removeChild(mapping, &undo_);
+}
+
+std::vector<juce::ValueTree> Session::getModulations(const juce::ValueTree& modulatorDevice)
+{
+    std::vector<juce::ValueTree> mappings;
+    for (const auto& child : modulatorDevice)
+        if (child.hasType(ids::modulation))
+            mappings.push_back(child);
+    return mappings;
+}
+
+std::vector<juce::ValueTree> Session::findModulationsOf(std::uint32_t trackId, const juce::String& target) const
+{
+    std::vector<juce::ValueTree> result;
+    const auto collect = [&](const juce::ValueTree& owner)
+    {
+        for (const auto& d : getDevices(owner))
+            for (const auto& m : getModulations(d))
+                if (modulation::getTarget(m) == target && (target.startsWith("param:") || modulation::getTrack(m) == trackId))
+                    result.push_back(m);
+    };
+    collect(getMaster());
+    for (const auto& t : getAllTracks())
+        collect(t);
+    return result;
 }
 
 std::vector<juce::ValueTree> Session::getAutomationLanes(const juce::ValueTree& owner)

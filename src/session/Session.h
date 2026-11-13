@@ -159,6 +159,11 @@ inline const juce::Identifier sidechain    {"sidechain"};
 inline const juce::Identifier description  {"description"};
 
 inline const juce::Identifier target       {"target"};
+inline const juce::Identifier modulation   {"MODMAP"};
+inline const juce::Identifier modTrack     {"track"};
+inline const juce::Identifier minimum      {"min"};
+inline const juce::Identifier maximum      {"max"};
+inline const juce::Identifier base         {"base"};
 inline const juce::Identifier preFader     {"preFader"};
 inline const juce::Identifier visible      {"visible"};
 inline const juce::Identifier time         {"time"};
@@ -426,6 +431,23 @@ bool parseSendTarget(const juce::String& target, std::uint32_t& sendId);
 /** Points of a lane as an engine curve (sorted by time). */
 engine::AutomationCurve toCurve(const juce::ValueTree& lane);
 } // namespace automation
+
+/**
+    MODMAP accessors: one target of a modulator device (the LFO), a child of its DEVICE tree. The
+    target is written like an automation target ("volume", "pan", "send:<id>", "param:<device>:<i>")
+    on a track (0 = the master); the modulator sweeps it between `min` and `max` (normalised). `base`
+    is the target's value before it was mapped, given back when the mapping is removed.
+*/
+namespace modulation
+{
+inline constexpr int kMaxMappings = 8;
+std::uint32_t getTrack(const juce::ValueTree& mapping);
+juce::String getTarget(const juce::ValueTree& mapping);
+double getMinimum(const juce::ValueTree& mapping);
+double getMaximum(const juce::ValueTree& mapping);
+double getBase(const juce::ValueTree& mapping);
+void setRange(juce::ValueTree mapping, double minimum, double maximum, juce::UndoManager* um);
+} // namespace modulation
 
 /**
     The document: a juce::ValueTree plus its UndoManager.
@@ -712,6 +734,16 @@ public:
     void moveDevice(juce::ValueTree device, int newIndex);
     [[nodiscard]] juce::ValueTree findDevice(std::uint32_t deviceId) const;
     [[nodiscard]] static std::vector<juce::ValueTree> getDevices(const juce::ValueTree& owner);
+
+    // --- Modulation (the LFO device) ----------------------------------------------------------------
+    /** Maps a modulator device to a target on a track (0 = the master), sweeping its whole range;
+        `base` is its value now. Undoable. Null if the device already has kMaxMappings, or already
+        moves that target. */
+    juce::ValueTree addModulation(juce::ValueTree modulatorDevice, std::uint32_t trackId, const juce::String& target, double base);
+    void removeModulation(juce::ValueTree mapping);
+    [[nodiscard]] static std::vector<juce::ValueTree> getModulations(const juce::ValueTree& modulatorDevice);
+    /** The mappings, of any modulator, that move `target` on `trackId` (0 = master). */
+    [[nodiscard]] std::vector<juce::ValueTree> findModulationsOf(std::uint32_t trackId, const juce::String& target) const;
 
     // --- Sends -------------------------------------------------------------------------------------
     juce::ValueTree addSend(juce::ValueTree track, const juce::ValueTree& bus, double gainDb = -6.0,

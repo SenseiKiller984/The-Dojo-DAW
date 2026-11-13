@@ -14,6 +14,32 @@ juce::AudioProcessorParameter* findParameter(juce::AudioProcessor& processor, co
     return nullptr;
 }
 
+namespace
+{
+std::function<void(juce::AudioProcessorParameter&)>& mappingHook()
+{
+    static std::function<void(juce::AudioProcessorParameter&)> hook;
+    return hook;
+}
+} // namespace
+
+void ParameterControl::setMappingHook(std::function<void(juce::AudioProcessorParameter&)> hook)
+{
+    mappingHook() = std::move(hook);
+}
+
+bool ParameterControl::isMapping() noexcept
+{
+    return mappingHook() != nullptr;
+}
+
+void ParameterControl::mouseDown(const juce::MouseEvent&)
+{
+    if (learning_)
+        if (auto hook = mappingHook()) // (a copy: the hook may end the mapping)
+            hook(parameter_);
+}
+
 ParameterControl::ParameterControl(juce::AudioProcessorParameter& parameter, const juce::String& caption)
     : parameter_(parameter)
     , caption_(caption.isNotEmpty() ? caption : parameter.getName(24))
@@ -100,6 +126,16 @@ void ParameterControl::setFromUser(float normalised)
 
 void ParameterControl::timerCallback()
 {
+    // Learn: the whole control takes the click (its knob, toggle or menu does not).
+    if (const bool mapping = isMapping(); mapping != learning_)
+    {
+        learning_ = mapping;
+        for (auto* child : std::initializer_list<juce::Component*>{&knob_, &toggle_, &choice_})
+            child->setInterceptsMouseClicks(!mapping, !mapping);
+        setMouseCursor(mapping ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+        setRepaintsOnMouseActivity(mapping);
+        repaint();
+    }
     if (dragging_)
         return;
 
@@ -225,6 +261,18 @@ void ParameterControl::paint(juce::Graphics& g)
         g.setFont(theme::mono(10.0f));
         g.drawText(text, area.removeFromBottom(14), juce::Justification::centred, true);
     }
+}
+
+void ParameterControl::paintOverChildren(juce::Graphics& g)
+{
+    if (!learning_)
+        return;
+    // Learn: every control that can be mapped is outlined; click one to map it.
+    const auto area = getLocalBounds().toFloat().reduced(1.5f);
+    g.setColour(theme::colour::accent.withAlpha(isMouseOver() ? 0.3f : 0.12f));
+    g.fillRoundedRectangle(area, 4.0f);
+    g.setColour(theme::colour::accentBright);
+    g.drawRoundedRectangle(area, 4.0f, isMouseOver() ? 2.0f : 1.0f);
 }
 
 //==================================================================================================

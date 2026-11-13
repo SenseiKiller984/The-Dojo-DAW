@@ -4,6 +4,7 @@ set(_dojo_generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(Version.h.in "${_dojo_generated_dir}/core/Version.h" @ONLY)
 
 add_library(dojo_core STATIC
+    ModulationSource.h
     MusicalTime.h
     Types.h
     Version.h.in

@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <memory>
 
 namespace dojo::ui
@@ -27,6 +28,14 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
+    void mouseDown(const juce::MouseEvent& e) override;
+    void paintOverChildren(juce::Graphics& g) override;
+
+    /** The LFO's Learn: while a hook is set, every parameter control is highlighted and a click maps
+        its parameter (calls the hook) instead of changing it. Null ends it. */
+    static void setMappingHook(std::function<void(juce::AudioProcessorParameter&)> hook);
+    [[nodiscard]] static bool isMapping() noexcept;
+    [[nodiscard]] bool isShowingMapping() const noexcept { return learning_; }
 
     [[nodiscard]] juce::AudioProcessorParameter& getParameter() noexcept { return parameter_; }
 
@@ -66,6 +75,7 @@ private:
     std::unique_ptr<juce::TextEditor> valueEditor_;
     juce::Rectangle<int> valueArea_;
     bool dragging_ = false;
+    bool learning_ = false;
     float shown_ = -1.0f;
 };
 

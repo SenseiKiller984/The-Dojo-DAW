@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <vector>
 
 namespace dojo::engine
@@ -106,6 +107,19 @@ public:
     /** Every channel's peak of a slot (multichannel meters); also resets channels 0 and 1. */
     [[nodiscard]] ChannelPeaks collectTrackPeaks(int slot) noexcept;
     [[nodiscard]] float collectInputPeak(int channel) noexcept;
+    /** A track's fader gain (linear) and pan (-1..1) while a modulator or automation moves them;
+        NaN when they are the track's own settings. */
+    [[nodiscard]] float getMovingVolume(int slot) const noexcept
+    {
+        return slot >= 0 && slot < kMaxTracks ? telemetry_.trackVolumes[static_cast<std::size_t>(slot)].load(std::memory_order_relaxed)
+                                              : std::numeric_limits<float>::quiet_NaN();
+    }
+    [[nodiscard]] float getMovingPan(int slot) const noexcept
+    {
+        return slot >= 0 && slot < kMaxTracks ? telemetry_.trackPans[static_cast<std::size_t>(slot)].load(std::memory_order_relaxed)
+                                              : std::numeric_limits<float>::quiet_NaN();
+    }
+    [[nodiscard]] float getMovingMasterVolume() const noexcept { return telemetry_.masterVolume.load(std::memory_order_relaxed); }
 
     [[nodiscard]] std::uint64_t getAppliedGraphSerial() const noexcept
     {
@@ -250,6 +264,10 @@ private:
     void applyMasterFader(int numSamples) noexcept;
     void applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept;
     void applyParameterAutomation(const std::vector<ParameterLane>& lanes) noexcept;
+    /** The graph's modulators (LFO devices): asks each for its value and moves its targets. */
+    void applyModulators(int numSamples) noexcept;
+    /** Forgets every modulated volume, pan and send (a new graph brings its own). */
+    void clearModulation() noexcept;
     /** Runs a device chain on `numChannels` channels of `buffer`: directly when stereo, otherwise one
         linked instance per channel group (companions take over the primary's parameters). */
     void runChain(const std::vector<RenderDevice>& chain, juce::AudioBuffer<Sample>& buffer, int numChannels,
@@ -327,6 +345,11 @@ private:
     int numTargetedMidi_ = 0;
     bool liveBlockPending_ = false;
     PlayHead playHead_;
+    // What the modulators set this block (NaN: not modulated), by slot.
+    std::array<double, kMaxTracks> modulatedVolume_{};
+    std::array<double, kMaxTracks> modulatedPan_{};
+    std::array<std::array<double, kMaxModulatedSends>, kMaxTracks> modulatedSends_{};
+    double modulatedMaster_ = 0.0;
 
     // Per-sub-block context read by the worker tasks (written before they are released).
     const std::vector<int>* currentLevel_ = nullptr;

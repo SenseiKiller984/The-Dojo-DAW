@@ -170,12 +170,50 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
       - A least-squares line through (number, time), weighted by onset strength and refitted without outliers, gives the tempo. Over 20 s of a steady part it is accurate to well under 0.01 BPM.
     - Clips count as placed: offsets, stretch and loops included. MIDI tracks follow the project tempo, so they are not measured.
 
+- **Channel EQ**: a console channel strip: Low Cut (80 Hz), Low shelf (100 Hz), a Mid bell sweepable from 120 Hz to 7.5 kHz with console-style proportional Q (broad for small moves, narrower for big ones), High shelf (8 kHz) and output, with its response curve.
+- **Auto Filter**: an analog-modelled filter swept by an LFO and an envelope follower.
+  - Low-, high-, band-pass, notch, or **Morph** (from low-pass through band-pass and high-pass to notch); 12 or 24 dB.
+  - Circuits: **Clean** (exact), **Warm** (OTA, its resonance saturates), **Ladder** (four-pole transistor ladder, 2x oversampled) and **Diode** (screaming resonance); Drive pushes them.
+  - LFO: eight shapes, free or synced (1/64 to 8 bars), offset and stereo phase (180 degrees: one side opens as the other closes). The envelope follower opens or closes it with the level, of the input or of a **sidechain** track. The curve shows the cutoff moving.
+- **Gate**: Threshold, Return (hysteresis, so a signal at the threshold does not chatter), Attack, Hold, Release, Floor, **Flip** (passes only what is quiet), **Lookahead** (opens before a transient; reported as latency), an external **sidechain** through high- and low-pass key filters, and Listen.
+- **Multiband Dynamics**: three bands (Linkwitz-Riley crossovers that add back up flat), each with an **Above** threshold and ratio (over 1:1 compresses downward, under 1:1 expands upward) and a **Below** threshold and ratio (over 1:1 expands downward, under 1:1 compresses upward), gain, solo and on/off. Attack, release, peak or RMS detection, soft knee, Amount, output and dry/wet; the display shows each band's level, thresholds and gain change.
+- **Roar**: three saturation stages for anything from subtle warmth to wild degradation.
+  - Eleven shapes per stage (Soft Sine, Diode Clipper, Tube Preamp, Polynomial, Hard Clip, Rectifier, Tri Fold, Sine Fold, Bit Crusher, Fractal, Noise Injection), with amount, bias, a filter before or after it (low-, high-, band-pass, notch, peak) and a level; 2x oversampled.
+  - Routing: **Single**, **Serial**, **Parallel**, **Mid/Side** (stage 1 on the mid, 2 on the side) or **Multiband** (one stage per band).
+  - Modulation: two LFOs, an envelope follower and a smoothed random source through an 8-slot matrix (drive, tone, every stage's amount, bias and filter, feedback, dry/wet).
+  - Feedback through a delay and a band-pass (time or synced, invertible), a glue compressor, output and dry/wet.
+- **Pedal**: Overdrive (the clipping stage sees only the mids, blended with the clean signal), Distortion (harder, more gain) and Fuzz (biased transistor clipping that sputters); Bass, Mid (500 Hz or 1.5 kHz), Treble, Sub, output and dry/wet; 4x oversampled.
+- **Overdrive**: a 1970s-style overdrive pedal: a band-pass in front (frequency and width), drive into soft diode clipping, tone, and **Dynamics** (how much of the input's attacks and swells come back through the clipping).
+- **Redux**: sample-rate reduction (a jittering clock, with pre- and post-filters that can be switched off for full aliasing) and bit reduction (fractional bits, Shape for more resolution near zero, DC Shift for truncation grit).
+- **Shifter**: pitch shifting (+-48 semitones, window size), single-sideband **frequency shifting** (inharmonic, bell-like; negative shifts down) and **ring modulation**; stereo spread, an LFO (free or synced, stereo phase), an envelope follower, and a feedback delay for rising or falling spirals.
+- **Chorus-Ensemble**: **Classic** (two voices), **Ensemble** (three voices 120 degrees apart with a fast shimmer, string-machine style) or **Vibrato**; rate, amount, feedback (or inverted), width, warmth, a high-pass on the wet signal, output and dry/wet.
+- **Auto Pan**: rhythmic volume and panning: amount, rate or synced division, eight shapes, Phase (180 degrees pans, 0 is a tremolo), Offset, Invert and Square (hard switching for choppy gating).
+- **LFO**: moves any knob or slider in the project, and they move on screen as it plays.
+  - **Map...** lists every track and the master: its fader, pan and sends, and every parameter of every device and plug-in on it. **Learn** outlines every device control in the project; click one to map it.
+  - Up to eight targets, each with its own range (min and max). Removing a mapping puts the target back where it was; mappings are saved with the project and undoable.
+  - Eight shapes, rate or synced division (locked to the song position), depth, offset, phase, jitter, smooth, hold, retrigger and invert. Bypassing it hands the faders back to their own settings.
+  - The mixer's faders and pan knobs follow while an LFO, or automation, moves them; their values show in the accent colour.
+
 **Instruments**
 - **Wavetable**: two morphing wavetable oscillators (eight band-limited tables), unison up to 8, sub and noise, multimode filter, three envelopes, two LFOs and an 8-slot modulation matrix.
 - **Operator**: 4-operator FM with 11 algorithms, per-operator waveform, ratio or fixed frequency, envelope and velocity, feedback, filter with envelope, pitch envelope and LFO.
 - **Sampler**: polyphonic, ADSR, root note, tuning, start/end and loop; drop a file on it.
 - **Drum Rack**: 16 pads (drag samples onto any pad from the browser or the file manager), per-pad volume, pan, pitch, choke groups and **outputs** — one click creates a return track for each pad output (multi-out).
 - **Impulse**: 8 sample slots (drag onto any slot) with start, transpose, drive, transient, decay, filter, pan, volume and velocity per slot; slots 7 and 8 can choke each other (hi-hats).
+- **Analog**: vintage subtractive synthesis.
+  - Two band-limited oscillators (sine, saw, rectangle with width and PWM, noise) with octave, semitone, fine tuning, pitch modulation by LFO 1, and a balance between the two filters; oscillator 2 can hard-sync to oscillator 1. Noise with colour.
+  - Two filters (12 dB state-variable and 24 dB transistor-ladder low-, band- and high-pass, notch) with drive, key tracking, an envelope each and LFO 2, in parallel or in series.
+  - Two amplifiers with their own envelopes, levels, pans and tremolo; two LFOs (free or synced) per voice.
+  - Delayed vibrato, unison (up to 4), up to 16 voices or mono with legato, glide, velocity to level and filter, and **Drift**: every voice slightly, and slowly changingly, out of tune.
+- **Drift**: a compact, **MPE**-ready analog-modelled synth.
+  - Oscillator 1 (Sine, Triangle, Shark Tooth, Saturated, Saw, Pulse) with a Shape control modulated by Env 2 or the LFO; oscillator 2 (sine, triangle, saw, square) with octave and detune; noise.
+  - A filter (LP I 12 dB, LP II 24 dB ladder, high-pass) and a high-pass after it; Env 1 for the level and Env 2 for modulation, or **cycling** as a loop.
+  - An LFO with nine shapes (including one-shot envelopes), a 3-slot modulation matrix (Env 1, Env 2, LFO, velocity, key, pressure, slide, mod wheel, random), voice modes Poly, Mono, Stereo and Unison with Spread, glide and legato.
+  - **Drift** gives each voice its own slightly-off, wandering pitch and filter. MPE: each note's own bend (48 semitones by default), pressure and slide.
+- **Meld**: a bi-timbral, MPE-capable macro-oscillator synth for textures, drones and harmonic pads.
+  - Two engines, **A** and **B**, **layered** on every note or **split** across the keyboard. Each has a macro oscillator, tuning, a filter (four circuits), amplitude and modulation envelopes, two LFOs, level and pan.
+  - Thirteen macro oscillators, each with two macros: Basic Shapes, Swarm, Harmonic FM, Inharmonic FM, Fold FM, Squelch, Pluck, Bitgrunge, Noise Loop, Shepard's Tone (endlessly rising or falling), Chip, Additive and Rain (granular droplets).
+  - A 12-slot modulation matrix: both engines' envelopes and LFOs, velocity, key, pressure, slide, pitch bend, mod wheel and a random value per note, to either engine's macros, pitch, cutoff, resonance, level, pan and LFO rate. MPE: each note's own bend, pressure and slide.
 
 **Automation and export**
 - **Spline automation lanes** for volume, pan, sends and every device or plug-in parameter (A on the track header, or right-click > Add Automation Lane).
@@ -309,8 +347,10 @@ src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), m
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
               clip playback / time-stretch / disk streaming, capture, file preview, device host,
               MP3 encoder
-src/devices   native devices: EQ, compressor, limiter, reverb, delay, Echo, Utility, Amp & Cabinet,
-              pitch shift, Click; instruments: Wavetable, Operator, Sampler, Drum Rack, Impulse
+src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, limiter, Gate, Multiband
+              Dynamics, reverb, delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux,
+              pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
+              Operator, Meld, Analog, Drift, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),

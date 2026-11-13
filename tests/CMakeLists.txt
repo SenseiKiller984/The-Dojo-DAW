@@ -18,13 +18,19 @@ add_executable(dojo_tests
     ClipListTests.cpp
     ClipLockTests.cpp
     ClipMenuTests.cpp
+    ModulationEffectTests.cpp
     MultichannelTests.cpp
     VideoTests.cpp
+    DeviceEditorTests.cpp
     DeviceTests.cpp
+    DriveTests.cpp
+    DynamicsFilterTests.cpp
+    EffectTestHelpers.h
     EditorDropTests.cpp
     EffectTests.cpp
     EngineGraphTests.cpp
     InstrumentTests.cpp
+    LfoTests.cpp
     LimiterTests.cpp
     PluginTests.cpp
     PreferencesTests.cpp
@@ -40,6 +46,7 @@ add_executable(dojo_tests
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
     SurroundTests.cpp
+    SynthTests.cpp
     TempoTests.cpp
     ValueEntryTests.cpp
     WaveformTests.cpp)

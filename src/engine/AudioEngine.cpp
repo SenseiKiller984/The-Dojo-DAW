@@ -1,5 +1,7 @@
 #include "engine/AudioEngine.h"
 
+#include "core/ModulationSource.h"
+
 #include "core/rt/AtomicUtils.h"
 #include "core/rt/RealtimeGuard.h"
 #include "engine/Capture.h"
@@ -8,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <thread>
 #include <variant>
 
@@ -41,6 +44,12 @@ AudioEngine::AudioEngine(int numWorkerThreads)
     : workers_(numWorkerThreads)
 {
     slots_.resize(static_cast<std::size_t>(kMaxTracks));
+    clearModulation();
+    for (auto& v : telemetry_.trackVolumes)
+        v.store(std::numeric_limits<float>::quiet_NaN());
+    for (auto& p : telemetry_.trackPans)
+        p.store(std::numeric_limits<float>::quiet_NaN());
+    telemetry_.masterVolume.store(std::numeric_limits<float>::quiet_NaN());
 }
 
 AudioEngine::~AudioEngine()
@@ -442,6 +451,7 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
     updatePlayHead();
 
     masterBus_.clear(0, numSamples);
+    applyModulators(numSamples);
 
     if (graph_ != nullptr)
     {
@@ -459,9 +469,14 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
     else
         testTone_.addTo(masterBus_, numSamples);
 
-    // Master gain (graph value or automation), smoothed.
-    if (graph_ != nullptr && !graph_->masterVolumeAutomation.isEmpty())
+    // Master gain (graph value, automation or a modulator), smoothed.
+    if (graph_ != nullptr && !std::isnan(modulatedMaster_))
+        masterGain_.setTargetValue(modulatedMaster_);
+    else if (graph_ != nullptr && !graph_->masterVolumeAutomation.isEmpty())
         masterGain_.setTargetValue(automationToGain(graph_->masterVolumeAutomation.valueAt(blockStartSeconds_)));
+    const bool masterMoved = graph_ != nullptr && (!std::isnan(modulatedMaster_) || !graph_->masterVolumeAutomation.isEmpty());
+    telemetry_.masterVolume.store(masterMoved ? static_cast<float>(masterGain_.getTargetValue()) : std::numeric_limits<float>::quiet_NaN(),
+                                  std::memory_order_relaxed);
 
     const int numMaster = masterChannels();
     if (!masterGain_.isSmoothing())
@@ -583,6 +598,7 @@ void AudioEngine::handle(const command::SwapGraph& cmd) noexcept
 {
     RenderGraph* const previous = graph_;
     graph_ = cmd.graph;
+    clearModulation();
 
     if (graph_ != nullptr)
     {
@@ -972,12 +988,15 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
             slot.main.addFrom(ch, 0, sourceSlot.main, ch, 0, numSamples);
     }
 
-    for (const auto& send : track.sends)
+    for (std::size_t sendIndex = 0; sendIndex < track.sends.size(); ++sendIndex)
     {
+        const auto& send = track.sends[sendIndex];
         const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(send.sourceIndex)].slot)];
         const auto& buffer = send.preFader ? sourceSlot.pre : sourceSlot.main;
-        const double gain = send.gainAutomation.isEmpty() ? send.gain
-                                                          : automationToGain(send.gainAutomation.valueAt(blockStartSeconds_));
+        double gain = send.gainAutomation.isEmpty() ? send.gain : automationToGain(send.gainAutomation.valueAt(blockStartSeconds_));
+        if (sendIndex < static_cast<std::size_t>(kMaxModulatedSends))
+            if (const double modulated = modulatedSends_[static_cast<std::size_t>(track.slot)][sendIndex]; !std::isnan(modulated))
+                gain = modulated;
         if (send.convert)
         {
             // Into a bus of another layout: by speaker.
@@ -1028,6 +1047,59 @@ void AudioEngine::applyParameterAutomation(const std::vector<ParameterLane>& lan
     }
 }
 
+void AudioEngine::clearModulation() noexcept
+{
+    constexpr double none = std::numeric_limits<double>::quiet_NaN();
+    modulatedVolume_.fill(none);
+    modulatedPan_.fill(none);
+    for (auto& sends : modulatedSends_)
+        sends.fill(none);
+    modulatedMaster_ = none;
+}
+
+void AudioEngine::applyModulators(int numSamples) noexcept
+{
+    if (graph_ == nullptr || graph_->modulators.empty())
+        return;
+    constexpr double none = std::numeric_limits<double>::quiet_NaN();
+    const double ppq = positionSeconds_ * graph_->tempo / 60.0;
+    for (const auto& modulator : graph_->modulators)
+    {
+        if (modulator.source == nullptr)
+            continue;
+        // Bypassed: the targets go back to their own values (parameters stay where they are).
+        const bool bypassed = modulator.node != nullptr && modulator.node->isBypassed();
+        const double value =
+            bypassed ? 0.0 : std::clamp(modulator.source->advanceModulation(numSamples, sampleRate_, graph_->tempo, ppq, playing_), 0.0, 1.0);
+        for (const auto& target : modulator.targets)
+        {
+            const double mapped = std::clamp(target.minimum + (target.maximum - target.minimum) * value, 0.0, 1.0);
+            const bool slotValid = target.slot >= 0 && target.slot < kMaxTracks;
+            switch (target.kind)
+            {
+            case ModulationTarget::Kind::parameter:
+                if (target.parameter != nullptr && !bypassed && std::abs(target.parameter->getValue() - static_cast<float>(mapped)) > 1.0e-6f)
+                    target.parameter->setValue(static_cast<float>(mapped));
+                break;
+            case ModulationTarget::Kind::volume:
+                if (slotValid)
+                    modulatedVolume_[static_cast<std::size_t>(target.slot)] = bypassed ? none : automationToGain(mapped);
+                break;
+            case ModulationTarget::Kind::pan:
+                if (slotValid)
+                    modulatedPan_[static_cast<std::size_t>(target.slot)] = bypassed ? none : mapped * 2.0 - 1.0;
+                break;
+            case ModulationTarget::Kind::send:
+                if (slotValid && target.sendIndex >= 0 && target.sendIndex < kMaxModulatedSends)
+                    modulatedSends_[static_cast<std::size_t>(target.slot)][static_cast<std::size_t>(target.sendIndex)] =
+                        bypassed ? none : automationToGain(mapped);
+                break;
+            case ModulationTarget::Kind::masterVolume: modulatedMaster_ = bypassed ? none : automationToGain(mapped); break;
+            }
+        }
+    }
+}
+
 void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
 {
     const int numSamples = currentNumSamples_;
@@ -1038,6 +1110,18 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
         volume = automationToGain(track.volumeAutomation.valueAt(blockStartSeconds_));
     if (!track.panAutomation.isEmpty())
         pan = track.panAutomation.valueAt(blockStartSeconds_) * 2.0 - 1.0;
+    // A modulator (LFO) mapped to the fader or pan wins over automation.
+    const auto slotIndex = static_cast<std::size_t>(track.slot);
+    if (!std::isnan(modulatedVolume_[slotIndex]))
+        volume = modulatedVolume_[slotIndex];
+    if (!std::isnan(modulatedPan_[slotIndex]))
+        pan = modulatedPan_[slotIndex];
+    // The values the mixer shows while they move (NaN: the track's own settings).
+    constexpr float none = std::numeric_limits<float>::quiet_NaN();
+    const bool volumeMoves = !track.volumeAutomation.isEmpty() || !std::isnan(modulatedVolume_[slotIndex]);
+    const bool panMoves = !track.panAutomation.isEmpty() || !std::isnan(modulatedPan_[slotIndex]);
+    telemetry_.trackVolumes[slotIndex].store(volumeMoves ? static_cast<float>(volume) : none, std::memory_order_relaxed);
+    telemetry_.trackPans[slotIndex].store(panMoves ? static_cast<float>(pan) : none, std::memory_order_relaxed);
     for (const auto& vca : track.vcaGains)
         volume *= vca.automation.isEmpty() ? vca.gain : automationToGain(vca.automation.valueAt(blockStartSeconds_));
 

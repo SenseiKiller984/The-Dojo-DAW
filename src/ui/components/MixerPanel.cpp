@@ -1,5 +1,7 @@
 #include "ui/components/MixerPanel.h"
 
+#include "engine/AudioEngine.h"
+
 #include "ui/MixerValues.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -447,6 +449,27 @@ void ChannelStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::I
         rebuildRouting();
 }
 
+void ChannelStrip::showMovingValues(float volumeGain, float pan)
+{
+    const bool volumeMoves = !std::isnan(volumeGain);
+    const bool panMoves = !std::isnan(pan);
+    if (volumeMoves && !faderDragging_)
+        fader_.setValue(juce::jlimit(static_cast<double>(kFaderMinDb), static_cast<double>(kFaderMaxDb), juce::Decibels::gainToDecibels(static_cast<double>(volumeGain), static_cast<double>(kFaderMinDb))),
+                        juce::dontSendNotification);
+    else if (!volumeMoves && movingVolume_)
+        fader_.setValue(session::track::getVolumeDb(track_), juce::dontSendNotification); // back to its own setting
+    if (panMoves && !panDragging_)
+        pan_.setValue(juce::jlimit(-1.0, 1.0, static_cast<double>(pan)), juce::dontSendNotification);
+    else if (!panMoves && movingPan_)
+        pan_.setValue(session::track::getPan(track_), juce::dontSendNotification);
+    if (volumeMoves != movingVolume_ || panMoves != movingPan_ || volumeMoves || panMoves)
+    {
+        movingVolume_ = volumeMoves;
+        movingPan_ = panMoves;
+        repaint(readoutArea_);
+    }
+}
+
 void ChannelStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
 {
     meter_.update(peakLeft, peakRight, elapsedSeconds);
@@ -608,11 +631,20 @@ void ChannelStrip::paint(juce::Graphics& g)
 
     g.setColour(colour::textMuted);
     g.setFont(mono(10.0f));
-    // Volume and pan, each double-clickable to type a value.
+    // Volume and pan, each double-clickable to type a value (in the accent colour while an LFO or
+    // automation moves them).
     if (fader_.isVisible())
-        g.drawText(formatDecibels(session::track::getVolumeDb(track_)), volumeArea_.withTrimmedRight(5), juce::Justification::centredRight, false);
+    {
+        g.setColour(movingVolume_ ? colour::accentBright : colour::textMuted);
+        g.drawText(formatDecibels(movingVolume_ ? fader_.getValue() : session::track::getVolumeDb(track_)), volumeArea_.withTrimmedRight(5),
+                   juce::Justification::centredRight, false);
+    }
     if (pan_.isVisible())
-        g.drawText(formatPan(session::track::getPan(track_)), panArea_.withTrimmedLeft(5), juce::Justification::centredLeft, false);
+    {
+        g.setColour(movingPan_ ? colour::accentBright : colour::textMuted);
+        g.drawText(formatPan(movingPan_ ? pan_.getValue() : session::track::getPan(track_)), panArea_.withTrimmedLeft(5),
+                   juce::Justification::centredLeft, false);
+    }
 }
 
 void ChannelStrip::paintOverChildren(juce::Graphics& g)
@@ -717,6 +749,19 @@ void MasterStrip::valueTreeRedirected(juce::ValueTree&)
     fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
     format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
     resized();
+}
+
+void MasterStrip::showMovingVolume(float gain)
+{
+    const bool moves = !std::isnan(gain);
+    if (moves && !dragging_)
+        fader_.setValue(juce::jlimit(static_cast<double>(kFaderMinDb), static_cast<double>(kFaderMaxDb), juce::Decibels::gainToDecibels(static_cast<double>(gain), static_cast<double>(kFaderMinDb))),
+                        juce::dontSendNotification);
+    else if (!moves && moving_)
+        fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
+    if (moves || moving_)
+        repaint(readoutArea_);
+    moving_ = moves;
 }
 
 void MasterStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
@@ -919,6 +964,7 @@ void MixerPanel::valueTreeChildOrderChanged(juce::ValueTree& parent, int, int)
 
 void MixerPanel::updateMeters(const engine::TelemetrySnapshot& telemetry, double elapsedSeconds)
 {
+    master_.showMovingVolume(controller_.getEngine().getMovingMasterVolume());
     if (telemetry.masterChannels > 2)
         master_.pushLevels(telemetry.masterPeaks.data(), telemetry.masterChannels, elapsedSeconds);
     else
@@ -934,6 +980,8 @@ void MixerPanel::updateMeters(const engine::TelemetrySnapshot& telemetry, double
         const auto destination = session.getDestination(t);
         const int channels = destination.isValid() ? std::max(2, session::getNumChannels(session::track::getFormat(destination))) : masterChannels;
         const auto peaks = slot >= 0 ? controller_.collectTrackPeaks(slot) : engine::ChannelPeaks{};
+        // Faders and pans follow an LFO or automation as the engine applies them.
+        strip->showMovingValues(controller_.getEngine().getMovingVolume(slot), controller_.getEngine().getMovingPan(slot));
         if (channels > 2)
             strip->pushLevels(peaks.peak.data(), channels, elapsedSeconds);
         else

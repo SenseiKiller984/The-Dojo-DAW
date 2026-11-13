@@ -13,6 +13,11 @@ namespace juce
 class AudioProcessorParameter;
 }
 
+namespace dojo
+{
+class ModulationSource;
+}
+
 namespace dojo::engine
 {
 
@@ -136,6 +141,7 @@ struct RenderDevice
     shared buffers). */
 struct RenderSend
 {
+    std::uint32_t sendId = 0; ///< the SEND's id (for modulation targets)
     int sourceIndex = -1;
     double gain = 1.0;
     bool preFader = false;
@@ -219,6 +225,37 @@ struct RenderTrack
     std::vector<RenderDevice> postDevices;
 };
 
+/** Up to this many of a bus's incoming sends can be modulated. */
+inline constexpr int kMaxModulatedSends = 16;
+
+/** One target of a modulator (an LFO device), resolved by the compiler. */
+struct ModulationTarget
+{
+    enum class Kind : std::uint8_t
+    {
+        parameter,    ///< a device or plug-in parameter (normalised value)
+        volume,       ///< a track's fader (normalised like volume automation)
+        pan,          ///< a track's pan (0 = left .. 1 = right)
+        send,         ///< a send level (normalised like volume automation)
+        masterVolume, ///< the master fader
+    };
+
+    Kind kind = Kind::parameter;
+    juce::AudioProcessorParameter* parameter = nullptr;
+    int slot = -1;      ///< volume / pan: the track's slot; send: the receiving bus's slot
+    int sendIndex = -1; ///< send: index into that bus's sends
+    double minimum = 0.0, maximum = 1.0; ///< the range the modulator sweeps (normalised)
+    double base = 0.5;  ///< the parameter's value before it was mapped (restored while bypassed)
+};
+
+/** A modulator: its device (for the bypass state), the value source, and what it moves. */
+struct RenderModulator
+{
+    ProcessorNode* node = nullptr;
+    ModulationSource* source = nullptr;
+    std::vector<ModulationTarget> targets;
+};
+
 /**
     An immutable snapshot of everything the audio thread renders.
 
@@ -264,6 +301,8 @@ struct RenderGraph
 
     std::vector<RenderTrack> tracks;
     std::vector<std::vector<int>> levels; ///< graph indices per dependency level
+    /** LFO devices and their targets: applied once per block, before any track renders. */
+    std::vector<RenderModulator> modulators;
     std::vector<int> masterSources;       ///< graph indices feeding the master bus
 
     int totalLatency = 0; ///< latency of the whole graph at the master output (for offline renders)

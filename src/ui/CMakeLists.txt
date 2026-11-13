@@ -55,6 +55,9 @@ add_library(dojo_ui STATIC
     components/TransportBar.h
     devices/DeviceEditors.cpp
     devices/DeviceEditors.h
+    devices/MoreDeviceEditors.cpp
+    devices/MoreDeviceEditors.h
+    devices/PagedEditor.h
     devices/ParameterControl.cpp
     devices/ParameterControl.h
     devices/TempoDetectPanel.cpp

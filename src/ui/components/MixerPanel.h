@@ -39,6 +39,13 @@ public:
     /** Shown instead of the pan knob when a mono or stereo track feeds a surround bus or master. */
     [[nodiscard]] SurroundPanner& getSurroundPanner() noexcept { return surround_; }
     [[nodiscard]] bool isSurroundPanning() const noexcept { return surroundMode_; }
+    /** The fader gain (linear) and pan the engine applies while an LFO or automation moves them
+        (NaN: the track's own settings). The controls follow without editing the session. */
+    void showMovingValues(float volumeGain, float pan);
+    [[nodiscard]] bool isVolumeMoving() const noexcept { return movingVolume_; }
+    [[nodiscard]] bool isPanMoving() const noexcept { return movingPan_; }
+    [[nodiscard]] double getShownVolumeDb() const { return fader_.getValue(); }
+    [[nodiscard]] double getShownPan() const { return pan_.getValue(); }
 
     /** Double-clicking the volume or pan value under the fader opens a field to type it
         ("-6", "-inf"; "C", "L20", "R35"). */
@@ -100,6 +107,7 @@ private:
     InlineValueEditor valueEditor_{*this};
     bool panDragging_ = false;
     bool faderDragging_ = false;
+    bool movingVolume_ = false, movingPan_ = false;
 };
 
 /** The master strip: fader (session master volume, undoable), meter with scale, gain/peak readouts. */
@@ -114,6 +122,10 @@ public:
     [[nodiscard]] const LevelMeter& getMeter() const noexcept { return meter_; }
     /** The master's channel format (stereo or surround). */
     [[nodiscard]] juce::ComboBox& getFormatBox() noexcept { return format_; }
+
+    /** The master gain (linear) while an LFO or automation moves it (NaN: its own setting). */
+    void showMovingVolume(float gain);
+    [[nodiscard]] double getShownVolumeDb() const { return fader_.getValue(); }
 
     /** Double-clicking the GAIN readout opens a field to type the master volume. */
     void showGainEditor();
@@ -141,6 +153,7 @@ private:
     float heldPeakDb_ = LevelMeter::kMinDb;
     double peakHoldAge_ = 0.0;
     bool dragging_ = false;
+    bool moving_ = false;
 };
 
 /** Bottom mixer panel: a scrollable row of channel strips and the master strip. */
