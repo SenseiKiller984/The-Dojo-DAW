@@ -388,7 +388,7 @@ TEST_CASE("Presets dropped on a device card load into it; dropped on the panel t
     CHECK(items.contains("Synth Bite"));
     for (const auto* action : {"Save Preset...", "Add to Preset File...", "Save Whole Chain as Preset...", "Load Preset File...", "Open Presets Folder"})
         CHECK(items.contains(action));
-    CHECK(panel.getPresetMenuItems(reverbDevice).contains("Drivers License Vocal Saturation  (from chain)"));
+    CHECK(panel.getPresetMenuItems(reverbDevice).contains("Dreamy Wide Space  (from chain)"));
     CHECK(panel.getPresetMenuItems(autoPanDevice).contains("No presets for Auto Pan yet"));
 
     // From the file manager: a .dojopreset file dropped on the card.

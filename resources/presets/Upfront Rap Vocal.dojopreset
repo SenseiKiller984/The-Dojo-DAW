@@ -73,38 +73,15 @@
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
-  <DEVICE key="builtin:multiband" name="De-Esser">
-    <DOJO_DEVICE type="builtin:multiband" version="1">
-      <PARAM id="lowon" value="0.0"/>
-      <PARAM id="lowathr" value="-18.0"/>
-      <PARAM id="lowarat" value="2.0"/>
-      <PARAM id="lowbthr" value="-60.0"/>
-      <PARAM id="lowbrat" value="1.0"/>
-      <PARAM id="lowgain" value="0.0"/>
-      <PARAM id="lowsolo" value="0.0"/>
-      <PARAM id="midon" value="0.0"/>
-      <PARAM id="midathr" value="-18.0"/>
-      <PARAM id="midarat" value="2.0"/>
-      <PARAM id="midbthr" value="-60.0"/>
-      <PARAM id="midbrat" value="1.0"/>
-      <PARAM id="midgain" value="0.0"/>
-      <PARAM id="midsolo" value="0.0"/>
-      <PARAM id="highon" value="1.0"/>
-      <PARAM id="highathr" value="-24.0"/>
-      <PARAM id="higharat" value="5.0"/>
-      <PARAM id="highbthr" value="-60.0"/>
-      <PARAM id="highbrat" value="1.0"/>
-      <PARAM id="highgain" value="0.0"/>
-      <PARAM id="highsolo" value="0.0"/>
-      <PARAM id="xlow" value="120"/>
-      <PARAM id="xhigh" value="5500.0"/>
-      <PARAM id="attack" value="0.5"/>
-      <PARAM id="release" value="50.0"/>
+  <DEVICE key="builtin:deesser" name="De-Esser">
+    <DOJO_DEVICE type="builtin:deesser" version="1">
+      <PARAM id="freq" value="5500.0"/>
+      <PARAM id="threshold" value="-24.0"/>
+      <PARAM id="range" value="8.0"/>
+      <PARAM id="mode" value="0.0"/>
       <PARAM id="detection" value="0.0"/>
-      <PARAM id="knee" value="1.0"/>
-      <PARAM id="amount" value="100.0"/>
-      <PARAM id="output" value="0.0"/>
-      <PARAM id="mix" value="100.0"/>
+      <PARAM id="release" value="50.0"/>
+      <PARAM id="listen" value="0.0"/>
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>

@@ -292,7 +292,23 @@ TEST_CASE("Nine built-in chains, each device in its place with its own role", "[
     for (const auto& entry : dl.devices)
         kinds.add(entry.key);
     CHECK(kinds == juce::StringArray{"builtin:gate", "builtin:eq", "builtin:compressor", "builtin:overdrive", "builtin:eq",
-                                     "builtin:echo", "builtin:reverb"});
+                                     "builtin:echo", "builtin:plate"});
+
+    // The chains use the dedicated devices: a real De-Esser, Glue Compressor, Expander, Soft Clipper
+    // and Plate Reverb (each also in the browser on its own).
+    const auto kindOf = [](const presets::Preset& preset, const juce::String& role)
+    {
+        for (const auto& entry : preset.devices)
+            if (entry.deviceName == role)
+                return entry.key;
+        return juce::String();
+    };
+    CHECK(kindOf(builtIn("Pop Vocal Polish"), "De-Esser") == "builtin:deesser");
+    CHECK(kindOf(builtIn("Upfront Rap Vocal"), "De-Esser") == "builtin:deesser");
+    CHECK(kindOf(builtIn("Pop Vocal Polish"), "Expander") == "builtin:expander");
+    CHECK(kindOf(builtIn("Pop Vocal Polish"), "Vocal Plate") == "builtin:plate");
+    CHECK(kindOf(builtIn("Punchy Drum Bus"), "Glue Compressor") == "builtin:gluecomp");
+    CHECK(kindOf(builtIn("Punchy Drum Bus"), "Soft Clipper") == "builtin:softclip");
 }
 
 TEST_CASE("Adding a chain puts every device on the track, in order, as one undo step", "[presets][chains]")
@@ -327,7 +343,7 @@ TEST_CASE("Adding a chain puts every device on the track, in order, as one undo 
     CHECK_THAT(valueOf(processorOf(chain[5]), "band4Gain"), WithinAbs(5.5, 1e-4));
     CHECK_THAT(valueOf(processorOf(chain[5]), "band1On"), WithinAbs(0.0, 1e-6));
     CHECK_THAT(valueOf(processorOf(chain[6]), "timel"), WithinAbs(92.0, 0.01));
-    CHECK_THAT(valueOf(processorOf(chain[7]), "decay"), WithinAbs(0.9, 1e-3));
+    CHECK_THAT(valueOf(processorOf(chain[7]), "decay"), WithinAbs(0.8, 1e-3)); // (the Plate Reverb)
 
     // One undo takes the whole chain away; redo brings it back with its settings.
     session.getUndoManager().undo();

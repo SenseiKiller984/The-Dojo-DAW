@@ -128,14 +128,17 @@
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
-  <DEVICE key="builtin:reverb" name="Short Plate">
-    <DOJO_DEVICE type="builtin:reverb" version="1">
-      <PARAM id="size" value="0.25"/>
-      <PARAM id="decay" value="0.9"/>
-      <PARAM id="damping" value="0.15"/>
-      <PARAM id="predelay" value="8.0"/>
+  <DEVICE key="builtin:plate" name="Short Plate">
+    <DOJO_DEVICE type="builtin:plate" version="1">
+      <PARAM id="predelay" value="5.0"/>
+      <PARAM id="decay" value="0.8"/>
+      <PARAM id="size" value="70.0"/>
+      <PARAM id="damping" value="12000.0"/>
+      <PARAM id="bandwidth" value="16000.0"/>
       <PARAM id="lowcut" value="300.0"/>
-      <PARAM id="width" value="1.0"/>
+      <PARAM id="diffusion" value="75.0"/>
+      <PARAM id="modulation" value="20.0"/>
+      <PARAM id="width" value="100.0"/>
       <PARAM id="mix" value="14.0"/>
       <EXTRA/>
     </DOJO_DEVICE>

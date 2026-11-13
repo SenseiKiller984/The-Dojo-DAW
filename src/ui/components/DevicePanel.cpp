@@ -1,6 +1,6 @@
 #include "ui/components/DevicePanel.h"
 
-#include "devices/Dynamics.h"
+#include "devices/BuiltinProcessor.h"
 #include "ui/DeviceActions.h"
 #include "ui/Latency.h"
 #include "ui/PresetActions.h"
@@ -274,9 +274,10 @@ public:
                 const auto source = index >= 0 ? sidechainIds_[static_cast<std::size_t>(index)] : 0u;
                 session.beginTransaction("Sidechain");
                 session::device::setSidechain(device_, source, um);
-                // A compressor listens to its sidechain only when asked to.
-                if (auto* compressor = dynamic_cast<devices::Compressor*>(&node_->getProcessor()))
-                    if (auto* external = compressor->getParameterById("sidechain"))
+                // A native device (compressor, gate, expander, auto filter) listens to its sidechain
+                // only when its External Sidechain switch is on: choosing a source switches it.
+                if (auto* native = dynamic_cast<devices::BuiltinProcessor*>(&node_->getProcessor()))
+                    if (auto* external = native->getParameterById("sidechain"))
                         external->setValueNotifyingHost(source != 0 ? 1.0f : 0.0f);
             };
             addAndMakeVisible(sidechain_);

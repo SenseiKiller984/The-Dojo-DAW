@@ -10,7 +10,9 @@
 #include "devices/Meld.h"
 #include "devices/Modulators.h"
 #include "devices/MultibandDynamics.h"
+#include "devices/PlateReverb.h"
 #include "devices/Roar.h"
+#include "devices/StudioDynamics.h"
 #include "engine/RenderGraph.h"
 #include "ui/devices/PagedEditor.h"
 #include "ui/theme/DojoTheme.h"
@@ -251,6 +253,220 @@ public:
 private:
     void timerCallback() override { repaint(); }
     devices::AutoPan& pan_;
+};
+
+//==================================================================================================
+/** A dynamics meter: the detector level against the threshold (optional) and the gain reduction. */
+class ReductionDisplay final : public juce::Component, private juce::Timer
+{
+public:
+    struct Source
+    {
+        juce::String levelTitle;               ///< empty: no level meter
+        std::function<float()> takeLevelDb;    ///< the detector's level since the last call
+        std::function<double()> thresholdDb;
+        juce::String reductionTitle = "GR";
+        std::function<float()> takeReductionDb; ///< the gain reduction since the last call
+        double reductionRange = 24.0;
+    };
+
+    explicit ReductionDisplay(Source source)
+        : source_(std::move(source))
+    {
+        startTimerHz(30);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        auto area = getLocalBounds().toFloat();
+        paintPanel(g, area, {});
+        auto content = area.reduced(8.0f, 6.0f);
+        const bool hasLevel = source_.takeLevelDb != nullptr;
+        auto levelColumn = hasLevel ? content.removeFromLeft(content.getWidth() * 0.5f) : juce::Rectangle<float>();
+        const auto meter = [&](juce::Rectangle<float> column, const juce::String& title, float fraction, juce::Colour colour, bool fromTop)
+        {
+            g.setColour(colour::textMuted);
+            g.setFont(label(9.0f));
+            g.drawText(title, column.removeFromTop(14.0f), juce::Justification::centred, false);
+            auto valueArea = column.removeFromBottom(14.0f);
+            auto bar = column.reduced(column.getWidth() * 0.25f, 2.0f);
+            g.setColour(colour::control);
+            g.fillRect(bar);
+            g.setColour(colour);
+            const float h = bar.getHeight() * std::clamp(fraction, 0.0f, 1.0f);
+            g.fillRect(fromTop ? bar.withHeight(h) : bar.withTop(bar.getBottom() - h));
+            return std::pair{bar, valueArea};
+        };
+        if (hasLevel)
+        {
+            const auto [bar, valueArea] = meter(levelColumn, source_.levelTitle, (level_ + 80.0f) / 80.0f, colour::meterLow, false);
+            if (source_.thresholdDb)
+            {
+                const float y = bar.getBottom() - bar.getHeight() * static_cast<float>(std::clamp((source_.thresholdDb() + 80.0) / 80.0, 0.0, 1.0));
+                g.setColour(colour::gold);
+                g.fillRect(bar.getX() - 3.0f, y - 1.0f, bar.getWidth() + 6.0f, 2.0f);
+            }
+            g.setColour(colour::textSecondary);
+            g.setFont(mono(9.5f));
+            g.drawText(level_ <= -79.0f ? juce::String("-inf") : juce::String(level_, 1), valueArea, juce::Justification::centred, false);
+        }
+        const auto [bar, valueArea] =
+            meter(content, source_.reductionTitle, static_cast<float>(reduction_ / source_.reductionRange), colour::accentBright, true);
+        juce::ignoreUnused(bar);
+        g.setColour(colour::textSecondary);
+        g.setFont(mono(9.5f));
+        g.drawText("-" + juce::String(reduction_, 1), valueArea, juce::Justification::centred, false);
+    }
+
+private:
+    void timerCallback() override
+    {
+        if (source_.takeLevelDb)
+            level_ = std::max(source_.takeLevelDb(), level_ - 1.5f);
+        reduction_ = std::max(source_.takeReductionDb ? source_.takeReductionDb() : 0.0f, reduction_ * 0.85f);
+        repaint();
+    }
+
+    Source source_;
+    float level_ = -100.0f;
+    float reduction_ = 0.0f;
+};
+
+/** A transfer curve: output against input, with the current input level marked (optional). */
+class TransferDisplay final : public juce::Component, private juce::Timer
+{
+public:
+    /** `curve` maps an input to an output, both from `minimum` to `maximum` (dB, or linear). */
+    TransferDisplay(juce::String title, std::function<double(double)> curve, double minimum, double maximum,
+                    std::function<float()> takeLevel = {}, std::function<float()> takeActivity = {})
+        : title_(std::move(title))
+        , curve_(std::move(curve))
+        , minimum_(minimum)
+        , maximum_(maximum)
+        , takeLevel_(std::move(takeLevel))
+        , takeActivity_(std::move(takeActivity))
+    {
+        startTimerHz(30);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        const auto area = getLocalBounds().toFloat();
+        paintPanel(g, area, title_);
+        auto plot = area.reduced(8.0f, 16.0f);
+        plot = plot.withSizeKeepingCentre(std::min(plot.getWidth(), plot.getHeight()), std::min(plot.getWidth(), plot.getHeight()));
+        const auto xOf = [&](double v) { return plot.getX() + static_cast<float>((v - minimum_) / (maximum_ - minimum_)) * plot.getWidth(); };
+        const auto yOf = [&](double v) { return plot.getBottom() - static_cast<float>((std::clamp(v, minimum_, maximum_) - minimum_) / (maximum_ - minimum_)) * plot.getHeight(); };
+        g.setColour(colour::outline.withAlpha(0.7f));
+        g.drawLine(xOf(minimum_), yOf(minimum_), xOf(maximum_), yOf(maximum_), 1.0f); // (unity)
+        g.drawRect(plot, 1.0f);
+        juce::Path path;
+        const int points = std::max(2, static_cast<int>(plot.getWidth()));
+        for (int i = 0; i < points; ++i)
+        {
+            const double v = minimum_ + (maximum_ - minimum_) * i / (points - 1);
+            const float x = xOf(v), y = yOf(curve_(v));
+            if (i == 0)
+                path.startNewSubPath(x, y);
+            else
+                path.lineTo(x, y);
+        }
+        g.setColour(colour::accentBright);
+        g.strokePath(path, juce::PathStrokeType(1.8f));
+        if (takeLevel_ && level_ > minimum_)
+        {
+            g.setColour(colour::gold);
+            g.fillEllipse(xOf(level_) - 3.5f, yOf(curve_(level_)) - 3.5f, 7.0f, 7.0f);
+        }
+        if (takeActivity_)
+        {
+            const auto lamp = area.withTop(area.getBottom() - 14.0f).reduced(8.0f, 2.0f);
+            g.setColour(colour::meterClip.withAlpha(0.15f + 0.85f * std::clamp(activity_ / 6.0f, 0.0f, 1.0f)));
+            g.fillRoundedRectangle(lamp, 2.0f);
+            g.setColour(colour::textPrimary);
+            g.setFont(label(8.5f));
+            g.drawText("CLIP  -" + juce::String(activity_, 1) + " dB", lamp, juce::Justification::centred, false);
+        }
+    }
+
+private:
+    void timerCallback() override
+    {
+        if (takeLevel_)
+            level_ = std::max(static_cast<double>(takeLevel_()), level_ - 1.5);
+        if (takeActivity_)
+            activity_ = std::max(takeActivity_(), activity_ * 0.85f);
+        repaint();
+    }
+
+    juce::String title_;
+    std::function<double(double)> curve_;
+    double minimum_, maximum_;
+    std::function<float()> takeLevel_, takeActivity_;
+    double level_ = -200.0;
+    float activity_ = 0.0f;
+};
+
+/** Plate Reverb: the decay envelope (pre-delay, then the fall to -60 dB) for the lows and the highs. */
+class DecayDisplay final : public juce::Component, private juce::Timer
+{
+public:
+    explicit DecayDisplay(devices::PlateReverb& plate)
+        : plate_(plate)
+    {
+        startTimerHz(10);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        const auto area = getLocalBounds().toFloat();
+        paintPanel(g, area, "DECAY");
+        const auto plot = area.reduced(8.0f, 18.0f);
+        const double decay = plate_.decay_->get();
+        const double preDelay = plate_.preDelay_->get() / 1000.0;
+        const double span = preDelay + decay * 1.1;
+        // Damping shortens the highs (a rough guide: at 1 kHz damping a third of the decay).
+        const double highDecay = decay * std::clamp(std::pow(plate_.damping_->get() / 20000.0, 0.35), 0.3, 1.0);
+        const auto xOf = [&](double t) { return plot.getX() + static_cast<float>(t / span) * plot.getWidth(); };
+        const auto yOf = [&](double db) { return plot.getY() - static_cast<float>(std::clamp(db, -60.0, 0.0) / 60.0) * plot.getHeight(); };
+        const auto envelope = [&](double rt, juce::Colour colour)
+        {
+            juce::Path path;
+            path.startNewSubPath(xOf(0.0), yOf(-60.0));
+            path.lineTo(xOf(preDelay), yOf(-60.0));
+            path.lineTo(xOf(preDelay), yOf(0.0));
+            path.lineTo(xOf(std::min(span, preDelay + rt)), yOf(-60.0 * std::min(1.0, (span - preDelay) / rt)));
+            g.setColour(colour);
+            g.strokePath(path, juce::PathStrokeType(1.6f));
+        };
+        g.setColour(colour::outline.withAlpha(0.6f));
+        g.drawHorizontalLine(juce::roundToInt(yOf(-30.0)), plot.getX(), plot.getRight());
+        envelope(highDecay, colour::gold.withAlpha(0.8f));
+        envelope(decay, colour::accentBright);
+        g.setFont(mono(9.5f));
+        g.setColour(colour::textSecondary);
+        g.drawText(juce::String(decay, 2) + " s", area.reduced(6.0f, 3.0f), juce::Justification::topRight, false);
+        g.setColour(colour::gold);
+        g.setFont(label(8.5f));
+        g.drawText("HIGHS", area.reduced(6.0f, 3.0f), juce::Justification::bottomRight, false);
+    }
+
+private:
+    void timerCallback() override
+    {
+        const double signature = plate_.decay_->get() * 7.0 + plate_.preDelay_->get() + plate_.damping_->get() * 0.001;
+        if (std::abs(signature - signature_) > 1.0e-9)
+        {
+            signature_ = signature;
+            repaint();
+        }
+    }
+
+    devices::PlateReverb& plate_;
+    double signature_ = -1.0;
 };
 
 //==================================================================================================
@@ -632,6 +848,69 @@ std::vector<Page> meldPages(devices::Meld& meld)
                      {},
                      0});
     return pages;
+}
+
+std::vector<Page> deEsserPages(devices::DeEsser& deesser)
+{
+    return {{"De-Esser",
+             ids({"freq|Frequency", "threshold|Threshold", "range|Range", "mode|Mode", "detection|Detection", "release|Release", "listen|Listen"}),
+             [&deesser]
+             {
+                 return std::unique_ptr<juce::Component>(std::make_unique<ReductionDisplay>(ReductionDisplay::Source{
+                     "HIGHS", [&deesser] { return deesser.takeDetectorDb(); }, [&deesser] { return static_cast<double>(deesser.threshold_->get()); },
+                     "GR", [&deesser] { return deesser.takeReductionDb(); }, 24.0}));
+             },
+             110}};
+}
+
+std::vector<Page> glueCompressorPages(devices::GlueCompressor& glue)
+{
+    return {{"Glue Compressor",
+             ids({"threshold|Threshold", "ratio|Ratio", "attack|Attack", "release|Release", "makeup|Makeup", "range|Range", "schp|SC Hi-Pass",
+                  "mix|Dry/Wet", "softclip|Soft Clip"}),
+             [&glue]
+             {
+                 return std::unique_ptr<juce::Component>(
+                     std::make_unique<ReductionDisplay>(ReductionDisplay::Source{{}, {}, {}, "GR", [&glue] { return glue.takeReductionDb(); }, 20.0}));
+             },
+             60}};
+}
+
+std::vector<Page> expanderPages(devices::Expander& expander)
+{
+    return {{"Expander",
+             ids({"threshold|Threshold", "ratio|Ratio", "range|Range", "knee|Knee", "attack|Attack", "release|Release", "sidechain|Sidechain",
+                  "keylow|Key HP", "output|Output"}),
+             [&expander]
+             {
+                 return std::unique_ptr<juce::Component>(std::make_unique<TransferDisplay>(
+                     "IN > OUT", [&expander](double db) { return db - expander.attenuationFor(db); }, -80.0, 0.0,
+                     [&expander] { return expander.takeDetectorDb(); }));
+             },
+             120}};
+}
+
+std::vector<Page> softClipperPages(devices::SoftClipper& clipper)
+{
+    return {{"Soft Clipper",
+             ids({"drive|Drive", "ceiling|Ceiling", "shape|Shape", "softness|Softness", "oversampling|Oversample", "output|Output", "mix|Dry/Wet"}),
+             [&clipper]
+             {
+                 return std::unique_ptr<juce::Component>(std::make_unique<TransferDisplay>(
+                     "CURVE", [&clipper](double x) { return clipper.shape(x * juce::Decibels::decibelsToGain(static_cast<double>(clipper.drive_->get()))); },
+                     -1.5, 1.5, std::function<float()>{}, [&clipper] { return clipper.takeClipDb(); }));
+             },
+             120}};
+}
+
+std::vector<Page> plateReverbPages(devices::PlateReverb& plate)
+{
+    const auto display = [&plate] { return std::unique_ptr<juce::Component>(std::make_unique<DecayDisplay>(plate)); };
+    return {{"Plate",
+             ids({"predelay|Pre-delay", "decay|Decay", "size|Size", "damping|Damping", "lowcut|Low Cut", "width|Width", "mix|Dry/Wet"}),
+             display,
+             140},
+            {"Diffusion", ids({"bandwidth|Bandwidth", "diffusion|Diffusion", "modulation|Modulation"}), display, 140}};
 }
 
 std::unique_ptr<juce::Component> paged(juce::AudioProcessor& processor, std::vector<Page> pages, int& preferredWidth)
@@ -1140,6 +1419,16 @@ std::unique_ptr<juce::Component> createMoreDeviceEditor(juce::AudioProcessor& pr
     }
     if (auto* gate = dynamic_cast<devices::Gate*>(&processor))
         return paged(processor, gatePages(*gate), preferredWidth);
+    if (auto* deesser = dynamic_cast<devices::DeEsser*>(&processor))
+        return paged(processor, deEsserPages(*deesser), preferredWidth);
+    if (auto* glue = dynamic_cast<devices::GlueCompressor*>(&processor))
+        return paged(processor, glueCompressorPages(*glue), preferredWidth);
+    if (auto* expander = dynamic_cast<devices::Expander*>(&processor))
+        return paged(processor, expanderPages(*expander), preferredWidth);
+    if (auto* clipper = dynamic_cast<devices::SoftClipper*>(&processor))
+        return paged(processor, softClipperPages(*clipper), preferredWidth);
+    if (auto* plate = dynamic_cast<devices::PlateReverb*>(&processor))
+        return paged(processor, plateReverbPages(*plate), preferredWidth);
     if (auto* dynamics = dynamic_cast<devices::MultibandDynamics*>(&processor))
         return paged(processor, multibandPages(*dynamics), preferredWidth);
     if (auto* filter = dynamic_cast<devices::AutoFilter*>(&processor))

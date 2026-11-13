@@ -37,10 +37,14 @@ add_library(dojo_devices STATIC
     MultibandDynamics.h
     Operator.cpp
     Operator.h
+    PlateReverb.cpp
+    PlateReverb.h
     Roar.cpp
     Roar.h
     SampleSlot.cpp
     SampleSlot.h
+    StudioDynamics.cpp
+    StudioDynamics.h
     TimeEffects.cpp
     TimeEffects.h
     Utility.cpp

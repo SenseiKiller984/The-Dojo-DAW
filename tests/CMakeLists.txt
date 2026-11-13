@@ -48,6 +48,7 @@ add_executable(dojo_tests
     SessionTests.cpp
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
+    StudioDeviceTests.cpp
     SurroundTests.cpp
     SynthTests.cpp
     TempoTests.cpp

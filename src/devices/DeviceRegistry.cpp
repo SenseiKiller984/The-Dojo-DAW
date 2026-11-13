@@ -17,7 +17,9 @@
 #include "devices/LfoDevice.h"
 #include "devices/Meld.h"
 #include "devices/Operator.h"
+#include "devices/PlateReverb.h"
 #include "devices/Roar.h"
+#include "devices/StudioDynamics.h"
 #include "devices/TimeEffects.h"
 #include "devices/Utility.h"
 #include "devices/Click.h"
@@ -44,7 +46,12 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Limiter::kTypeId, "Limiter", "Dynamics", false},
         {Gate::kTypeId, "Gate", "Dynamics", false},
         {MultibandDynamics::kTypeId, "Multiband Dynamics", "Dynamics", false},
+        {GlueCompressor::kTypeId, "Glue Compressor", "Dynamics", false},
+        {Expander::kTypeId, "Expander", "Dynamics", false},
+        {DeEsser::kTypeId, "De-Esser", "Dynamics", false},
+        {SoftClipper::kTypeId, "Soft Clipper", "Dynamics", false},
         {Reverb::kTypeId, "Reverb", "Space", false},
+        {PlateReverb::kTypeId, "Plate Reverb", "Space", false},
         {Delay::kTypeId, "Delay", "Space", false},
         {PitchShifter::kTypeId, "Pitch Shift", "Pitch", false},
         {Shifter::kTypeId, "Shifter", "Pitch", false},
@@ -90,6 +97,16 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<MultibandDynamics>();
     if (type == Compressor::kTypeId)
         return std::make_unique<Compressor>();
+    if (type == GlueCompressor::kTypeId)
+        return std::make_unique<GlueCompressor>();
+    if (type == Expander::kTypeId)
+        return std::make_unique<Expander>();
+    if (type == DeEsser::kTypeId)
+        return std::make_unique<DeEsser>();
+    if (type == SoftClipper::kTypeId)
+        return std::make_unique<SoftClipper>();
+    if (type == PlateReverb::kTypeId)
+        return std::make_unique<PlateReverb>();
     if (type == Limiter::kTypeId)
         return std::make_unique<Limiter>();
     if (type == Reverb::kTypeId)

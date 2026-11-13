@@ -29,16 +29,17 @@
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
-  <DEVICE key="builtin:compressor" name="Glue Compressor">
-    <DOJO_DEVICE type="builtin:compressor" version="1">
+  <DEVICE key="builtin:gluecomp" name="Glue Compressor">
+    <DOJO_DEVICE type="builtin:gluecomp" version="1">
       <PARAM id="threshold" value="-18.0"/>
-      <PARAM id="ratio" value="4.0"/>
-      <PARAM id="attack" value="25.0"/>
-      <PARAM id="release" value="100.0"/>
-      <PARAM id="knee" value="6.0"/>
+      <PARAM id="ratio" value="1.0"/>
+      <PARAM id="attack" value="5.0"/>
+      <PARAM id="release" value="6.0"/>
       <PARAM id="makeup" value="4.0"/>
+      <PARAM id="range" value="60.0"/>
+      <PARAM id="schp" value="90.0"/>
       <PARAM id="mix" value="65.0"/>
-      <PARAM id="sidechain" value="0.0"/>
+      <PARAM id="softclip" value="0.0"/>
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
@@ -70,18 +71,15 @@
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
-  <DEVICE key="builtin:limiter" name="Soft Clipper">
-    <DOJO_DEVICE type="builtin:limiter" version="1">
-      <PARAM id="input" value="0.0"/>
+  <DEVICE key="builtin:softclip" name="Soft Clipper">
+    <DOJO_DEVICE type="builtin:softclip" version="1">
+      <PARAM id="drive" value="2.0"/>
       <PARAM id="ceiling" value="-1.0"/>
-      <PARAM id="release" value="30.0"/>
-      <PARAM id="lookahead" value="1.5"/>
-      <PARAM id="maximize" value="0.0"/>
-      <PARAM id="threshold" value="-3.0"/>
-      <PARAM id="autorelease" value="0.0"/>
-      <PARAM id="mode" value="1.0"/>
-      <PARAM id="channels" value="0.0"/>
-      <PARAM id="link" value="0.0"/>
+      <PARAM id="shape" value="0.0"/>
+      <PARAM id="softness" value="40.0"/>
+      <PARAM id="oversampling" value="1.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="100.0"/>
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>

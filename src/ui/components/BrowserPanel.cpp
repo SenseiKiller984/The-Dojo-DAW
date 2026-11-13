@@ -1,5 +1,6 @@
 #include "ui/components/BrowserPanel.h"
 
+#include "devices/DeviceRegistry.h"
 #include "ui/BrowserDrag.h"
 #include "ui/PresetActions.h"
 #include "ui/theme/DojoTheme.h"
@@ -449,7 +450,11 @@ private:
                 // (searchable by name, what it is for, its devices' roles and kinds)
                 juce::String text = preset.name + (chains ? " chain " : " preset ") + preset.category;
                 for (const auto& d : preset.devices)
+                {
                     text << ' ' << d.deviceName << ' ' << d.key.fromLastOccurrenceOf(":", false, false);
+                    if (const auto* info = devices::findBuiltinDevice(d.key)) // ("Plate Reverb", "Glue Compressor")
+                        text << ' ' << info->name;
+                }
                 if (!matchesAll(text, terms))
                     continue;
                 if (first)
