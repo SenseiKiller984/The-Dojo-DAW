@@ -1,4 +1,5 @@
 #include "core/rt/RealtimeGuard.h"
+#include "devices/BuiltinProcessor.h"
 #include "devices/DeviceRegistry.h"
 #include "devices/Instruments.h"
 #include "engine/AudioEngine.h"
@@ -95,6 +96,24 @@ struct Rig
 };
 
 std::size_t at(double seconds) { return static_cast<std::size_t>(seconds * kRate); }
+
+void setParameter(DeviceManager& devices, const juce::ValueTree& device, const juce::String& id, float value)
+{
+    auto node = devices.getNode(device);
+    REQUIRE(node != nullptr);
+    auto* parameter = dynamic_cast<devices::BuiltinProcessor&>(node->getProcessor()).getParameterById(id);
+    REQUIRE(parameter != nullptr);
+    parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+}
+
+/** The first sample from `from` on whose level reaches `threshold`. */
+std::size_t firstAbove(const std::vector<float>& x, std::size_t from, float threshold)
+{
+    for (std::size_t i = from; i < x.size(); ++i)
+        if (std::abs(x[i]) >= threshold)
+            return i;
+    return x.size();
+}
 double dbToGain(double db) { return std::pow(10.0, db / 20.0); }
 } // namespace
 
@@ -244,6 +263,121 @@ TEST_CASE("Delay compensation settles at the real latency when a track also send
     // a, b and b's return all arrive together.
     CHECK(test::indexOfPeak(rig.left) == 4800 + 240);
     CHECK_THAT(test::peak(rig.left), WithinAbs(0.75, 1e-4));
+}
+
+TEST_CASE("A track that also sends to a return with latency lines up with that return", "[engine][pdc]")
+{
+    // The dry track waits for its own send's trip through the return's limiter: the send leaves it
+    // before its compensation delay. (This could not be aligned before: the alignment kept growing.)
+    test::TempFolder temp;
+    const auto impulse = test::writeImpulse(temp.dir.getChildFile("imp.wav"), 4800, 9600, kRate, 0.25f);
+
+    Rig rig;
+    auto b = rig.audioTrackWith(impulse);
+    auto bus = rig.session.addTrack(TrackKind::bus, "Return");
+    rig.session.addDevice(bus, "builtin:limiter", "Limiter"); // 240 samples
+    rig.session.addSend(b, bus, 0.0);
+
+    rig.publish();
+    rig.play();
+    rig.render(0.3);
+
+    CHECK(rig.builder.getTotalLatency() == 240);
+    CHECK(test::indexOfPeak(rig.left) == 4800 + 240);
+    CHECK_THAT(test::peak(rig.left), WithinAbs(0.5, 1e-4)); // dry and return together
+}
+
+TEST_CASE("Pre-fader sends are delay-compensated like post-fader ones", "[engine][pdc]")
+{
+    // A (240 samples late) sends post-fader to a return, B (on time) pre-fader: B's send waits at the
+    // return for A's, so all four paths arrive together.
+    test::TempFolder temp;
+    const auto impulse = test::writeImpulse(temp.dir.getChildFile("imp.wav"), 4800, 9600, kRate, 0.25f);
+
+    Rig rig;
+    auto a = rig.audioTrackWith(impulse);
+    auto b = rig.audioTrackWith(impulse);
+    rig.session.addDevice(a, "builtin:limiter", "Limiter");
+    auto bus = rig.session.addTrack(TrackKind::bus, "Return");
+    rig.session.addDevice(bus, "builtin:utility", "Utility");
+    rig.session.addSend(a, bus, 0.0);
+    auto preSend = rig.session.addSend(b, bus, 0.0);
+    send::setPreFader(preSend, true, nullptr);
+
+    rig.publish();
+    rig.play();
+    rig.render(0.3);
+
+    CHECK(rig.builder.getTotalLatency() == 240);
+    CHECK(test::indexOfPeak(rig.left) == 4800 + 240);
+    CHECK_THAT(test::peak(rig.left), WithinAbs(1.0, 1e-4)); // a, b, a's send and b's send at once
+    CHECK(test::peak(rig.left, 0, 4800 + 200) < 1e-6);      // nothing early
+
+    // The compiled alignment: b's main output and its pre-fader send are each delayed 240 samples.
+    const auto graph = rig.builder.build(rig.session, rig.assets, &rig.devices);
+    const auto slotB = rig.builder.getSlot(track::getId(b));
+    const auto slotBus = rig.builder.getSlot(track::getId(bus));
+    for (const auto& t : graph->tracks)
+    {
+        if (t.slot == slotB)
+            CHECK(t.compensationDelay == 240);
+        if (t.slot == slotBus)
+        {
+            REQUIRE(t.sends.size() == 2);
+            for (const auto& s : t.sends)
+                CHECK(s.delay == (s.preFader ? 240 : 0));
+        }
+    }
+}
+
+TEST_CASE("Automation moves with the delayed sound it shapes", "[engine][pdc][automation]")
+{
+    // A volume step at 0.5 s on a tone. Behind a 10 ms limiter the sound at the fader is 480 samples
+    // late, so the step must come 480 samples later too (with the sound that was at 0.5 s).
+    test::TempFolder temp;
+    const auto tone = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(220.0, kRate, 96000, 0.5f), kRate);
+
+    const auto stepAt = [&](bool withLimiter)
+    {
+        Rig rig;
+        auto t = rig.audioTrackWith(tone);
+        if (withLimiter)
+        {
+            auto limiter = rig.session.addDevice(t, "builtin:limiter", "Limiter");
+            setParameter(rig.devices, limiter, "lookahead", 10.0f);
+        }
+        auto lane = rig.session.getAutomation(t, automation::volumeTarget(), true, 0.0);
+        rig.session.addAutomationPoint(lane, 0.5, 0.0);
+        rig.session.addAutomationPoint(lane, 0.501, engine::gainToAutomation(1.0));
+        rig.publish();
+        rig.play();
+        rig.render(0.8);
+        return static_cast<int>(firstAbove(rig.left, at(0.3), 0.25f));
+    };
+    const int plain = stepAt(false);
+    const int delayed = stepAt(true);
+    INFO("plain " << plain << ", behind the limiter " << delayed);
+    CHECK(delayed - plain > 480 - kBlock);
+    CHECK(delayed - plain < 480 + kBlock);
+
+    // Each device's automation is read by the delay of what comes before it; the fader's after all of them.
+    Rig rig;
+    auto t = rig.audioTrackWith(tone);
+    auto limiter = rig.session.addDevice(t, "builtin:limiter", "Limiter");
+    setParameter(rig.devices, limiter, "lookahead", 10.0f);
+    auto utility = rig.session.addDevice(t, "builtin:utility", "Utility");
+    rig.session.getAutomation(t, automation::parameterTarget(device::getId(limiter), 0), true, 0.5);
+    rig.session.getAutomation(t, automation::parameterTarget(device::getId(utility), 0), true, 0.5);
+    const auto graph = rig.builder.build(rig.session, rig.assets, &rig.devices);
+    REQUIRE(graph->tracks.size() == 1);
+    const auto& rt = graph->tracks.front();
+    REQUIRE(rt.parameterLanes.size() == 2);
+    for (const auto& lane : rt.parameterLanes)
+    {
+        const bool onUtility = lane.parameter == rig.devices.getNode(utility)->getProcessor().getParameters()[0];
+        CHECK(lane.latency == (onUtility ? 480 : 0));
+    }
+    CHECK(rt.faderLatency == 480);
 }
 
 TEST_CASE("Instrument tracks play MIDI clips through their instrument", "[engine][midi]")

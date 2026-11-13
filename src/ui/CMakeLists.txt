@@ -13,6 +13,7 @@ add_library(dojo_ui STATIC
     EditActions.h
     EditorState.cpp
     EditorState.h
+    HeardPosition.h
     Latency.h
     MainComponent.cpp
     MainComponent.h

@@ -10,6 +10,7 @@
 #include "ui/components/DevicePanel.h"
 #include "ui/components/MixerPanel.h"
 #include "ui/EditActions.h"
+#include "ui/HeardPosition.h"
 #include "ui/components/StatusBar.h"
 #include "ui/components/TransportBar.h"
 #include "ui/components/VideoWindow.h"
@@ -177,6 +178,8 @@ private:
     ClipEditor clipEditor_;
     ClipListPanel clipList_;
     StatusBar statusBar_;
+    HeardPosition heardPosition_;  ///< the playhead shows what is heard (see HeardPosition)
+    int outputLatencySamples_ = 0; ///< the audio device's output latency (refreshed with the status bar)
     /** Shows every control's tooltip (after the mouse rests on it for a moment). */
     juce::TooltipWindow tooltips_{this, 700};
 

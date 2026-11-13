@@ -2,12 +2,14 @@
 #include "devices/DeviceRegistry.h"
 #include "session/Project.h"
 #include "ui/EditorState.h"
+#include "ui/HeardPosition.h"
 #include "ui/Latency.h"
 #include "ui/components/DevicePanel.h"
 #include "DeviceTestSupport.h"
 #include "TestAudio.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 using namespace dojo;
 
@@ -98,4 +100,35 @@ TEST_CASE("The Devices panel shows each device's delay and the whole chain's", "
     editorState.selectMaster();
     REQUIRE(test::pumpMessagesUntil([&] { return panel.getChainLatencySamples() == 240; }, 2000));
     CHECK(panel.getChainLatencyTooltip().startsWith("The master's devices delay its sound by 5.00 ms"));
+}
+
+TEST_CASE("The playhead shows what is heard: the engine's position minus the delay to the speakers", "[ui][latency]")
+{
+    using Catch::Matchers::WithinAbs;
+    ui::HeardPosition heard;
+    constexpr double delay = 0.02; // e.g. 10 ms of delay compensation + 10 ms of output latency
+    const auto at = [&](double engine, bool playing = true, bool loop = false) { return heard.update(engine, playing, delay, loop, 1.0, 3.0); };
+
+    // Stopped: exactly the engine's position.
+    CHECK_THAT(at(2.0, false), WithinAbs(2.0, 1e-12));
+    // Playback starts at 2 s: nothing is heard for 20 ms, the playhead waits...
+    CHECK_THAT(at(2.005), WithinAbs(2.0, 1e-12));
+    CHECK_THAT(at(2.015), WithinAbs(2.0, 1e-12));
+    // ...then follows 20 ms behind the engine.
+    CHECK_THAT(at(2.5), WithinAbs(2.48, 1e-12));
+    // A locate while playing (seen first at 0.505 s): it waits there for the sound too.
+    CHECK_THAT(at(0.505), WithinAbs(0.505, 1e-12));
+    CHECK_THAT(at(0.52), WithinAbs(0.505, 1e-12));
+    CHECK_THAT(at(0.6), WithinAbs(0.58, 1e-12));
+    // Stopping shows the engine's position again.
+    CHECK_THAT(at(0.7, false), WithinAbs(0.7, 1e-12));
+
+    // In a loop (1 s .. 3 s): just after the wrap, the end of the loop is still sounding.
+    CHECK_THAT(at(2.0, true, true), WithinAbs(2.0, 1e-12));
+    CHECK_THAT(at(2.99, true, true), WithinAbs(2.97, 1e-12));
+    CHECK_THAT(at(1.005, true, true), WithinAbs(2.985, 1e-12));
+    CHECK_THAT(at(1.05, true, true), WithinAbs(1.03, 1e-12));
+
+    // No delay: always the engine's position.
+    CHECK_THAT(heard.update(1.234, true, 0.0, false, 0.0, 0.0), WithinAbs(1.234, 1e-12));
 }

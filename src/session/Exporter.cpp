@@ -110,10 +110,11 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
     const auto& session = project_.getSession();
     const auto layoutOf = [](TrackFormat format) { return isMultichannel(format) ? getLayout(format) : engine::ChannelLayout::stereo(); };
 
-    const auto add = [&](int slot, const juce::File& file, const engine::ChannelLayout& layout) -> bool
+    const auto add = [&](int slot, const juce::File& file, const engine::ChannelLayout& layout, int latency) -> bool
     {
         Target target;
         target.slot = slot;
+        target.latency = std::max(0, latency);
         target.file = file;
         target.layout = layout;
         target.channels = stereoOnly ? 2 : layout.numChannels;
@@ -125,7 +126,7 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         if (forStreams)
         {
             target.stream = std::make_shared<engine::CaptureStream>(std::move(writer), target.channels, sampleRate, 10.0);
-            target.stream->skipFirstFrames(static_cast<std::uint64_t>(slot < 0 ? latency_ : stemLatency_));
+            target.stream->skipFirstFrames(static_cast<std::uint64_t>(target.latency));
         }
         else
         {
@@ -135,7 +136,7 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         return true;
     };
 
-    if (settings_.includeMix && !add(-1, settings_.destination, layoutOf(session.getMasterFormat())))
+    if (settings_.includeMix && !add(-1, settings_.destination, layoutOf(session.getMasterFormat()), latency_))
         return error;
 
     if (settings_.includeStems)
@@ -145,13 +146,19 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
             const int slot = project_.getCompiler().getSlot(track::getId(t));
             const auto destination = session.getDestination(t);
             const auto layout = layoutOf(destination.isValid() ? track::getFormat(destination) : session.getMasterFormat());
-            if (slot >= 0 && !add(slot, getStemFile(settings_, track::getName(t)), layout))
+            // A stem is its track's output where it meets its destination (a folder or bus may be
+            // aligned earlier than the master's input): skip exactly that track's delay.
+            const int own = project_.getCompiler().getOutputLatency(track::getId(t));
+            if (slot >= 0 && !add(slot, getStemFile(settings_, track::getName(t)), layout, own >= 0 ? own : stemLatency_))
                 return error;
         }
     }
 
     if (targets_.empty())
         return "Nothing to export: choose the mix and/or stems.";
+    longestLatency_ = 0;
+    for (const auto& target : targets_)
+        longestLatency_ = std::max(longestLatency_, target.latency);
     return {};
 }
 
@@ -275,7 +282,7 @@ void Exporter::run()
 
     const double timelineLength = settings_.endSeconds - settings_.startSeconds + settings_.tailSeconds;
     const auto outputFrames = static_cast<juce::int64>(std::ceil(timelineLength / speed_ * sampleRate_));
-    const auto totalFrames = outputFrames + latency_;
+    const auto totalFrames = outputFrames + longestLatency_;
     const int block = std::min(kOfflineBlock, engine.getMaximumBlockSize());
 
     // The mix: as many outputs as the file has channels (the engine folds a surround master down
@@ -294,9 +301,9 @@ void Exporter::run()
 
         for (auto& target : targets_)
         {
-            // Skip the latency pre-roll so the file lines up with the timeline. Track outputs are
-            // aligned at the master's input, so stems skip only that much.
-            const int latency = target.slot < 0 ? latency_ : stemLatency_;
+            // Skip the latency pre-roll so the file lines up with the timeline: the whole graph's for
+            // the mix, the track's own output delay for a stem.
+            const int latency = target.latency;
             const juce::int64 alreadyWritten = rendered - latency;
             const int skip = static_cast<int>(std::clamp<juce::int64>(latency - rendered, 0, n));
             const int count = static_cast<int>(std::min<juce::int64>(n - skip, outputFrames - std::max<juce::int64>(0, alreadyWritten)));
@@ -392,7 +399,7 @@ void Exporter::timerCallback()
     if (!realtimeStopping_)
     {
         const double position = engine.collectTelemetry().playheadSeconds;
-        const double end = settings_.endSeconds + settings_.tailSeconds + latency_ / sampleRate_ * speed_;
+        const double end = settings_.endSeconds + settings_.tailSeconds + longestLatency_ / sampleRate_ * speed_;
         progress_ = juce::jlimit(0.0, 1.0, (position - settings_.startSeconds) / (end - settings_.startSeconds));
         if (position >= end)
             finishRealtime();

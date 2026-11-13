@@ -199,6 +199,8 @@ private:
         juce::SmoothedValue<Sample, juce::ValueSmoothingTypes::Linear> postGain; ///< a Master Fader on this bus
         juce::AudioBuffer<Sample> main; ///< working buffer; holds the post-fader output after processing
         juce::AudioBuffer<Sample> pre;  ///< pre-fader copy (when a pre-fader send needs it)
+        juce::AudioBuffer<Sample> post; ///< post-fader copy before the compensation delay (post-fader sends)
+        juce::AudioBuffer<Sample> inputScratch; ///< a bus: one incoming send or aux output, delayed
         juce::MidiBuffer midi;
         juce::AudioBuffer<Sample> delay; ///< latency-compensation ring
         int delayWrite = 0;
@@ -264,6 +266,12 @@ private:
     void applyMasterFader(int numSamples) noexcept;
     void applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept;
     void applyParameterAutomation(const std::vector<ParameterLane>& lanes) noexcept;
+    /** The timeline time of the sound that is `latencySamples` late at some point of the graph (the
+        block's start time minus that delay, wrapped into the loop): where its automation is read. */
+    [[nodiscard]] double automationTime(int latencySamples) const noexcept;
+    /** Runs `numChannels` inputs through an alignment delay line into `output`. */
+    static void delayInto(InputDelayLine& line, const Sample* const* inputs, int numChannels, juce::AudioBuffer<Sample>& output,
+                          int numSamples) noexcept;
     /** The graph's modulators (LFO devices): asks each for its value and moves its targets. */
     void applyModulators(int numSamples) noexcept;
     /** Forgets every modulated volume, pan and send (a new graph brings its own). */

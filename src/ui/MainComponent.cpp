@@ -254,8 +254,17 @@ void MainComponent::onDisplayRefresh(double timestampSeconds)
     lastFrameTimestamp_ = timestampSeconds;
     ++frameCount_;
 
-    const auto& telemetry = controller_.pollTelemetry();
+    const auto& engineTelemetry = controller_.pollTelemetry();
     const double sampleRate = controller_.getSampleRateOr(48000.0);
+
+    // The playhead and the time show what is heard: the engine's position minus the delay to the
+    // speakers (delay compensation and the audio device's output latency), at the current speed.
+    const auto& session = project_.getSession();
+    const double delaySeconds = (project_.getCompiler().getTotalLatency() + outputLatencySamples_) / sampleRate * session.getSpeed();
+    auto telemetry = engineTelemetry;
+    telemetry.playheadSeconds = heardPosition_.update(engineTelemetry.playheadSeconds, engineTelemetry.playing, delaySeconds,
+                                                      session.isLoopEnabled(), session.getLoopStart(), session.getLoopEnd());
+    telemetry.playheadSamples = static_cast<SampleCount>(std::llround(telemetry.playheadSeconds * sampleRate));
 
     transport_.update(telemetry, sampleRate);
     arranger_.setPlayhead(telemetry.playheadSeconds, telemetry.playing);
@@ -277,6 +286,7 @@ void MainComponent::refreshStatusBar()
 {
     StatusBar::Info info;
     info.device = controller_.getDeviceStatus();
+    outputLatencySamples_ = std::max(0, info.device.outputLatencySamples);
     info.dspLoadPeak = loadPeakSinceStatusRefresh_;
     info.realtimeViolations = rt::getRealtimeViolationCount();
     info.realtimeTrapInstalled = rt::isAllocationTrapInstalled();

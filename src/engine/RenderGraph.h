@@ -125,6 +125,29 @@ struct ParameterLane
 {
     juce::AudioProcessorParameter* parameter = nullptr;
     AutomationCurve curve;
+    /** How late (in samples) the signal reaching its device is, relative to the timeline (the delay
+        of everything before it): the automation is read that much earlier, so it moves with the
+        sound it shapes. */
+    int latency = 0;
+};
+
+/**
+    One input's alignment delay into a bus: a send, or an instrument's aux outputs. A ring per channel
+    of exactly `length` samples. Made on the message thread; the compiler hands the same line to the
+    next graph while the delay is unchanged, so rebuilding the graph does not interrupt the delayed
+    signal. Only the receiving bus's render touches it.
+*/
+struct InputDelayLine
+{
+    InputDelayLine(int numChannels, int lengthSamples)
+        : length(lengthSamples < 1 ? 1 : lengthSamples)
+        , rings(static_cast<std::size_t>(numChannels < 1 ? 1 : numChannels), std::vector<Sample>(static_cast<std::size_t>(length), 0.0))
+    {
+    }
+
+    int length = 1;
+    int position = 0;
+    std::vector<std::vector<Sample>> rings;
 };
 
 /** One device in a chain: its node plus where its sidechain comes from. */
@@ -146,6 +169,11 @@ struct RenderSend
     double gain = 1.0;
     bool preFader = false;
     AutomationCurve gainAutomation; ///< normalised like volume automation; overrides `gain` when set
+    /** Delay compensation: a send is taken from its source before the source's own compensation
+        delay (pre-fader: before the fader too) and delayed here to the bus's input time, so it lines
+        up with everything else the bus receives. */
+    int delay = 0;
+    InputDelayLine* delayLine = nullptr; ///< (when `delay` > 0)
     /** From the source's (pre- or post-fader) channels to the bus's, when they differ. */
     bool convert = false;
     ChannelMatrix matrix;
@@ -188,6 +216,8 @@ struct RenderTrack
     int auxSourceIndex = -1;               ///< bus fed from an instrument's aux outputs (multi-out)
     int auxChannel = 0;                    ///< first aux channel (a stereo pair)
     ChannelMatrix auxMatrix;               ///< the stereo pair into a multichannel bus
+    int auxDelay = 0;                      ///< ...delayed to this bus's input time (see RenderSend::delay)
+    InputDelayLine* auxDelayLine = nullptr;
 
     // Inputs
     int inputChannel = -1; ///< first device input channel, -1 = none
@@ -200,10 +230,18 @@ struct RenderTrack
     // Processing
     std::vector<RenderDevice> devices; ///< instrument first on instrument tracks
     bool needsPreFaderCopy = false;    ///< some bus pulls a pre-fader send from this track
+    /** Some bus pulls a post-fader send from this track, and the track has a compensation delay: the
+        send is taken before that delay (the bus delays it to its own input time). */
+    bool needsPostFaderCopy = false;
 
     // Routing
     int outputIndex = -1;           ///< graph index of the bus this track feeds; -1 = master; -2 = none
     int compensationDelay = 0;      ///< plug-in delay compensation applied to the post-fader output
+    /** How late (samples, relative to the timeline) the signal is where it enters this track (a bus:
+        its latest input), and at its fader (after its devices). Automation of the fader, pan, VCAs,
+        a Master Fader and incoming sends is read that much earlier, so it moves with the sound. */
+    int inputLatency = 0;
+    int faderLatency = 0;
 
     /** Instrument tracks: the MIDI tracks (graph indices) whose MIDI their instrument also plays. */
     std::vector<int> midiSources;
@@ -306,6 +344,8 @@ struct RenderGraph
     std::vector<int> masterSources;       ///< graph indices feeding the master bus
 
     int totalLatency = 0; ///< latency of the whole graph at the master output (for offline renders)
+    int masterInputLatency = 0;  ///< where every path meets at the master's input
+    int masterVolumeLatency = 0; ///< after the master's devices (its fader and a main Master Fader)
 
     std::vector<std::shared_ptr<const void>> keepAlive; ///< owners of sample data, nodes, stretchers
 };

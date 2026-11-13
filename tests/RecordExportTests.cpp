@@ -292,6 +292,49 @@ std::vector<juce::ValueTree> clipsOf(const juce::ValueTree& t)
 }
 } // namespace
 
+TEST_CASE("Stems line up with the timeline also inside a folder that has latency", "[export][pdc]")
+{
+    // A folder with a limiter (240 samples) holding a track, next to a plain track: the track inside
+    // meets its folder's input 240 samples before the master's. Each stem skips its own delay.
+    test::TempFolder temp;
+    App app;
+    auto& session = app.project.getSession();
+    const auto impulse = test::writeImpulse(temp.dir.getChildFile("imp.wav"), 4800, 48000, kRate, 0.5f);
+    juce::String error;
+    REQUIRE(app.project.getAssets().loadNow(impulse, error) != nullptr);
+
+    auto inside = session.addTrack("Inside");
+    session.addClip(inside, impulse, 0.5, 1.0);
+    auto folder = session.groupIntoFolder({inside}, "Folder");
+    session.addDevice(folder, "builtin:limiter", "Limiter");
+    auto outside = session.addTrack("Outside");
+    session.addClip(outside, impulse, 0.5, 1.0);
+
+    Exporter exporter(app.project, app.controller);
+    std::optional<juce::Result> result;
+    exporter.onFinished = [&](const juce::Result& r, const juce::Array<juce::File>&) { result = r; };
+    ExportSettings settings;
+    settings.startSeconds = 0.0;
+    settings.endSeconds = 2.0;
+    settings.tailSeconds = 0.5;
+    settings.includeStems = true;
+    settings.bitDepth = 32;
+    settings.destination = temp.dir.getChildFile("mix.wav");
+    REQUIRE(exporter.start(settings).isEmpty());
+    REQUIRE(test::pumpMessagesUntil([&] { return result.has_value(); }, 30'000));
+    REQUIRE(result->wasOk());
+
+    for (const auto* name : {"Inside", "Folder", "Outside"})
+    {
+        INFO(name);
+        const auto stem = decode(Exporter::getStemFile(settings, name));
+        CHECK(indexOfPeak(stem.audio, 0) == 28800);
+    }
+    const auto mix = decode(settings.destination);
+    CHECK(indexOfPeak(mix.audio, 0) == 28800);
+    CHECK_THAT(mix.audio.getSample(0, 28800), WithinAbs(1.0, 1e-3));
+}
+
 TEST_CASE("Clearing a range trims, splits and removes clips", "[session][record]")
 {
     Session session;

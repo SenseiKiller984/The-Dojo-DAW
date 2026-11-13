@@ -53,6 +53,13 @@ public:
     [[nodiscard]] int getTotalLatency() const noexcept { return totalLatency_; }
     /** Latency at the master bus input (where all track outputs are aligned), as of the last build. */
     [[nodiscard]] int getMasterInputLatency() const noexcept { return masterInputLatency_; }
+    /** How late a track's output (after its compensation delay) is relative to the timeline, as of
+        the last build: where it meets the rest of what its destination receives. -1 if unknown. */
+    [[nodiscard]] int getOutputLatency(std::uint32_t trackId) const
+    {
+        const auto it = outputLatencies_.find(trackId);
+        return it != outputLatencies_.end() ? it->second : -1;
+    }
 
     /** Balance pan law used for every track. Returns {left, right}. */
     static std::pair<double, double> panGains(double pan) noexcept { return engine::balancePanGains(pan); }
@@ -68,6 +75,11 @@ private:
     int maxBlock_ = 2048;
     int totalLatency_ = 0;
     int masterInputLatency_ = 0;
+    std::map<std::uint32_t, int> outputLatencies_;
+    /** Alignment delay lines of sends (by SEND id) and of aux inputs (by bus track id), kept for the
+        next build so their signal carries on through rebuilds. */
+    std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>> sendDelays_;
+    std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>> auxDelays_;
 };
 
 /**
@@ -96,6 +108,7 @@ public:
     [[nodiscard]] int getSlot(std::uint32_t trackId) const { return builder_.getSlot(trackId); }
     [[nodiscard]] int getTotalLatency() const noexcept { return builder_.getTotalLatency(); }
     [[nodiscard]] int getMasterInputLatency() const noexcept { return builder_.getMasterInputLatency(); }
+    [[nodiscard]] int getOutputLatency(std::uint32_t trackId) const { return builder_.getOutputLatency(trackId); }
 
     /** Builds a graph without publishing it (for offline renders on a separate engine). */
     std::unique_ptr<engine::RenderGraph> buildGraph() { return builder_.build(session_, assets_, devices_); }

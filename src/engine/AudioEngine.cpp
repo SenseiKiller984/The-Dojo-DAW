@@ -101,6 +101,8 @@ void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutput
         const int channels = wide ? kMaxChannels : 2;
         slot.main.setSize(channels, maxBlockSize_, false, true, false);
         slot.pre.setSize(channels, maxBlockSize_, false, true, false);
+        slot.post.setSize(channels, maxBlockSize_, false, true, false);
+        slot.inputScratch.setSize(channels, maxBlockSize_, false, true, false);
         slot.midi.ensureSize(kMidiBufferBytes);
         if (slot.delay.getNumSamples() != kMaxCompensationSamples || slot.delay.getNumChannels() != channels)
             slot.delay.setSize(channels, kMaxCompensationSamples, false, true, false);
@@ -473,7 +475,7 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
     if (graph_ != nullptr && !std::isnan(modulatedMaster_))
         masterGain_.setTargetValue(modulatedMaster_);
     else if (graph_ != nullptr && !graph_->masterVolumeAutomation.isEmpty())
-        masterGain_.setTargetValue(automationToGain(graph_->masterVolumeAutomation.valueAt(blockStartSeconds_)));
+        masterGain_.setTargetValue(automationToGain(graph_->masterVolumeAutomation.valueAt(automationTime(graph_->masterVolumeLatency))));
     const bool masterMoved = graph_ != nullptr && (!std::isnan(modulatedMaster_) || !graph_->masterVolumeAutomation.isEmpty());
     telemetry_.masterVolume.store(masterMoved ? static_cast<float>(masterGain_.getTargetValue()) : std::numeric_limits<float>::quiet_NaN(),
                                   std::memory_order_relaxed);
@@ -766,6 +768,12 @@ void AudioEngine::processTrack(int graphIndex) noexcept
     applyFader(track, slot);
     if (track.hasPostFader)
         applyPostFader(track, slot);
+    if (track.needsPostFaderCopy)
+    {
+        // Post-fader sends leave before the compensation delay (their busses align them).
+        for (int ch = 0; ch < std::min(track.outputLayout.numChannels, slot.post.getNumChannels()); ++ch)
+            slot.post.copyFrom(ch, 0, slot.main, ch, 0, numSamples);
+    }
     applyCompensationDelay(track, slot);
 
     if (capture_ != nullptr && (playing_ || !capture_->onlyWhilePlaying))
@@ -991,9 +999,18 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
     for (std::size_t sendIndex = 0; sendIndex < track.sends.size(); ++sendIndex)
     {
         const auto& send = track.sends[sendIndex];
-        const auto& sourceSlot = slots_[static_cast<std::size_t>(graph_->tracks[static_cast<std::size_t>(send.sourceIndex)].slot)];
-        const auto& buffer = send.preFader ? sourceSlot.pre : sourceSlot.main;
-        double gain = send.gainAutomation.isEmpty() ? send.gain : automationToGain(send.gainAutomation.valueAt(blockStartSeconds_));
+        const auto& sourceTrack = graph_->tracks[static_cast<std::size_t>(send.sourceIndex)];
+        const auto& sourceSlot = slots_[static_cast<std::size_t>(sourceTrack.slot)];
+        const auto* tap = send.preFader ? &sourceSlot.pre : (sourceTrack.needsPostFaderCopy ? &sourceSlot.post : &sourceSlot.main);
+        if (send.delay > 0 && send.delayLine != nullptr)
+        {
+            // Delay compensation: the send waits until the bus's other inputs arrive.
+            delayInto(*send.delayLine, tap->getArrayOfReadPointers(), std::min(tap->getNumChannels(), slot.inputScratch.getNumChannels()),
+                      slot.inputScratch, numSamples);
+            tap = &slot.inputScratch;
+        }
+        const auto& buffer = *tap;
+        double gain = send.gainAutomation.isEmpty() ? send.gain : automationToGain(send.gainAutomation.valueAt(automationTime(track.inputLatency)));
         if (sendIndex < static_cast<std::size_t>(kMaxModulatedSends))
             if (const double modulated = modulatedSends_[static_cast<std::size_t>(track.slot)][sendIndex]; !std::isnan(modulated))
                 gain = modulated;
@@ -1016,9 +1033,16 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
         if (!source.devices.empty())
         {
             const auto* node = source.devices.front().node;
+            std::array<const Sample*, 2> outputs{node->getAuxOutput(track.auxChannel), node->getAuxOutput(track.auxChannel + 1)};
+            if (track.auxDelay > 0 && track.auxDelayLine != nullptr && outputs[0] != nullptr && outputs[1] != nullptr)
+            {
+                // Delay compensation: the aux outputs wait for the bus's other inputs.
+                delayInto(*track.auxDelayLine, outputs.data(), 2, slot.inputScratch, numSamples);
+                outputs = {slot.inputScratch.getReadPointer(0), slot.inputScratch.getReadPointer(1)};
+            }
             for (int ch = 0; ch < 2; ++ch)
             {
-                const Sample* aux = node->getAuxOutput(track.auxChannel + ch);
+                const Sample* aux = outputs[static_cast<std::size_t>(ch)];
                 if (aux == nullptr)
                     continue;
                 if (!track.layout.isMultichannel())
@@ -1041,7 +1065,7 @@ void AudioEngine::applyParameterAutomation(const std::vector<ParameterLane>& lan
         if (lane.parameter == nullptr || lane.curve.isEmpty())
             continue;
 
-        const auto value = static_cast<float>(lane.curve.valueAt(blockStartSeconds_));
+        const auto value = static_cast<float>(lane.curve.valueAt(automationTime(lane.latency)));
         if (std::abs(lane.parameter->getValue() - value) > 1.0e-6f)
             lane.parameter->setValue(value);
     }
@@ -1106,10 +1130,11 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
 
     double volume = track.volume;
     double pan = track.pan;
+    const double faderTime = automationTime(track.faderLatency); // (the sound at the fader is that late)
     if (!track.volumeAutomation.isEmpty())
-        volume = automationToGain(track.volumeAutomation.valueAt(blockStartSeconds_));
+        volume = automationToGain(track.volumeAutomation.valueAt(faderTime));
     if (!track.panAutomation.isEmpty())
-        pan = track.panAutomation.valueAt(blockStartSeconds_) * 2.0 - 1.0;
+        pan = track.panAutomation.valueAt(faderTime) * 2.0 - 1.0;
     // A modulator (LFO) mapped to the fader or pan wins over automation.
     const auto slotIndex = static_cast<std::size_t>(track.slot);
     if (!std::isnan(modulatedVolume_[slotIndex]))
@@ -1123,7 +1148,7 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
     telemetry_.trackVolumes[slotIndex].store(volumeMoves ? static_cast<float>(volume) : none, std::memory_order_relaxed);
     telemetry_.trackPans[slotIndex].store(panMoves ? static_cast<float>(pan) : none, std::memory_order_relaxed);
     for (const auto& vca : track.vcaGains)
-        volume *= vca.automation.isEmpty() ? vca.gain : automationToGain(vca.automation.valueAt(blockStartSeconds_));
+        volume *= vca.automation.isEmpty() ? vca.gain : automationToGain(vca.automation.valueAt(faderTime));
 
     if (track.isWide())
     {
@@ -1325,7 +1350,7 @@ void AudioEngine::applyPostFader(const RenderTrack& track, SlotState& slot) noex
 {
     const int numSamples = currentNumSamples_;
     const double volume = track.postVolumeAutomation.isEmpty() ? track.postVolume
-                                                               : automationToGain(track.postVolumeAutomation.valueAt(blockStartSeconds_));
+                                                               : automationToGain(track.postVolumeAutomation.valueAt(automationTime(track.faderLatency)));
     slot.postGain.setTargetValue(track.postAudible ? volume : 0.0);
     const int numChannels = std::min(track.outputLayout.numChannels, slot.main.getNumChannels());
     auto* const* channels = slot.main.getArrayOfWritePointers();
@@ -1343,7 +1368,7 @@ void AudioEngine::applyPostFader(const RenderTrack& track, SlotState& slot) noex
 void AudioEngine::applyMasterFader(int numSamples) noexcept
 {
     const double volume = graph_->masterFaderAutomation.isEmpty() ? graph_->masterFaderVolume
-                                                                  : automationToGain(graph_->masterFaderAutomation.valueAt(blockStartSeconds_));
+                                                                  : automationToGain(graph_->masterFaderAutomation.valueAt(automationTime(graph_->masterVolumeLatency)));
     masterFaderGain_.setTargetValue(graph_->masterFaderAudible ? volume : 0.0);
     const int numMaster = masterChannels();
     auto* const* channels = masterBus_.getArrayOfWritePointers();
@@ -1357,6 +1382,45 @@ void AudioEngine::applyMasterFader(int numSamples) noexcept
     applyParameterAutomation(graph_->masterFaderParameterLanes);
     masterMidi_.clear();
     runChain(graph_->masterFaderDevices, masterBus_, numMaster, graph_->masterGroups, masterMidi_, &masterScratch_);
+}
+
+double AudioEngine::automationTime(int latencySamples) const noexcept
+{
+    if (latencySamples <= 0)
+        return blockStartSeconds_;
+    double seconds = blockStartSeconds_ - latencySamples * secondsPerSample_;
+    // In a loop, what is heard just after the loop start was played just before its end.
+    if (playing_ && loopEnabled_ && !ignoreLoop_ && loopEnd_ > loopStart_ && blockStartSeconds_ >= loopStart_ && seconds < loopStart_)
+        seconds += loopEnd_ - loopStart_;
+    return seconds;
+}
+
+void AudioEngine::delayInto(InputDelayLine& line, const Sample* const* inputs, int numChannels, juce::AudioBuffer<Sample>& output,
+                            int numSamples) noexcept
+{
+    const int length = line.length;
+    const int start = line.position;
+    const int channels = std::min(numChannels, output.getNumChannels());
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        Sample* out = output.getWritePointer(ch);
+        if (static_cast<std::size_t>(ch) >= line.rings.size() || inputs[ch] == nullptr)
+        {
+            juce::FloatVectorOperations::clear(out, numSamples);
+            continue;
+        }
+        Sample* ring = line.rings[static_cast<std::size_t>(ch)].data();
+        const Sample* in = inputs[ch];
+        int position = start;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            out[i] = ring[position];
+            ring[position] = in[i];
+            if (++position == length)
+                position = 0;
+        }
+    }
+    line.position = (start + numSamples) % length;
 }
 
 void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept

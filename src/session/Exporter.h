@@ -80,6 +80,10 @@ private:
         int channels = 2;                ///< channels written (a surround mix or stem has one per speaker)
         engine::ChannelLayout layout;    ///< the signal's channels (a stem: its track's destination's)
         bool foldDown = false;           ///< a surround stem into a stereo-only format (MP3)
+        /** How late its signal is (delay compensation): this much of the start is skipped, so the
+            file lines up with the timeline. The mix: the whole graph's latency; a stem: its own
+            track's output (after its compensation delay). */
+        int latency = 0;
         std::unique_ptr<juce::AudioFormatWriter> writer;          // offline
         std::shared_ptr<engine::CaptureStream> stream;             // real-time
     };
@@ -103,8 +107,9 @@ private:
     bool realtimeStopping_ = false;
     std::uint32_t stopCountBefore_ = 0;
     std::uint64_t graphSerial_ = 0;
-    int latency_ = 0;      ///< at the master output
-    int stemLatency_ = 0;  ///< at the master input (where track outputs are aligned)
+    int latency_ = 0;       ///< at the master output
+    int stemLatency_ = 0;   ///< at the master input (stems whose own latency is unknown)
+    int longestLatency_ = 0; ///< of all targets: how much longer than the range is rendered
     double sampleRate_ = 48000.0;
     double speed_ = 1.0;
     double previousPosition_ = 0.0;

@@ -920,88 +920,145 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     }
 
     // --- Plug-in delay compensation ---------------------------------------------------------------
-    // arrival[i]: latency of track i's output relative to the timeline (before its compensation).
-    // out[i]: when its (post-fader) output leaves it, after its compensation delay; this is what its
-    // destination and post-fader sends receive. Each destination waits for its latest input, and each
-    // source is delayed until its latest destination: out[] only ever grows (towards the earliest
-    // time at which everything meeting anywhere lines up), and compensation = out - arrival. A bus
-    // whose input got later (its sources were delayed) therefore needs less compensation, never more
-    // than its destinations ask for. Iterated to a fixed point; a routing that cannot be aligned at
-    // all stops at the iteration limit.
+    // Solved in one pass, in signal order (graph->levels: every source before what it feeds). Times
+    // are how late (in samples) a track's signal is relative to the timeline:
+    //   input[i]   where it enters the track (a bus: its latest input),
+    //   fader[i]   after its devices (where its fader, pre-fader sends and their automation are),
+    //   arrival[i] after its post-fader devices too (its output, before compensation).
+    // Every input that reaches a bus (or the master) earlier than its latest input waits for it: a
+    // track's main output by the track's own compensation delay, a send or an instrument's aux
+    // output by a delay line of its own (sends leave their source before its compensation delay).
+    // So a track that plays to the master and sends to a return with latency lines up with that
+    // return, and pre-fader sends are aligned like post-fader ones.
+    std::vector<int> input(count, 0);
+    std::vector<int> faderTime(count, 0);
     std::vector<int> arrival(count, 0);
-    std::vector<int> out(count, 0);
-    std::vector<int> compensation(count, 0);
-
-    for (int iteration = 0; iteration < 16; ++iteration)
+    const auto instrumentLatency = [&](int source)
     {
-        for (const auto& lvl : graph->levels)
+        const auto& chain = graph->tracks[static_cast<std::size_t>(source)].devices;
+        return chain.empty() || chain.front().node == nullptr || chain.front().node->isBypassed()
+                   ? 0
+                   : std::max(0, chain.front().node->getLatencySamples());
+    };
+    const auto sendTap = [&](int source, const juce::ValueTree& s)
+    { return send::isPreFader(s) ? faderTime[static_cast<std::size_t>(source)] : arrival[static_cast<std::size_t>(source)]; };
+    const auto auxTap = [&](int source) { return input[static_cast<std::size_t>(source)] + instrumentLatency(source); };
+
+    for (const auto& lvl : graph->levels)
+    {
+        for (const int idx : lvl)
         {
-            for (const int idx : lvl)
-            {
-                const auto i = static_cast<std::size_t>(idx);
-                int input = 0;
-                for (const int source : busSources[i])
-                    input = std::max(input, out[static_cast<std::size_t>(source)]);
-                for (const auto& [source, s] : incomingSends[i])
-                    input = std::max(input, send::isPreFader(s) ? arrival[static_cast<std::size_t>(source)] : out[static_cast<std::size_t>(source)]);
-                if (auxSource[i] >= 0)
-                {
-                    // Aux outputs come straight from the instrument (the first device of its track).
-                    const auto& instrumentChain = graph->tracks[static_cast<std::size_t>(auxSource[i])].devices;
-                    if (!instrumentChain.empty())
-                        input = std::max(input, std::max(0, instrumentChain.front().node->getLatencySamples()));
-                }
-                arrival[i] = input + chainLatency(graph->tracks[i].devices) + chainLatency(graph->tracks[i].postDevices);
-                out[i] = std::max(out[i], arrival[i]);
-            }
+            const auto i = static_cast<std::size_t>(idx);
+            int latest = 0;
+            for (const int source : busSources[i])
+                latest = std::max(latest, arrival[static_cast<std::size_t>(source)]);
+            for (const auto& [source, s] : incomingSends[i])
+                latest = std::max(latest, sendTap(source, s));
+            if (auxSource[i] >= 0)
+                latest = std::max(latest, auxTap(auxSource[i]));
+            input[i] = latest;
+            faderTime[i] = latest + chainLatency(graph->tracks[i].devices);
+            arrival[i] = faderTime[i] + chainLatency(graph->tracks[i].postDevices);
         }
-
-        // Each destination waits for its latest input...
-        std::vector<int> target(count, 0);
-        int masterTarget = 0;
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            if (destination[i] >= 0)
-                target[static_cast<std::size_t>(destination[i])] = std::max(target[static_cast<std::size_t>(destination[i])], out[i]);
-            else if (destination[i] == -1) // (-2: silenced, it reaches nothing)
-                masterTarget = std::max(masterTarget, out[i]);
-        }
-        for (std::size_t b = 0; b < count; ++b)
-            for (const auto& [source, s] : incomingSends[b])
-                if (!send::isPreFader(s))
-                    target[b] = std::max(target[b], out[static_cast<std::size_t>(source)]);
-
-        graph->totalLatency = masterTarget + chainLatency(graph->masterDevices) + chainLatency(graph->masterFaderDevices);
-        masterInputLatency_ = masterTarget;
-
-        // ...and each source is delayed to match its latest destination.
-        bool changed = false;
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            int wanted = destination[i] >= 0    ? target[static_cast<std::size_t>(destination[i])]
-                         : destination[i] == -1 ? masterTarget
-                                                : arrival[i];
-            for (std::size_t b = 0; b < count; ++b)
-                for (const auto& [source, s] : incomingSends[b])
-                    if (source == static_cast<int>(i) && !send::isPreFader(s))
-                        wanted = std::max(wanted, target[b]);
-
-            wanted = std::min(wanted, arrival[i] + engine::kMaxCompensationSamples - 1);
-            if (wanted > out[i])
-            {
-                out[i] = wanted;
-                changed = true;
-            }
-        }
-        if (!changed)
-            break;
     }
 
+    int masterInput = 0;
     for (std::size_t i = 0; i < count; ++i)
-        compensation[i] = std::clamp(out[i] - arrival[i], 0, engine::kMaxCompensationSamples - 1);
+        if (destination[i] == -1) // (-2: silenced, it reaches nothing)
+            masterInput = std::max(masterInput, arrival[i]);
 
+    const auto limited = [](int delay) { return std::clamp(delay, 0, engine::kMaxCompensationSamples - 1); };
+    std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>> sendLines, auxLines;
+    const auto delayLine = [&](std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>>& previous,
+                               std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>>& next, std::uint32_t key, int channels,
+                               int delay) -> engine::InputDelayLine*
+    {
+        // The same line as last time while its delay is unchanged: its signal carries on.
+        std::shared_ptr<engine::InputDelayLine> line;
+        if (const auto it = previous.find(key);
+            it != previous.end() && it->second->length == delay && static_cast<int>(it->second->rings.size()) == channels)
+            line = it->second;
+        else
+            line = std::make_shared<engine::InputDelayLine>(channels, delay);
+        next[key] = line;
+        graph->keepAlive.push_back(line);
+        return line.get();
+    };
+
+    outputLatencies_.clear();
     for (std::size_t i = 0; i < count; ++i)
-        graph->tracks[i].compensationDelay = compensation[i];
+    {
+        auto& rt = graph->tracks[i];
+        const int destinationInput = destination[i] >= 0 ? input[static_cast<std::size_t>(destination[i])]
+                                     : destination[i] == -1 ? masterInput
+                                                            : arrival[i];
+        rt.compensationDelay = limited(destinationInput - arrival[i]);
+        rt.inputLatency = input[i];
+        rt.faderLatency = faderTime[i];
+        outputLatencies_[rt.trackId] = arrival[i] + rt.compensationDelay;
+
+        // Incoming sends and aux outputs: each waits for this bus's latest input.
+        for (auto& rs : rt.sends)
+        {
+            const auto source = static_cast<std::size_t>(rs.sourceIndex);
+            const int tap = rs.preFader ? faderTime[source] : arrival[source];
+            rs.delay = limited(input[i] - tap);
+            if (rs.delay > 0)
+            {
+                const auto& from = graph->tracks[source];
+                rs.delayLine = delayLine(sendDelays_, sendLines, rs.sendId,
+                                         rs.preFader ? from.layout.numChannels : from.outputLayout.numChannels, rs.delay);
+            }
+        }
+        if (rt.auxSourceIndex >= 0)
+        {
+            rt.auxDelay = limited(input[i] - auxTap(rt.auxSourceIndex));
+            if (rt.auxDelay > 0)
+                rt.auxDelayLine = delayLine(auxDelays_, auxLines, rt.trackId, 2, rt.auxDelay);
+        }
+    }
+    sendDelays_ = std::move(sendLines);
+    auxDelays_ = std::move(auxLines);
+
+    // Post-fader sends leave before their source's compensation delay.
+    for (std::size_t b = 0; b < count; ++b)
+        for (const auto& rs : graph->tracks[b].sends)
+            if (!rs.preFader && graph->tracks[static_cast<std::size_t>(rs.sourceIndex)].compensationDelay > 0)
+                graph->tracks[static_cast<std::size_t>(rs.sourceIndex)].needsPostFaderCopy = true;
+
+    // Automation is read as late as the sound it shapes: each device's lanes by the delay of what
+    // comes before it in its chain (which starts `start` samples late).
+    const auto findLatency = [](const juce::AudioProcessorParameter* parameter, const std::vector<engine::RenderDevice>& chain, int start,
+                                int& latency)
+    {
+        for (const auto& device : chain)
+        {
+            if (device.node == nullptr)
+                continue;
+            const auto& parameters = device.node->getProcessor().getParameters();
+            if (std::find(parameters.begin(), parameters.end(), parameter) != parameters.end())
+            {
+                latency = start;
+                return true;
+            }
+            if (!device.node->isBypassed())
+                start += std::max(0, device.node->getLatencySamples());
+        }
+        return false;
+    };
+    for (std::size_t i = 0; i < count; ++i)
+        for (auto& lane : graph->tracks[i].parameterLanes)
+            if (!findLatency(lane.parameter, graph->tracks[i].devices, input[i], lane.latency))
+                (void) findLatency(lane.parameter, graph->tracks[i].postDevices, faderTime[i], lane.latency); // (a Master Fader's)
+    graph->masterVolumeLatency = masterInput + chainLatency(graph->masterDevices);
+    for (auto& lane : graph->masterParameterLanes)
+        (void) findLatency(lane.parameter, graph->masterDevices, masterInput, lane.latency);
+    for (auto& lane : graph->masterFaderParameterLanes)
+        (void) findLatency(lane.parameter, graph->masterFaderDevices, graph->masterVolumeLatency, lane.latency);
+
+    graph->masterInputLatency = masterInput;
+    graph->totalLatency = graph->masterVolumeLatency + chainLatency(graph->masterFaderDevices);
+    masterInputLatency_ = masterInput;
 
     totalLatency_ = graph->totalLatency;
 

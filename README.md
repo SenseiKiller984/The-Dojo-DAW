@@ -10,7 +10,12 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Audio tracks, instrument tracks, busses (groups and effect returns) and **folders** (a folder is a bus that sums the tracks inside it; collapse it, nest folders, drag tracks in and out).
 - Every track has volume, pan, mute, solo, phase invert, a meter, an **output** (the master, its folder or any bus) and **sends** (pre- or post-fader) to busses. Feedback loops are refused.
 - Solo follows the routing: soloing a track keeps the busses it feeds audible, soloing a bus keeps its sources audible.
-- **Plug-in delay compensation** aligns every path that meets at a bus or the master.
+- **Plug-in delay compensation** aligns every path that meets at a bus, a folder or the master. Whatever arrives earlier waits for the latest arrival: a track by its own compensation delay, each send (pre- or post-fader) and each instrument aux output by an alignment delay of its own.
+  - Sends leave their track before its compensation delay. So a track that plays to the master and also sends to a return with latency (a reverb return with a limiter, a parallel compression bus) lines up exactly with that return.
+  - **Automation moves with the sound it shapes.** A track's fader, pan, VCA and send automation, and each device's parameter automation, are read as late as the sound at that point (behind a 10 ms lookahead, 10 ms later).
+  - **Exports line up with the timeline.** The mix skips the whole project's delay. Each stem skips its own track's delay (a track inside a folder with latency meets that folder earlier than the master). The render runs long enough that nothing is cut at the end.
+  - **The playhead and time show what you hear**: while playing, the position minus the delay to the speakers (the delay compensation plus the audio device's output latency). On a loop wrap they show the end of the loop for that moment.
+  - Recording places takes where they were played (input, output and compensation latency removed).
 - **Delay readouts**: you can see how much delay (latency) each device adds and what a whole chain adds up to.
   - **Each device** shows its delay in milliseconds in a badge in its header (in gold when it adds any). Hover the badge to see the samples and the chain's delay up to and including that device.
   - **The Devices panel's header** shows the whole chain's delay (CHAIN DELAY), the sum over the devices that are on. Its tooltip also gives the whole project's delay after compensation.
