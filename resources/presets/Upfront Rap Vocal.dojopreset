@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Upfront Rap Vocal: a built-in device chain (Tight Gate > Vocal EQ > Fast Compressor > Grit > De-Esser > Eighth Throw > Level Lock). -->
+<DOJO_PRESET version="1" name="Upfront Rap Vocal" category="Vocals" chain="1"
+             description="Dry, loud and in your face: a tight gate, the mud cut, a hard-hitting fast compressor, a touch of grit for edge, de-essing, a short eighth-note throw and a limiter that keeps every word at the front.">
+  <DEVICE key="builtin:gate" name="Tight Gate">
+    <DOJO_DEVICE type="builtin:gate" version="1">
+      <PARAM id="threshold" value="-45.0"/>
+      <PARAM id="return" value="3.0"/>
+      <PARAM id="attack" value="0.2"/>
+      <PARAM id="hold" value="30.0"/>
+      <PARAM id="release" value="90.0"/>
+      <PARAM id="floor" value="-70.0"/>
+      <PARAM id="flip" value="0.0"/>
+      <PARAM id="lookahead" value="0.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <PARAM id="keylow" value="120.0"/>
+      <PARAM id="keyhigh" value="20000.0"/>
+      <PARAM id="listen" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:eq" name="Vocal EQ">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="110.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="250.0"/>
+      <PARAM id="band2Gain" value="-3.0"/>
+      <PARAM id="band2Q" value="1.0"/>
+      <PARAM id="band3On" value="1.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="2800.0"/>
+      <PARAM id="band3Gain" value="3.5"/>
+      <PARAM id="band3Q" value="1.2"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="9000.0"/>
+      <PARAM id="band4Gain" value="2.0"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:compressor" name="Fast Compressor">
+    <DOJO_DEVICE type="builtin:compressor" version="1">
+      <PARAM id="threshold" value="-26.0"/>
+      <PARAM id="ratio" value="8.0"/>
+      <PARAM id="attack" value="2.0"/>
+      <PARAM id="release" value="50.0"/>
+      <PARAM id="knee" value="3.0"/>
+      <PARAM id="makeup" value="9.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:pedal" name="Grit">
+    <DOJO_DEVICE type="builtin:pedal" version="1">
+      <PARAM id="type" value="0.0"/>
+      <PARAM id="gain" value="20.0"/>
+      <PARAM id="output" value="-3.0"/>
+      <PARAM id="bass" value="0.0"/>
+      <PARAM id="mid" value="15.0"/>
+      <PARAM id="midhigh" value="1.0"/>
+      <PARAM id="treble" value="10.0"/>
+      <PARAM id="sub" value="0.0"/>
+      <PARAM id="mix" value="25.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:multiband" name="De-Esser">
+    <DOJO_DEVICE type="builtin:multiband" version="1">
+      <PARAM id="lowon" value="0.0"/>
+      <PARAM id="lowathr" value="-18.0"/>
+      <PARAM id="lowarat" value="2.0"/>
+      <PARAM id="lowbthr" value="-60.0"/>
+      <PARAM id="lowbrat" value="1.0"/>
+      <PARAM id="lowgain" value="0.0"/>
+      <PARAM id="lowsolo" value="0.0"/>
+      <PARAM id="midon" value="0.0"/>
+      <PARAM id="midathr" value="-18.0"/>
+      <PARAM id="midarat" value="2.0"/>
+      <PARAM id="midbthr" value="-60.0"/>
+      <PARAM id="midbrat" value="1.0"/>
+      <PARAM id="midgain" value="0.0"/>
+      <PARAM id="midsolo" value="0.0"/>
+      <PARAM id="highon" value="1.0"/>
+      <PARAM id="highathr" value="-24.0"/>
+      <PARAM id="higharat" value="5.0"/>
+      <PARAM id="highbthr" value="-60.0"/>
+      <PARAM id="highbrat" value="1.0"/>
+      <PARAM id="highgain" value="0.0"/>
+      <PARAM id="highsolo" value="0.0"/>
+      <PARAM id="xlow" value="120"/>
+      <PARAM id="xhigh" value="5500.0"/>
+      <PARAM id="attack" value="0.5"/>
+      <PARAM id="release" value="50.0"/>
+      <PARAM id="detection" value="0.0"/>
+      <PARAM id="knee" value="1.0"/>
+      <PARAM id="amount" value="100.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:delay" name="Eighth Throw">
+    <DOJO_DEVICE type="builtin:delay" version="1">
+      <PARAM id="sync" value="1.0"/>
+      <PARAM id="division" value="5.0"/>
+      <PARAM id="time" value="375.0"/>
+      <PARAM id="feedback" value="15.0"/>
+      <PARAM id="pingpong" value="1.0"/>
+      <PARAM id="lowcut" value="400.0"/>
+      <PARAM id="highcut" value="4500.0"/>
+      <PARAM id="mix" value="8.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:limiter" name="Level Lock">
+    <DOJO_DEVICE type="builtin:limiter" version="1">
+      <PARAM id="input" value="0.0"/>
+      <PARAM id="ceiling" value="-1.0"/>
+      <PARAM id="release" value="60.0"/>
+      <PARAM id="lookahead" value="2.0"/>
+      <PARAM id="maximize" value="0.0"/>
+      <PARAM id="threshold" value="-4.0"/>
+      <PARAM id="autorelease" value="0.0"/>
+      <PARAM id="mode" value="0.0"/>
+      <PARAM id="channels" value="0.0"/>
+      <PARAM id="link" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

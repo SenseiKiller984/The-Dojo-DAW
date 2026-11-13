@@ -16,9 +16,9 @@ class Session;
     Device presets: The Dojo's ".dojopreset" files.
 
     A preset file is an XML document (like a ".dojo" session) holding the complete settings of one or
-    more devices, all for the same purpose:
+    more devices:
 
-        <DOJO_PRESET version="1" name="Synth Bite" description="...">
+        <DOJO_PRESET version="1" name="Synth Bite" description="..." category="Mixing">
           <DEVICE key="builtin:eq" name="EQ">
             <DOJO_DEVICE type="builtin:eq" version="1"> <PARAM id="band1Freq" value="85"/> ... </DOJO_DEVICE>
           </DEVICE>
@@ -28,10 +28,17 @@ class Session;
     Each DEVICE entry is for one kind of device, named by its `key`: a native device's type, or
     "plugin:<format>:<manufacturer>:<name>" for a hosted plug-in. Native devices' settings are
     written out readably (every parameter by id and value, plus whatever else the device keeps);
-    a plug-in's are its own state, base64-encoded. A file holds at most one entry per kind of
-    device, so a device loading a preset always knows which settings are its own: an EQ takes the
-    EQ entry, a Channel EQ the Channel EQ entry, and a preset with no entry for a device does not
-    fit it.
+    a plug-in's are its own state, base64-encoded.
+
+    There are two kinds of preset:
+    - A device preset (Synth Bite) has at most one entry per kind of device, all for the same
+      purpose: an EQ loading it takes the EQ entry, a Channel EQ the Channel EQ entry, and a preset
+      with no entry for a device does not fit it.
+    - A chain preset (chain="1") is a whole device chain, in order, and may hold the same kind of
+      device more than once (a subtractive EQ early and an additive EQ late). Each entry's name is
+      the role of that device in the chain ("Slapback Delay"). Using it on a track adds the whole
+      chain. A device of the chain loading it takes the entry of its kind at its own position: the
+      second EQ on a track takes the chain's second EQ entry.
 
     Presets come from two places: the built-in ones compiled into The Dojo (resources/presets) and
     the user's presets folder (Documents/The Dojo/Presets, searched with its sub-folders).
@@ -51,20 +58,28 @@ struct DeviceSettings
     juce::MemoryBlock state; ///< what the device's getStateInformation() gave
 };
 
-/** A preset: a name, a description and settings for one or more kinds of device. */
+/** A preset: a name, a description and settings for one or more devices (or a whole chain). */
 struct Preset
 {
     juce::String name;
     juce::String description;
+    juce::String category; ///< what it is for ("Drums", "Vocals", "Mixing", ...), may be empty
+    bool chain = false;    ///< a device chain (entries in order, kinds may repeat)
     std::vector<DeviceSettings> devices;
     bool builtIn = false;
     juce::File file; ///< where it was read from (none for a built-in one)
 
-    /** The settings for the device kind `key`, or nullptr when the preset does not fit it. */
-    [[nodiscard]] const DeviceSettings* findFor(const juce::String& key) const;
+    /**
+        The settings for the device kind `key`, or nullptr when the preset does not fit it. In a
+        chain, `occurrence` picks among entries of the same kind (0 = the first; past the last, the
+        first).
+    */
+    [[nodiscard]] const DeviceSettings* findFor(const juce::String& key, int occurrence = 0) const;
     [[nodiscard]] bool fits(const juce::String& key) const { return findFor(key) != nullptr; }
-    /** Adds settings, replacing those already there for the same kind of device. */
+    /** Device presets: adds settings, replacing those already there for the same kind of device. */
     void put(DeviceSettings settings);
+    /** Chain presets: adds a device at the end of the chain. */
+    void add(DeviceSettings settings);
     /** Names of the devices it has settings for ("EQ, Channel EQ"). */
     [[nodiscard]] juce::StringArray getDeviceNames() const;
     /** "builtin:<name>" for a built-in preset, else the file's full path. */
@@ -90,11 +105,18 @@ struct Preset
 /** Loads settings into a processor (no undo; see apply()). */
 void restore(const DeviceSettings& settings, juce::AudioProcessor& processor);
 
+/** How many devices of the same kind come before `device` in its chain (0 for the first). */
+[[nodiscard]] int occurrenceOf(const juce::ValueTree& device);
+
+/** Loads `settings` into `device`, recorded in the session's undo history (see apply()). */
+bool applySettings(const DeviceSettings& settings, const juce::ValueTree& device, Session& session, DeviceManager& devices);
+
 /**
-    Loads the preset's settings for `device` into it, recorded in the session's undo history (in the
-    current transaction: begin one first to make it its own step). Undo puts the device back as it
-    was. Returns false (and changes nothing) when the preset has no settings for that kind of device
-    or the device has no instance.
+    Loads the preset's settings for `device` into it (in a chain preset, the entry of its kind at its
+    position: see Preset::findFor() and occurrenceOf()), recorded in the session's undo history (in
+    the current transaction: begin one first to make it its own step). Undo puts the device back as
+    it was. Returns false (and changes nothing) when the preset has no settings for that kind of
+    device or the device has no instance.
 */
 bool apply(const Preset& preset, const juce::ValueTree& device, Session& session, DeviceManager& devices);
 

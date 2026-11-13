@@ -236,7 +236,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - the **built-in presets** and **My Presets** that fit that device (click one to load it);
   - **Save Preset...**: this device's settings as a new preset file;
   - **Add to Preset File...**: adds this device's settings to an existing preset file (replacing the settings for this kind of device if it already has some), so one file can serve several devices;
-  - **Save Whole Chain as Preset...**: every device on the track in one file;
+  - **Save Whole Chain as Preset...**: the track's whole device chain, in order, as a chain preset (see below);
   - **Load Preset File...** and **Open Presets Folder**.
 - **Drag and drop**: drop a preset onto a device (from the browser's **PRESETS** list, or a `.dojopreset` file from the file manager) to load it into that device. The device is outlined green when the preset fits, red when it does not. Dropped on the Devices panel's empty space, a preset adds a device that starts from it; dropped on a track in the arranger (or double-clicked in the browser), it loads into the first device on that track it fits, or else adds one.
 - Loading a preset is one undo step.
@@ -245,6 +245,33 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **EQ**: low cut at 90 Hz (no sub rumble), -3 dB at 350 Hz (Q 1.1, less boxy mud where parts mask each other), +6 dB at 3 kHz (Q 0.8, the bite), a +4.5 dB high shelf from 7 kHz (no longer dark) and -1.5 dB output, so the change is not just "louder".
   - **Channel EQ**: low cut (80 Hz), low shelf -3 dB, mid +6 dB at 3 kHz, high shelf +5.5 dB, output -1.5 dB.
   - Net result on either device: about -18 dB at 35 Hz, +4.5 dB at 3 kHz and +2.5 to +3.5 dB from 10 kHz up.
+
+**Preset chains**: a chain preset is a whole device chain in one `.dojopreset` file: every device in order, each with its own settings and its role in the chain as its name ("Subtractive EQ", "Slapback Delay"). A chain can use the same kind of device more than once.
+- To add one, double-click it in the browser's **PRESET CHAINS** list, drag it onto a track or the Devices panel, or pick it in **+ Add Device > Preset Chains**. Its devices go after the track's own, and adding them is one undo step.
+- Dropped onto one device, a chain loads only that device's part. The device takes the entry of its kind at its own position, so the second EQ on a track takes the chain's second EQ.
+- Your own chains come from **Save Whole Chain as Preset...** and show up next to the built-in ones.
+- **Built-in chains** (each device's settings are in the file, readable):
+
+  | Chain | For | Devices |
+  | --- | --- | --- |
+  | **Punchy Drum Bus** | Drums | Drum EQ (low cut 30 Hz, +2.5 dB at 60 Hz, -3 dB at 420 Hz, +2.5 dB shelf from 8 kHz) > Glue Compressor (4:1, 25 ms attack, 65 % parallel) > Saturation (Overdrive, 30 %) > Bass Mono (below 120 Hz) > Soft Clipper (Limiter, -1 dBFS) |
+  | **Dusty Lo-Fi Drums** | Drums | Sampler Grit (Redux, 26 kHz, 12 bit) > Crunch (Roar, tube preamp) > Smash (10:1, 40 % parallel) > Dusty Filter (Auto Filter, warm 6.5 kHz low-pass, slow wander) > Thump EQ (+3 dB low shelf, -2 dB at 250 Hz) |
+  | **Pop Vocal Polish** | Vocals | Expander (Gate, -20 dB floor) > Clean-Up EQ (low cut 100 Hz, -2.5 dB at 300 Hz, +2.5 dB at 3.5 kHz, +3 dB air) > Vocal Compressor (3.5:1) > De-Esser (Multiband, above 6 kHz) > Quarter Echo (ping-pong, ducked) > Vocal Plate |
+  | **Upfront Rap Vocal** | Vocals | Tight Gate > Vocal EQ (low cut 110 Hz, -3 dB at 250 Hz, +3.5 dB at 2.8 kHz) > Fast Compressor (8:1, 2 ms) > Grit (Pedal, 25 %) > De-Esser > Eighth Throw (Delay, 1/8 ping-pong) > Level Lock (Limiter, -1 dBFS) |
+  | **Drivers License Vocal Saturation** | Vocals | see below |
+  | **Dreamy Wide Space** | General | Clean Lows (low cut 120 Hz) > Ensemble (Chorus-Ensemble) > Dream Echo (dotted-quarter ping-pong, wobble, into reverb) > Big Hall (6 s) > Wider (140 %) |
+  | **Old Radio** | General | Band-Pass (350 Hz - 3.8 kHz, honk at 1.5 kHz) > Tube Distortion (Overdrive) > Low Rate (Redux, 11 kHz, 10 bit) > Mono |
+  | **Gritty Bass Weight** | Bass | Bass Compressor (4:1) > Mid Grit (Roar multiband: clean lows, tube-driven mids, tamed highs) > Weight & Growl (+2 dB at 80 Hz and 700 Hz) > Mono Lows (below 150 Hz) |
+  | **Shimmer Bloom** | Pads & Keys | Clean Lows (low cut 150 Hz) > Octave Shimmer (Shifter +12, feeding back on itself) > Chorus > Shimmer Hall (9 s) |
+
+- **Drivers License Vocal Saturation** is the intimate, saturated bedroom-pop vocal, in seven stages:
+  1. **Noise Gate** (Gate): -50 dB threshold, 1 ms lookahead, 60 ms hold, fully closed between phrases. It shuts out computer fans, AC hum and street noise the moment you stop singing.
+  2. **Subtractive EQ**: a low cut at 90 Hz against room rumble, and -3.5 dB at 450 Hz (Q 1.4) against the "boxy" sound of a bedroom.
+  3. **Fast Compressor**: 6:1 with a 1 ms attack and 70 ms release pins the vocal down. Whispered verses stay intimate and belted choruses stay in check (34 dB of input range comes out about 20 dB apart).
+  4. **Saturation** (Overdrive, the core sound): drive 20 %, mixed in at 25 %. It is subtle: a little warmth and harmonics.
+  5. **Air EQ (Red Light)**: +5.5 dB high shelf from 10 kHz, the "expensive preamp" air.
+  6. **Slapback Delay** (Echo): 92 ms on the left, 118 ms on the right, almost no feedback, filtered and at 18 %. Instead of a long reverb that gives the small room away, it adds space and width without pushing the vocal back.
+  7. **Short Plate** (Reverb): small, bright (little damping) and 0.9 s long at 14 %. A controlled, vintage studio decay that glues the saturation and the delay together.
 
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 

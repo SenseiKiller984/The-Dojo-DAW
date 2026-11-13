@@ -38,20 +38,30 @@ Outcome loadFirstFitting(session::Project& project, const juce::StringArray& fil
 Outcome save(session::Project& project, const juce::ValueTree& device, const juce::File& file);
 /** Adds (or replaces) `device`'s settings in an existing preset file, keeping the others. */
 Outcome addToFile(session::Project& project, const juce::ValueTree& device, const juce::File& file);
-/** Saves every device on `owner`'s chain in one preset file (the first device of each kind). */
+/** Saves `owner`'s whole device chain, in order, as a chain preset. */
 Outcome saveChain(session::Project& project, const juce::ValueTree& owner, const juce::File& file);
+
+/**
+    Adds every device of a chain preset to the end of `owner`'s chain, in order, each named after its
+    role and with its own settings; plug-ins that are not installed are left out (and named in the
+    message). The first device picks the track as deviceActions::addDevice does. One undo step.
+    Returns the first new DEVICE (invalid when none was added).
+*/
+juce::ValueTree addChain(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, juce::ValueTree owner,
+                         const session::presets::Preset& preset, juce::String* message = nullptr);
 
 /**
     Adds a device that starts from `preset` to `owner` (as deviceActions::addDevice does): the first
     kind of device in the preset that is available (a native device, or an installed plug-in).
-    Adding and loading are one undo step. Returns the new DEVICE (invalid when none was added).
+    Adding and loading are one undo step. A chain preset adds its whole chain (addChain()). Returns
+    the new DEVICE (invalid when none was added).
 */
 juce::ValueTree addDevice(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, juce::ValueTree owner,
                           const session::presets::Preset& preset, juce::String* message = nullptr);
 
 /**
     What dropping a preset on a track does: loads it into the first device on `owner`'s chain that it
-    fits, else adds a device that starts from it.
+    fits, else adds a device that starts from it. A chain preset adds its whole chain.
 */
 Outcome useOn(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, const juce::ValueTree& owner,
               const session::presets::Preset& preset);

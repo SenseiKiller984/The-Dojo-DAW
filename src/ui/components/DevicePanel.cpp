@@ -267,7 +267,7 @@ public:
                 if (first)
                     menu.addSectionHeader(heading);
                 first = false;
-                menu.addItem(preset.name, [panel, project, device, preset]
+                menu.addItem(preset.chain ? preset.name + "  (from chain)" : preset.name, [panel, project, device, preset]
                              {
                                  const auto outcome = presetActions::load(*project, preset, device);
                                  if (panel != nullptr)
@@ -642,7 +642,45 @@ void DevicePanel::showAddMenu()
                                           if (safe != nullptr)
                                               deviceActions::addDevice(safe->project_.getSession(), safe->editor_, safe->getOwner(), choice);
                                       });
+    addChainItems(menu);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addButton_));
+}
+
+void DevicePanel::addChainItems(juce::PopupMenu& menu)
+{
+    // Preset chains, by what they are for: each adds its whole chain to the selected track.
+    std::map<juce::String, juce::PopupMenu> byCategory;
+    juce::Component::SafePointer<DevicePanel> safe(this);
+    for (const auto& preset : session::presets::getAll())
+    {
+        if (!preset.chain)
+            continue;
+        const auto category = preset.category.isNotEmpty() ? preset.category : juce::String(preset.builtIn ? "Other" : "My Chains");
+        byCategory[category].addItem(preset.name, [safe, preset]
+                                     {
+                                         if (safe != nullptr)
+                                             safe->dropPreset(preset);
+                                     });
+    }
+    if (byCategory.empty())
+        return;
+    menu.addSectionHeader("Preset Chains");
+    for (auto& [category, sub] : byCategory)
+        menu.addSubMenu(category, sub);
+}
+
+juce::StringArray DevicePanel::getAddMenuChainItems()
+{
+    juce::StringArray items;
+    juce::PopupMenu menu;
+    addChainItems(menu);
+    for (juce::PopupMenu::MenuItemIterator it(menu, true); it.next();)
+    {
+        const auto& item = it.getItem();
+        if (!item.isSectionHeader && !item.isSeparator && item.subMenu == nullptr)
+            items.add(item.text);
+    }
+    return items;
 }
 
 bool DevicePanel::isInterestedInDragSource(const SourceDetails& details)

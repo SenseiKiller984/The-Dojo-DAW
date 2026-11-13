@@ -7,7 +7,7 @@
        - the 3 kHz presence region comes up hard (the "bite": attack, edge, upfront),
        - a high shelf opens up the top (no longer dark),
        - the output is trimmed so the change is not just "louder". -->
-<DOJO_PRESET version="1" name="Synth Bite"
+<DOJO_PRESET version="1" name="Synth Bite" category="Mixing"
              description="Makes a sound more aggressive, present and upfront in the mix: for an instrument that is too soft, too dark, or masked by the tracks around it.">
   <DEVICE key="builtin:eq" name="EQ">
     <DOJO_DEVICE type="builtin:eq" version="1">

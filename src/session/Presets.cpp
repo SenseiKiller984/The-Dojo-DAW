@@ -74,12 +74,28 @@ private:
 } // namespace
 
 //==================================================================================================
-const DeviceSettings* Preset::findFor(const juce::String& key) const
+const DeviceSettings* Preset::findFor(const juce::String& key, int occurrence) const
 {
     if (key.isEmpty())
         return nullptr;
-    const auto it = std::find_if(devices.begin(), devices.end(), [&](const DeviceSettings& d) { return d.key == key; });
-    return it != devices.end() ? &*it : nullptr;
+    const DeviceSettings* first = nullptr;
+    int seen = 0;
+    for (const auto& d : devices)
+    {
+        if (d.key != key)
+            continue;
+        if (first == nullptr)
+            first = &d;
+        if (!chain || seen++ == occurrence)
+            return &d;
+    }
+    return first;
+}
+
+void Preset::add(DeviceSettings settings)
+{
+    if (settings.key.isNotEmpty())
+        devices.push_back(std::move(settings));
 }
 
 void Preset::put(DeviceSettings settings)
@@ -113,6 +129,10 @@ std::unique_ptr<juce::XmlElement> Preset::toXml() const
     xml->setAttribute("name", name);
     if (description.isNotEmpty())
         xml->setAttribute("description", description);
+    if (category.isNotEmpty())
+        xml->setAttribute("category", category);
+    if (chain)
+        xml->setAttribute("chain", 1);
 
     for (const auto& d : devices)
     {
@@ -146,6 +166,8 @@ std::optional<Preset> Preset::fromXml(const juce::XmlElement& xml, juce::String&
     Preset preset;
     preset.name = xml.getStringAttribute("name").trim();
     preset.description = xml.getStringAttribute("description");
+    preset.category = xml.getStringAttribute("category");
+    preset.chain = xml.getBoolAttribute("chain", false);
     for (const auto* element : xml.getChildWithTagNameIterator(kDeviceTag))
     {
         DeviceSettings d;
@@ -155,7 +177,11 @@ std::optional<Preset> Preset::fromXml(const juce::XmlElement& xml, juce::String&
             juce::AudioProcessor::copyXmlToBinary(*native, d.state);
         else if (!d.state.fromBase64Encoding(element->getStringAttribute("state")))
             d.state.reset();
-        if (d.key.isNotEmpty() && d.state.getSize() > 0)
+        if (d.key.isEmpty() || d.state.getSize() == 0)
+            continue;
+        if (preset.chain)
+            preset.add(std::move(d));
+        else
             preset.put(std::move(d));
     }
 
@@ -251,19 +277,36 @@ void restore(const DeviceSettings& settings, juce::AudioProcessor& processor)
         processor.setStateInformation(settings.state.getData(), static_cast<int>(settings.state.getSize()));
 }
 
-bool apply(const Preset& preset, const juce::ValueTree& device, Session& session, DeviceManager& devices)
+int occurrenceOf(const juce::ValueTree& device)
 {
-    const auto* settings = preset.findFor(keyOf(device));
-    if (settings == nullptr)
-        return false;
+    const auto key = keyOf(device);
+    int count = 0;
+    for (const auto& other : Session::getDevices(device.getParent()))
+    {
+        if (other == device)
+            return count;
+        if (keyOf(other) == key)
+            ++count;
+    }
+    return 0;
+}
+
+bool applySettings(const DeviceSettings& settings, const juce::ValueTree& device, Session& session, DeviceManager& devices)
+{
     const auto node = devices.getNode(device);
-    if (node == nullptr)
+    if (node == nullptr || settings.state.getSize() == 0)
         return false;
 
     juce::MemoryBlock before;
     node->getProcessor().getStateInformation(before);
     return session.getUndoManager().perform(
-        new LoadPresetAction(session, devices, device::getId(device), std::move(before), settings->state));
+        new LoadPresetAction(session, devices, device::getId(device), std::move(before), settings.state));
+}
+
+bool apply(const Preset& preset, const juce::ValueTree& device, Session& session, DeviceManager& devices)
+{
+    const auto* settings = preset.findFor(keyOf(device), occurrenceOf(device));
+    return settings != nullptr && applySettings(*settings, device, session, devices);
 }
 
 bool isPresetFile(const juce::File& file)

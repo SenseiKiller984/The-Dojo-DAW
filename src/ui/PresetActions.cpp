@@ -127,23 +127,76 @@ Outcome saveChain(session::Project& project, const juce::ValueTree& owner, const
 {
     presets::Preset preset;
     preset.name = file.getFileNameWithoutExtension();
+    preset.chain = true;
     for (const auto& device : session::Session::getDevices(owner))
-    {
-        if (preset.fits(presets::keyOf(device)))
-            continue; // (one entry per kind of device: the first one on the chain)
         if (const auto node = project.getDevices().getNode(device))
-            preset.put(presets::capture(device, node->getProcessor()));
-    }
+            preset.add(presets::capture(device, node->getProcessor()));
     if (preset.devices.empty())
         return {false, "There are no devices to save."};
     if (const auto result = preset.save(file); result.failed())
         return {false, result.getErrorMessage()};
-    return {true, "Saved preset " + quoted(preset.name) + " (" + preset.getDeviceNames().joinIntoString(", ") + ")"};
+    return {true, "Saved chain " + quoted(preset.name) + " (" + preset.getDeviceNames().joinIntoString(", ") + ")"};
+}
+
+juce::ValueTree addChain(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, juce::ValueTree owner,
+                         const presets::Preset& preset, juce::String* message)
+{
+    auto& session = project.getSession();
+    juce::StringArray missing;
+    juce::ValueTree first;
+    juce::ValueTree chainOwner;
+    int added = 0;
+    for (const auto& entry : preset.devices)
+    {
+        auto choice = choiceFor(entry, plugins);
+        if (!choice)
+        {
+            missing.add(entry.deviceName.isNotEmpty() ? entry.deviceName : entry.key);
+            continue;
+        }
+        if (entry.deviceName.isNotEmpty())
+            choice->name = entry.deviceName; // (the device's role in the chain: "Slapback Delay")
+
+        juce::ValueTree device;
+        if (!first.isValid())
+        {
+            // The first device picks the track as adding a device does (a new one when needed) and
+            // begins the undo step; the rest follow it on the same chain.
+            device = deviceActions::addDevice(session, editor, owner, *choice);
+            session.getUndoManager().setCurrentTransactionName("Add Chain " + quoted(preset.name));
+            first = device;
+            chainOwner = device.getParent();
+        }
+        else
+        {
+            device = session.addDevice(chainOwner, choice->type, choice->name);
+            if (choice->descriptionXml.isNotEmpty())
+                device.setProperty(session::ids::description, choice->descriptionXml, &session.getUndoManager());
+        }
+        if (!device.isValid())
+            break;
+        (void) presets::applySettings(entry, device, session, project.getDevices()); // (same undo step)
+        ++added;
+    }
+
+    if (message != nullptr)
+    {
+        if (added == 0)
+            *message = "None of the devices of " + quoted(preset.name) + " (" + preset.getDeviceNames().joinIntoString(", ") +
+                       ") is available.";
+        else
+            *message = "Added chain " + quoted(preset.name) + " (" + juce::String(added) + (added == 1 ? " device)" : " devices)") +
+                       (missing.isEmpty() ? juce::String() : ", without " + missing.joinIntoString(", ") + " (not installed)");
+    }
+    return first;
 }
 
 juce::ValueTree addDevice(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, juce::ValueTree owner,
                           const presets::Preset& preset, juce::String* message)
 {
+    if (preset.chain)
+        return addChain(project, plugins, editor, std::move(owner), preset, message);
+
     for (const auto& entry : preset.devices)
     {
         const auto choice = choiceFor(entry, plugins);
@@ -172,7 +225,7 @@ Outcome useOnSelection(session::Project& project, plugins::PluginManager& plugin
 Outcome useOn(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, const juce::ValueTree& owner,
               const presets::Preset& preset)
 {
-    if (owner.isValid())
+    if (owner.isValid() && !preset.chain)
         for (const auto& device : session::Session::getDevices(owner))
             if (preset.fits(presets::keyOf(device)))
                 return load(project, preset, device);

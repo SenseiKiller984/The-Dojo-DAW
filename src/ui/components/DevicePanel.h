@@ -28,7 +28,8 @@ class DeviceCard;
     Presets (session/Presets.h): a card's presets menu loads the presets that fit its device and
     saves its settings (as a new preset file, into an existing one, or with the whole chain). A
     preset dropped onto a card (from the browser, or a .dojopreset file from the file manager) loads
-    into that device; dropped anywhere else on the panel it adds a device that starts from it.
+    into that device; dropped anywhere else on the panel it adds a device that starts from it (a
+    chain preset adds its whole chain, also offered in the "+ Add Device" menu).
 */
 class DevicePanel final : public juce::Component,
                           public juce::DragAndDropTarget,
@@ -65,6 +66,8 @@ public:
     [[nodiscard]] juce::String getNotice(const juce::ValueTree& device) const;
     /** The message the panel itself shows right now (a preset dropped on it). */
     [[nodiscard]] const juce::String& getPanelNotice() const noexcept { return panelNotice_; }
+    /** The preset chains the "+ Add Device" menu offers. */
+    [[nodiscard]] juce::StringArray getAddMenuChainItems();
     /** What the presets menu of the card of `device` lists (section headers in brackets). */
     [[nodiscard]] juce::StringArray getPresetMenuItems(const juce::ValueTree& device) const;
 
@@ -79,6 +82,7 @@ private:
     [[nodiscard]] static bool ownerTakesDevices(const juce::ValueTree& owner);
     void closeStaleWindows();
     void dropPreset(const session::presets::Preset& preset);
+    void addChainItems(juce::PopupMenu& menu);
     void setPanelNotice(const juce::String& text);
 
     void handleAsyncUpdate() override { rebuild(); }

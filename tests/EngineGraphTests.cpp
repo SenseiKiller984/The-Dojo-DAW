@@ -220,6 +220,32 @@ TEST_CASE("Plug-in delay compensation aligns parallel paths", "[engine][pdc]")
     CHECK(rig.builder.getTotalLatency() == 240);
 }
 
+TEST_CASE("Delay compensation settles at the real latency when a track also sends to a return bus", "[engine][pdc]")
+{
+    // A track with latency next to a track that sends (post-fader) to a return bus: the return's
+    // input is delayed with its source, so the return itself needs no compensation. (This used to
+    // grow by the latency on every pass of the alignment, up to 16 times too much.)
+    test::TempFolder temp;
+    const auto impulse = test::writeImpulse(temp.dir.getChildFile("imp.wav"), 4800, 9600, kRate, 0.25f);
+
+    Rig rig;
+    auto a = rig.audioTrackWith(impulse);
+    auto b = rig.audioTrackWith(impulse);
+    rig.session.addDevice(a, "builtin:limiter", "Limiter"); // 5 ms lookahead = 240 samples
+    auto bus = rig.session.addTrack(TrackKind::bus, "Return");
+    rig.session.addDevice(bus, "builtin:utility", "Utility");
+    rig.session.addSend(b, bus, 0.0);
+
+    rig.publish();
+    rig.play();
+    rig.render(0.3);
+
+    CHECK(rig.builder.getTotalLatency() == 240);
+    // a, b and b's return all arrive together.
+    CHECK(test::indexOfPeak(rig.left) == 4800 + 240);
+    CHECK_THAT(test::peak(rig.left), WithinAbs(0.75, 1e-4));
+}
+
 TEST_CASE("Instrument tracks play MIDI clips through their instrument", "[engine][midi]")
 {
     test::TempFolder temp;

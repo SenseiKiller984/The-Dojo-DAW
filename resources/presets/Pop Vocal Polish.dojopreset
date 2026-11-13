@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Pop Vocal Polish: a built-in device chain (Expander > Clean-Up EQ > Vocal Compressor > De-Esser > Quarter Echo > Vocal Plate). -->
+<DOJO_PRESET version="1" name="Pop Vocal Polish" category="Vocals" chain="1"
+             description="A finished, radio-ready pop vocal: a gentle expander, clean low end, less mud, forward presence and air, even compression, de-essing, a ducked quarter-note echo and a smooth plate.">
+  <DEVICE key="builtin:gate" name="Expander">
+    <DOJO_DEVICE type="builtin:gate" version="1">
+      <PARAM id="threshold" value="-55.0"/>
+      <PARAM id="return" value="4.0"/>
+      <PARAM id="attack" value="0.5"/>
+      <PARAM id="hold" value="50.0"/>
+      <PARAM id="release" value="200.0"/>
+      <PARAM id="floor" value="-20.0"/>
+      <PARAM id="flip" value="0.0"/>
+      <PARAM id="lookahead" value="0.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <PARAM id="keylow" value="100.0"/>
+      <PARAM id="keyhigh" value="20000.0"/>
+      <PARAM id="listen" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:eq" name="Clean-Up EQ">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="100.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="300.0"/>
+      <PARAM id="band2Gain" value="-2.5"/>
+      <PARAM id="band2Q" value="1.2"/>
+      <PARAM id="band3On" value="1.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="3500.0"/>
+      <PARAM id="band3Gain" value="2.5"/>
+      <PARAM id="band3Q" value="1.0"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="12000.0"/>
+      <PARAM id="band4Gain" value="3.0"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:compressor" name="Vocal Compressor">
+    <DOJO_DEVICE type="builtin:compressor" version="1">
+      <PARAM id="threshold" value="-20.0"/>
+      <PARAM id="ratio" value="3.5"/>
+      <PARAM id="attack" value="6.0"/>
+      <PARAM id="release" value="90.0"/>
+      <PARAM id="knee" value="6.0"/>
+      <PARAM id="makeup" value="5.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:multiband" name="De-Esser">
+    <DOJO_DEVICE type="builtin:multiband" version="1">
+      <PARAM id="lowon" value="0.0"/>
+      <PARAM id="lowathr" value="-18.0"/>
+      <PARAM id="lowarat" value="2.0"/>
+      <PARAM id="lowbthr" value="-60.0"/>
+      <PARAM id="lowbrat" value="1.0"/>
+      <PARAM id="lowgain" value="0.0"/>
+      <PARAM id="lowsolo" value="0.0"/>
+      <PARAM id="midon" value="0.0"/>
+      <PARAM id="midathr" value="-18.0"/>
+      <PARAM id="midarat" value="2.0"/>
+      <PARAM id="midbthr" value="-60.0"/>
+      <PARAM id="midbrat" value="1.0"/>
+      <PARAM id="midgain" value="0.0"/>
+      <PARAM id="midsolo" value="0.0"/>
+      <PARAM id="highon" value="1.0"/>
+      <PARAM id="highathr" value="-20.0"/>
+      <PARAM id="higharat" value="4.0"/>
+      <PARAM id="highbthr" value="-60.0"/>
+      <PARAM id="highbrat" value="1.0"/>
+      <PARAM id="highgain" value="0.0"/>
+      <PARAM id="highsolo" value="0.0"/>
+      <PARAM id="xlow" value="120"/>
+      <PARAM id="xhigh" value="6000.0"/>
+      <PARAM id="attack" value="0.5"/>
+      <PARAM id="release" value="50.0"/>
+      <PARAM id="detection" value="0.0"/>
+      <PARAM id="knee" value="1.0"/>
+      <PARAM id="amount" value="100.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:echo" name="Quarter Echo">
+    <DOJO_DEVICE type="builtin:echo" version="1">
+      <PARAM id="mode" value="1.0"/>
+      <PARAM id="sync" value="1.0"/>
+      <PARAM id="divl" value="8.0"/>
+      <PARAM id="divr" value="8.0"/>
+      <PARAM id="timel" value="375.0"/>
+      <PARAM id="timer" value="250.0"/>
+      <PARAM id="link" value="1.0"/>
+      <PARAM id="feedback" value="25.0"/>
+      <PARAM id="invert" value="0.0"/>
+      <PARAM id="input" value="0.0"/>
+      <PARAM id="filter" value="1.0"/>
+      <PARAM id="hp" value="400.0"/>
+      <PARAM id="lp" value="5000.0"/>
+      <PARAM id="res" value="0.0"/>
+      <PARAM id="modrate" value="0.5"/>
+      <PARAM id="moddepth" value="0.0"/>
+      <PARAM id="modfilter" value="0.0"/>
+      <PARAM id="drive" value="0.0"/>
+      <PARAM id="noise" value="0.0"/>
+      <PARAM id="wobble" value="0.0"/>
+      <PARAM id="duck" value="60.0"/>
+      <PARAM id="reverb" value="0.0"/>
+      <PARAM id="reverbdecay" value="50.0"/>
+      <PARAM id="reverbloc" value="1.0"/>
+      <PARAM id="width" value="100.0"/>
+      <PARAM id="mix" value="14.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:reverb" name="Vocal Plate">
+    <DOJO_DEVICE type="builtin:reverb" version="1">
+      <PARAM id="size" value="0.55"/>
+      <PARAM id="decay" value="1.8"/>
+      <PARAM id="damping" value="0.25"/>
+      <PARAM id="predelay" value="30.0"/>
+      <PARAM id="lowcut" value="250.0"/>
+      <PARAM id="width" value="1.0"/>
+      <PARAM id="mix" value="16.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

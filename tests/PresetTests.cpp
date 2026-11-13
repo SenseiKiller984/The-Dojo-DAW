@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace dojo;
@@ -327,10 +328,10 @@ TEST_CASE("Saving presets: on their own, added to a file, or the whole chain", "
 
     // What fits which device: built-in first, then the user's.
     const auto forEq = presets::getFor(devices::Equaliser::kTypeId);
-    REQUIRE(forEq.size() == 2);
-    CHECK(forEq[0].name == "Synth Bite");
-    CHECK(forEq[1].name == "Warm Keys");
-    CHECK(presets::getFor(devices::Reverb::kTypeId).empty());
+    REQUIRE(forEq.size() == 11); // (Synth Bite, every built-in chain has an EQ, and the user's)
+    CHECK(std::any_of(forEq.begin(), forEq.end(), [](const auto& p) { return p.name == "Synth Bite"; }));
+    CHECK(forEq.back().name == "Warm Keys");
+    CHECK(presets::getFor("builtin:autopan").empty());
 
     // Loading the file into the other devices: each takes its own settings; the Reverb is not in it.
     setValue(eq, "band2Freq", 100.0f);
@@ -350,6 +351,7 @@ TEST_CASE("Saving presets: on their own, added to a file, or the whole chain", "
     CHECK(outcome.ok);
     auto chain = presets::Preset::load(chainFile, error);
     REQUIRE(chain.has_value());
+    CHECK(chain->chain);
     CHECK(chain->getDeviceNames() == juce::StringArray{"EQ", "Channel EQ", "Reverb"});
 }
 
@@ -366,6 +368,7 @@ TEST_CASE("Presets dropped on a device card load into it; dropped on the panel t
     auto eqDevice = session.addDevice(track, devices::Equaliser::kTypeId, "EQ");
     auto channelDevice = session.addDevice(track, devices::ChannelEq::kTypeId, "Channel EQ");
     auto reverbDevice = session.addDevice(track, devices::Reverb::kTypeId, "Reverb");
+    auto autoPanDevice = session.addDevice(track, "builtin:autopan", "Auto Pan");
     editorState.selectTrack(session::track::getId(track));
 
     ui::DevicePanel panel(project, plugins, editorState);
@@ -385,7 +388,8 @@ TEST_CASE("Presets dropped on a device card load into it; dropped on the panel t
     CHECK(items.contains("Synth Bite"));
     for (const auto* action : {"Save Preset...", "Add to Preset File...", "Save Whole Chain as Preset...", "Load Preset File...", "Open Presets Folder"})
         CHECK(items.contains(action));
-    CHECK(panel.getPresetMenuItems(reverbDevice).contains("No presets for Reverb yet"));
+    CHECK(panel.getPresetMenuItems(reverbDevice).contains("Drivers License Vocal Saturation  (from chain)"));
+    CHECK(panel.getPresetMenuItems(autoPanDevice).contains("No presets for Auto Pan yet"));
 
     // From the file manager: a .dojopreset file dropped on the card.
     const auto file = user.folder().getChildFile("Synth Bite.dojopreset");

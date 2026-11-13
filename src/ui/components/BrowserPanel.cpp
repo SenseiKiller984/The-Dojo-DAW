@@ -439,16 +439,27 @@ private:
         };
         addGroup("INSTRUMENTS", false, true);
         addGroup("AUDIO EFFECTS", false, false);
-        bool firstPreset = true;
-        for (const auto& preset : presets_)
+        const auto addPresets = [&](const juce::String& heading, bool chains)
         {
-            if (!matchesAll(preset.name + " preset " + preset.getDeviceNames().joinIntoString(" "), terms))
-                continue;
-            if (firstPreset)
-                rows_.push_back({"PRESETS", nullptr, nullptr});
-            firstPreset = false;
-            rows_.push_back({{}, nullptr, &preset});
-        }
+            bool first = true;
+            for (const auto& preset : presets_)
+            {
+                if (preset.chain != chains)
+                    continue;
+                // (searchable by name, what it is for, its devices' roles and kinds)
+                juce::String text = preset.name + (chains ? " chain " : " preset ") + preset.category;
+                for (const auto& d : preset.devices)
+                    text << ' ' << d.deviceName << ' ' << d.key.fromLastOccurrenceOf(":", false, false);
+                if (!matchesAll(text, terms))
+                    continue;
+                if (first)
+                    rows_.push_back({heading, nullptr, nullptr});
+                first = false;
+                rows_.push_back({{}, nullptr, &preset});
+            }
+        };
+        addPresets("PRESET CHAINS", true);
+        addPresets("PRESETS", false);
         addGroup("PLUG-IN INSTRUMENTS", true, true);
         addGroup("PLUG-IN EFFECTS", true, false);
         list_.deselectAllRows();
@@ -473,17 +484,31 @@ private:
         {
             if (selected)
                 g.fillAll(colour::accent.withAlpha(0.28f));
-            juce::Path diamond;
             const float cy = static_cast<float>(height) * 0.5f;
-            diamond.addQuadrilateral(15.0f, cy - 4.0f, 19.0f, cy, 15.0f, cy + 4.0f, 11.0f, cy);
             g.setColour(r.preset->builtIn ? colour::accent : colour::textSecondary);
-            g.fillPath(diamond);
+            if (r.preset->chain)
+            {
+                // Three linked devices.
+                for (int k = 0; k < 3; ++k)
+                    g.fillRoundedRectangle(9.0f + static_cast<float>(k) * 4.5f, cy - 2.0f, 3.5f, 4.0f, 0.8f);
+            }
+            else
+            {
+                juce::Path diamond;
+                diamond.addQuadrilateral(15.0f, cy - 4.0f, 19.0f, cy, 15.0f, cy + 4.0f, 11.0f, cy);
+                g.fillPath(diamond);
+            }
+            const auto detail = r.preset->chain ? (r.preset->category.isNotEmpty() ? r.preset->category + ", " : juce::String()) +
+                                                      juce::String(static_cast<int>(r.preset->devices.size())) + " devices"
+                                                : r.preset->getDeviceNames().joinIntoString(", ");
+            g.setFont(sans(10.5f));
+            const int detailWidth = std::min(width / 2, juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), detail) + 4);
             g.setColour(colour::textPrimary);
             g.setFont(sans(12.5f));
-            g.drawText(r.preset->name, 26, 0, width - 30, height, juce::Justification::centredLeft, true);
+            g.drawText(r.preset->name, 26, 0, width - 34 - detailWidth, height, juce::Justification::centredLeft, true);
             g.setColour(colour::textMuted);
             g.setFont(sans(10.5f));
-            g.drawText(r.preset->getDeviceNames().joinIntoString(", "), 26, 0, width - 32, height, juce::Justification::centredRight, true);
+            g.drawText(detail, width - 6 - detailWidth, 0, detailWidth, height, juce::Justification::centredRight, true);
             return;
         }
         if (r.choice == nullptr)
@@ -535,9 +560,15 @@ private:
     juce::String getTooltipForRow(int row) override
     {
         if (const auto* preset = presetAt(row))
-            return (preset->description.isNotEmpty() ? preset->description + "\n" : juce::String()) + "Preset for " +
-                   preset->getDeviceNames().joinIntoString(", ") +
+        {
+            const auto description = preset->description.isNotEmpty() ? preset->description + "\n" : juce::String();
+            if (preset->chain)
+                return description + "Chain: " + preset->getDeviceNames().joinIntoString(" > ") +
+                       "\nDrag onto a track or the Devices panel to add the whole chain (or double-click to add it to the "
+                       "selected track); drop it on one device to load that device's part";
+            return description + "Preset for " + preset->getDeviceNames().joinIntoString(", ") +
                    " - drag onto a device to load it, or double-click to use it on the selected track";
+        }
         const auto* choice = choiceAt(row);
         if (choice == nullptr)
             return {};

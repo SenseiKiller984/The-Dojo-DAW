@@ -154,8 +154,14 @@ TEST_CASE("The browser lists presets (built-in and the user's), searchable and d
     const auto folder = rig.temp.dir.getChildFile("Presets");
     session::presets::setUserFolder(folder);
     auto browser = rig.makeBrowser();
-    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
+    // Chains first, then device presets.
+    const auto builtIn = browser->getListedPresetNames();
+    REQUIRE(builtIn.size() == 10);
+    CHECK(builtIn[0] == "Dreamy Wide Space");
+    CHECK(builtIn.contains("Drivers License Vocal Saturation"));
+    CHECK(builtIn[9] == "Synth Bite");
     CHECK(browser->getPresetDragDescription("Synth Bite") == "DojoPreset:builtin:Synth Bite");
+    CHECK(browser->getPresetDragDescription("Old Radio") == "DojoPreset:builtin:Old Radio");
 
     // A preset saved into the presets folder (by The Dojo or copied there) shows up.
     session::presets::Preset mine;
@@ -169,20 +175,33 @@ TEST_CASE("The browser lists presets (built-in and the user's), searchable and d
     mine.put(settings);
     REQUIRE(mine.save(folder.getChildFile("Pads/Glassy Pad")).wasOk());
     browser->refreshPresets();
-    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite", "Glassy Pad"});
+    auto listed = browser->getListedPresetNames();
+    REQUIRE(listed.size() == 11);
+    CHECK(listed[9] == "Synth Bite");
+    CHECK(listed[10] == "Glassy Pad");
     CHECK(browser->getPresetDragDescription("Glassy Pad") ==
           "DojoPreset:" + folder.getChildFile("Pads/Glassy Pad.dojopreset").getFullPathName());
 
-    // Search: by name, by the devices it is for, or "preset".
+    // Search: by name, what it is for, the devices in it (by role or kind), "preset" or "chain".
     browser->setDeviceSearch("bite");
     CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
     browser->setDeviceSearch("channel eq");
     CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
     CHECK(browser->getListedDeviceNames() == juce::StringArray{"Channel EQ"});
     browser->setDeviceSearch("reverb");
-    CHECK(browser->getListedPresetNames() == juce::StringArray{"Glassy Pad"});
+    listed = browser->getListedPresetNames();
+    CHECK(listed.contains("Glassy Pad"));
+    CHECK(listed.contains("Drivers License Vocal Saturation"));
+    CHECK_FALSE(listed.contains("Old Radio"));
+    browser->setDeviceSearch("slapback");
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Drivers License Vocal Saturation"});
+    browser->setDeviceSearch("vocals");
+    CHECK(browser->getListedPresetNames() ==
+          juce::StringArray{"Drivers License Vocal Saturation", "Pop Vocal Polish", "Upfront Rap Vocal"});
+    browser->setDeviceSearch("drums chain");
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Dusty Lo-Fi Drums", "Punchy Drum Bus"});
     browser->setDeviceSearch("preset");
-    CHECK(browser->getListedPresetNames().size() == 2);
+    CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite", "Glassy Pad"});
     browser->setDeviceSearch({});
     session::presets::setUserFolder({});
 }

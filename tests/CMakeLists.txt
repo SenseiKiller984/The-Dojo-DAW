@@ -34,6 +34,7 @@ add_executable(dojo_tests
     LimiterTests.cpp
     PluginTests.cpp
     PreferencesTests.cpp
+    PresetChainTests.cpp
     PresetTests.cpp
     PreviewTests.cpp
     RecordExportTests.cpp
