@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- Punchy Drum Bus: a built-in device chain (Drum EQ > Glue Compressor > Saturation > Bass Mono > Soft Clipper). -->
+<!-- Punchy Drum Bus: a built-in device chain (Drum EQ > The Glue > Saturation > Bass Mono > Soft Clipper). -->
 <DOJO_PRESET version="1" name="Punchy Drum Bus" category="Drums" chain="1"
              description="A modern drum bus: a solid kick, less cardboard, crisp cymbals, glued with parallel compression, warmed with light saturation, the low end kept mono and the peaks softly clipped for loudness.">
   <DEVICE key="builtin:eq" name="Drum EQ">
@@ -29,17 +29,21 @@
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
-  <DEVICE key="builtin:gluecomp" name="Glue Compressor">
+  <DEVICE key="builtin:gluecomp" name="The Glue">
     <DOJO_DEVICE type="builtin:gluecomp" version="1">
       <PARAM id="threshold" value="-18.0"/>
       <PARAM id="ratio" value="1.0"/>
       <PARAM id="attack" value="5.0"/>
       <PARAM id="release" value="6.0"/>
       <PARAM id="makeup" value="4.0"/>
-      <PARAM id="range" value="60.0"/>
-      <PARAM id="schp" value="90.0"/>
       <PARAM id="mix" value="65.0"/>
-      <PARAM id="softclip" value="0.0"/>
+      <PARAM id="range" value="70.0"/>
+      <PARAM id="schp" value="90.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <PARAM id="peakclip" value="0.0"/>
+      <PARAM id="osrealtime" value="1.0"/>
+      <PARAM id="osoffline" value="3.0"/>
+      <PARAM id="osphase" value="2.0"/>
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
@@ -77,7 +81,14 @@
       <PARAM id="ceiling" value="-1.0"/>
       <PARAM id="shape" value="0.0"/>
       <PARAM id="softness" value="40.0"/>
-      <PARAM id="oversampling" value="1.0"/>
+      <PARAM id="asymmetry" value="0.0"/>
+      <PARAM id="link" value="1.0"/>
+      <PARAM id="autogain" value="0.0"/>
+      <PARAM id="listen" value="0.0"/>
+      <PARAM id="guard" value="1.0"/>
+      <PARAM id="osrealtime" value="1.0"/>
+      <PARAM id="osoffline" value="3.0"/>
+      <PARAM id="osphase" value="2.0"/>
       <PARAM id="output" value="0.0"/>
       <PARAM id="mix" value="100.0"/>
       <EXTRA/>

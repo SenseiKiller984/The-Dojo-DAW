@@ -17,7 +17,7 @@ std::vector<DeviceChoice> getNativeChoices()
 {
     std::vector<DeviceChoice> choices;
     for (const auto& info : devices::getBuiltinDevices())
-        choices.push_back({info.type, info.name, info.category, info.isInstrument, {}, {}});
+        choices.push_back({info.type, info.name, info.category, info.isInstrument, {}, {}, info.keywords});
     return choices;
 }
 

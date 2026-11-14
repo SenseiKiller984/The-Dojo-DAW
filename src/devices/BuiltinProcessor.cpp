@@ -86,6 +86,27 @@ juce::AudioParameterFloat* BuiltinProcessor::addFloat(const juce::String& id, co
     return raw;
 }
 
+juce::AudioParameterFloat* BuiltinProcessor::addFloatWithText(const juce::String& id, const juce::String& name,
+                                                              juce::NormalisableRange<float> range, float defaultValue,
+                                                              const juce::String& label, std::function<juce::String(float)> toText,
+                                                              std::function<float(const juce::String&)> fromText)
+{
+    auto parameter = std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{id, 1}, name, range, defaultValue,
+        juce::AudioParameterFloatAttributes()
+            .withLabel(label)
+            .withStringFromValueFunction([toText](float value, int maximumLength)
+                                         {
+                                             const auto text = toText(value);
+                                             return maximumLength > 0 ? text.substring(0, maximumLength) : text;
+                                         })
+            .withValueFromStringFunction(std::move(fromText)));
+    auto* raw = parameter.get();
+    addParameter(parameter.release());
+    ranged_.push_back(raw);
+    return raw;
+}
+
 juce::AudioParameterBool* BuiltinProcessor::addBool(const juce::String& id, const juce::String& name, bool defaultValue)
 {
     auto parameter = std::make_unique<juce::AudioParameterBool>(juce::ParameterID{id, 1}, name, defaultValue);

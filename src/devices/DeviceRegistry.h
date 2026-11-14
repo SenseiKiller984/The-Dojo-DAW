@@ -15,6 +15,7 @@ struct BuiltinDeviceInfo
     juce::String name;
     juce::String category; ///< "Instrument", "Dynamics", "EQ", "Space", "Pitch"
     bool isInstrument = false;
+    juce::String keywords = {}; ///< more words the browser's search finds it by
 };
 
 /** Every native device, in browser order. */

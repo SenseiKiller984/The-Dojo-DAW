@@ -249,7 +249,7 @@ TEST_CASE("Chain presets keep their devices in order, the same kind more than on
 TEST_CASE("Nine built-in chains, each device in its place with its own role", "[presets][chains]")
 {
     const std::map<juce::String, std::pair<juce::String, juce::StringArray>> expected{
-        {"Punchy Drum Bus", {"Drums", {"Drum EQ", "Glue Compressor", "Saturation", "Bass Mono", "Soft Clipper"}}},
+        {"Punchy Drum Bus", {"Drums", {"Drum EQ", "The Glue", "Saturation", "Bass Mono", "Soft Clipper"}}},
         {"Dusty Lo-Fi Drums", {"Drums", {"Sampler Grit", "Crunch", "Smash", "Dusty Filter", "Thump EQ"}}},
         {"Pop Vocal Polish", {"Vocals", {"Expander", "Clean-Up EQ", "Vocal Compressor", "De-Esser", "Quarter Echo", "Vocal Plate"}}},
         {"Upfront Rap Vocal", {"Vocals", {"Tight Gate", "Vocal EQ", "Fast Compressor", "Grit", "De-Esser", "Eighth Throw", "Level Lock"}}},
@@ -294,7 +294,7 @@ TEST_CASE("Nine built-in chains, each device in its place with its own role", "[
     CHECK(kinds == juce::StringArray{"builtin:gate", "builtin:eq", "builtin:compressor", "builtin:overdrive", "builtin:eq",
                                      "builtin:echo", "builtin:plate"});
 
-    // The chains use the dedicated devices: a real De-Esser, Glue Compressor, Expander, Soft Clipper
+    // The chains use the dedicated devices: a real De-Esser, The Glue, Expander, Soft Clipper
     // and Plate Reverb (each also in the browser on its own).
     const auto kindOf = [](const presets::Preset& preset, const juce::String& role)
     {
@@ -307,7 +307,7 @@ TEST_CASE("Nine built-in chains, each device in its place with its own role", "[
     CHECK(kindOf(builtIn("Upfront Rap Vocal"), "De-Esser") == "builtin:deesser");
     CHECK(kindOf(builtIn("Pop Vocal Polish"), "Expander") == "builtin:expander");
     CHECK(kindOf(builtIn("Pop Vocal Polish"), "Vocal Plate") == "builtin:plate");
-    CHECK(kindOf(builtIn("Punchy Drum Bus"), "Glue Compressor") == "builtin:gluecomp");
+    CHECK(kindOf(builtIn("Punchy Drum Bus"), "The Glue") == "builtin:gluecomp");
     CHECK(kindOf(builtIn("Punchy Drum Bus"), "Soft Clipper") == "builtin:softclip");
 }
 

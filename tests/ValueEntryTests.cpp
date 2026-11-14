@@ -1,5 +1,6 @@
 #include "devices/BuiltinProcessor.h"
 #include "devices/DeviceRegistry.h"
+#include "devices/TheGlue.h"
 #include "devices/Utility.h"
 #include "session/Session.h"
 #include "ui/EditorState.h"
@@ -211,4 +212,31 @@ TEST_CASE("Double-clicking a mixer strip's volume or pan lets you type it", "[ui
     master.getValueEditor()->setText("-3", juce::dontSendNotification);
     master.getValueEditor()->onReturnKey();
     CHECK_THAT(session.getMasterVolumeDb(), WithinAbs(-3.0, 0.005));
+}
+
+TEST_CASE("Typing a word a knob shows sets it: Off / Full / -inf", "[ui][values]")
+{
+    juce::MessageManager::getInstance();
+    devices::TheGlue glue;
+    const auto typeInto = [](juce::AudioProcessorParameter& parameter, const juce::String& text)
+    {
+        ui::ParameterControl control(parameter, "Knob");
+        control.setSize(ui::ParameterControl::kWidth, ui::ParameterControl::kHeight);
+        control.showValueEditor();
+        REQUIRE(control.getValueEditor() != nullptr);
+        control.getValueEditor()->setText(text, juce::dontSendNotification);
+        control.getValueEditor()->onReturnKey();
+        return parameter.getCurrentValueAsText();
+    };
+    auto& mix = *glue.getParameterById("mix");
+    auto& range = *glue.getParameterById("range");
+    auto& highPass = *glue.getParameterById("schp");
+    CHECK(typeInto(mix, "-6 dB") == "-6.0 dB");
+    CHECK(typeInto(mix, "-inf") == "-inf dB");
+    CHECK(typeInto(mix, "75 %") == "-2.5 dB");
+    CHECK(typeInto(range, "12") == "12.0 dB");
+    CHECK(typeInto(range, "full") == "Full");
+    CHECK(typeInto(highPass, "150 Hz") == "150 Hz");
+    CHECK(typeInto(highPass, "Off") == "Off");
+    CHECK(typeInto(highPass, "nonsense") == "Off"); // (a word it does not show changes nothing)
 }

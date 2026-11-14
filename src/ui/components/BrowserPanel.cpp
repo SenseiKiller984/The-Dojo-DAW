@@ -430,7 +430,7 @@ private:
             {
                 if ((choice.type == plugins::PluginManager::kDeviceType) != plugin || choice.instrument != instrument)
                     continue;
-                if (!matchesAll(choice.name + " " + choice.category, terms))
+                if (!matchesAll(choice.name + " " + choice.category + " " + choice.keywords, terms))
                     continue;
                 if (first)
                     rows_.push_back({heading, nullptr, nullptr});
@@ -452,7 +452,7 @@ private:
                 for (const auto& d : preset.devices)
                 {
                     text << ' ' << d.deviceName << ' ' << d.key.fromLastOccurrenceOf(":", false, false);
-                    if (const auto* info = devices::findBuiltinDevice(d.key)) // ("Plate Reverb", "Glue Compressor")
+                    if (const auto* info = devices::findBuiltinDevice(d.key)) // ("Plate Reverb", "The Glue")
                         text << ' ' << info->name;
                 }
                 if (!matchesAll(text, terms))

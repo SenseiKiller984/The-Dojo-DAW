@@ -1,4 +1,5 @@
 #include "devices/DeviceRegistry.h"
+#include "devices/TheGlue.h"
 #include "engine/AudioEngine.h"
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
@@ -333,6 +334,56 @@ TEST_CASE("Stems line up with the timeline also inside a folder that has latency
     const auto mix = decode(settings.destination);
     CHECK(indexOfPeak(mix.audio, 0) == 28800);
     CHECK_THAT(mix.audio.getSample(0, 28800), WithinAbs(1.0, 1e-3));
+}
+
+TEST_CASE("Offline export switches devices to their offline oversampling and stays aligned", "[export][pdc]")
+{
+    // The Glue: 2x in real time (50 samples of latency), 8x offline (65 samples). The export must
+    // re-compile the delay compensation after switching, or the mix would be 15 samples late.
+    test::TempFolder temp;
+    App app;
+    auto& session = app.project.getSession();
+    const auto impulse = test::writeImpulse(temp.dir.getChildFile("imp.wav"), 4800, 48000, kRate, 0.5f);
+    juce::String error;
+    REQUIRE(app.project.getAssets().loadNow(impulse, error) != nullptr);
+
+    auto glued = session.addTrack("Glued");
+    session.addClip(glued, impulse, 0.5, 1.0);
+    const auto device = session.addDevice(glued, devices::TheGlue::kTypeId, "The Glue");
+    const auto node = app.project.getDevices().getNode(device);
+    REQUIRE(node != nullptr);
+    auto* glue = dynamic_cast<devices::TheGlue*>(&node->getProcessor());
+    REQUIRE(glue != nullptr);
+    glue->getParameterById("threshold")->setValueNotifyingHost(1.0f); // 0 dBFS: no compression
+    const int realtime = glue->getLatencySamples();
+    CHECK(realtime == glue->latencyFor(false));
+    CHECK(glue->latencyFor(true) > realtime);
+    auto plain = session.addTrack("Plain");
+    session.addClip(plain, impulse, 0.5, 1.0);
+
+    Exporter exporter(app.project, app.controller);
+    std::optional<juce::Result> result;
+    exporter.onFinished = [&](const juce::Result& r, const juce::Array<juce::File>&) { result = r; };
+    ExportSettings settings;
+    settings.startSeconds = 0.0;
+    settings.endSeconds = 2.0;
+    settings.tailSeconds = 0.5;
+    settings.includeStems = true;
+    settings.bitDepth = 32;
+    settings.destination = temp.dir.getChildFile("mix.wav");
+    REQUIRE(exporter.start(settings).isEmpty());
+    REQUIRE(test::pumpMessagesUntil([&] { return result.has_value(); }, 30'000));
+    INFO(result->getErrorMessage());
+    REQUIRE(result->wasOk());
+
+    const auto mix = decode(settings.destination);
+    CHECK(indexOfPeak(mix.audio, 0) == 28800);
+    CHECK(mix.audio.getSample(0, 28800) > 0.9f); // both impulses on the same sample
+    const auto stem = decode(Exporter::getStemFile(settings, "Glued"));
+    CHECK(indexOfPeak(stem.audio, 0) == 28800);
+    // Back to real time afterwards.
+    CHECK_FALSE(glue->isNonRealtime());
+    CHECK(glue->getLatencySamples() == realtime);
 }
 
 TEST_CASE("Clearing a range trims, splits and removes clips", "[session][record]")

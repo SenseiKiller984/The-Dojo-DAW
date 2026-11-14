@@ -22,6 +22,7 @@ struct DeviceChoice
     bool instrument = false;
     juce::String descriptionXml; ///< plug-ins: the PluginDescription
     juce::String identifier;     ///< plug-ins: PluginDescription::createIdentifierString()
+    juce::String keywords = {};  ///< more words the search finds it by
 };
 
 /** Every native device. */

@@ -15,10 +15,14 @@ add_library(dojo_devices STATIC
     DriftSynth.cpp
     DriftSynth.h
     Drive.h
+    DeEsser.cpp
+    DeEsser.h
     Dynamics.cpp
     Dynamics.h
     Echo.cpp
     Echo.h
+    Expander.cpp
+    Expander.h
     Equaliser.cpp
     Equaliser.h
     Gate.cpp
@@ -43,8 +47,11 @@ add_library(dojo_devices STATIC
     Roar.h
     SampleSlot.cpp
     SampleSlot.h
-    StudioDynamics.cpp
+    SoftClipper.cpp
+    SoftClipper.h
     StudioDynamics.h
+    TheGlue.cpp
+    TheGlue.h
     TimeEffects.cpp
     TimeEffects.h
     Utility.cpp
@@ -55,8 +62,10 @@ add_library(dojo_devices STATIC
     WavetableSynth.h
     dsp/AnalogFilters.h
     dsp/Biquad.h
+    dsp/DynamicsMath.h
     dsp/Modulation.h
     dsp/Oversampler.h
+    dsp/PhaseOversampler.h
     dsp/SynthCore.cpp
     dsp/SynthCore.h
     dsp/VirtualAnalog.h)

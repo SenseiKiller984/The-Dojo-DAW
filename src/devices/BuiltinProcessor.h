@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -70,6 +71,10 @@ protected:
     juce::AudioParameterFloat* addFloat(const juce::String& id, const juce::String& name,
                                         juce::NormalisableRange<float> range, float defaultValue,
                                         const juce::String& label = {}, bool automatable = true, int decimals = -1);
+    /** A float shown and typed through `toText` / `fromText` (e.g. a mix in dB, "Off" at one end). */
+    juce::AudioParameterFloat* addFloatWithText(const juce::String& id, const juce::String& name, juce::NormalisableRange<float> range,
+                                                float defaultValue, const juce::String& label, std::function<juce::String(float)> toText,
+                                                std::function<float(const juce::String&)> fromText);
     juce::AudioParameterBool* addBool(const juce::String& id, const juce::String& name, bool defaultValue);
     juce::AudioParameterChoice* addChoice(const juce::String& id, const juce::String& name,
                                           const juce::StringArray& choices, int defaultIndex, bool automatable = true);

@@ -76,11 +76,15 @@
   <DEVICE key="builtin:deesser" name="De-Esser">
     <DOJO_DEVICE type="builtin:deesser" version="1">
       <PARAM id="freq" value="5500.0"/>
+      <PARAM id="high" value="12000.0"/>
+      <PARAM id="band" value="0.0"/>
       <PARAM id="threshold" value="-24.0"/>
       <PARAM id="range" value="8.0"/>
+      <PARAM id="detect" value="0.0"/>
       <PARAM id="mode" value="0.0"/>
-      <PARAM id="detection" value="0.0"/>
       <PARAM id="release" value="50.0"/>
+      <PARAM id="lookahead" value="0.0"/>
+      <PARAM id="stereo" value="0.0"/>
       <PARAM id="listen" value="0.0"/>
       <EXTRA/>
     </DOJO_DEVICE>

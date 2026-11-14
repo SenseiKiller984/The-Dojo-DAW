@@ -46,12 +46,12 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Limiter::kTypeId, "Limiter", "Dynamics", false},
         {Gate::kTypeId, "Gate", "Dynamics", false},
         {MultibandDynamics::kTypeId, "Multiband Dynamics", "Dynamics", false},
-        {GlueCompressor::kTypeId, "Glue Compressor", "Dynamics", false},
-        {Expander::kTypeId, "Expander", "Dynamics", false},
-        {DeEsser::kTypeId, "De-Esser", "Dynamics", false},
-        {SoftClipper::kTypeId, "Soft Clipper", "Dynamics", false},
+        {TheGlue::kTypeId, "The Glue", "Dynamics", false, "bus compressor glue console"},
+        {Expander::kTypeId, "Expander", "Dynamics", false, "noise gate upward expansion"},
+        {DeEsser::kTypeId, "De-Esser", "Dynamics", false, "sibilance deesser"},
+        {SoftClipper::kTypeId, "Soft Clipper", "Dynamics", false, "clip saturation loudness"},
         {Reverb::kTypeId, "Reverb", "Space", false},
-        {PlateReverb::kTypeId, "Plate Reverb", "Space", false},
+        {PlateReverb::kTypeId, "Plate Reverb", "Space", false, "plate reverb"},
         {Delay::kTypeId, "Delay", "Space", false},
         {PitchShifter::kTypeId, "Pitch Shift", "Pitch", false},
         {Shifter::kTypeId, "Shifter", "Pitch", false},
@@ -97,8 +97,8 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<MultibandDynamics>();
     if (type == Compressor::kTypeId)
         return std::make_unique<Compressor>();
-    if (type == GlueCompressor::kTypeId)
-        return std::make_unique<GlueCompressor>();
+    if (type == TheGlue::kTypeId)
+        return std::make_unique<TheGlue>();
     if (type == Expander::kTypeId)
         return std::make_unique<Expander>();
     if (type == DeEsser::kTypeId)

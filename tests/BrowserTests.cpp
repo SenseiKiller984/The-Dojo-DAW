@@ -136,7 +136,10 @@ TEST_CASE("Browser device search filters devices and plug-ins", "[browser]")
     CHECK(all.contains("Compressor"));
 
     browser->setDeviceSearch("comp");
-    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Compressor", "Glue Compressor"});
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Compressor", "The Glue"}); // (The Glue: a bus compressor)
+
+    browser->setDeviceSearch("sibilance"); // more words each device is known by
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"De-Esser"});
 
     browser->setDeviceSearch("dynamics"); // categories count
     CHECK(browser->getListedDeviceNames().contains("Limiter"));

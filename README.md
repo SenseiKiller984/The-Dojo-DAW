@@ -152,7 +152,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Click a key** on the keyboard to hear its note through the track's instrument, for as long as you hold the mouse button: long samples and sustained synths keep sounding until you let go. Further right on a key plays louder; slide up or down to play other keys. It works with the transport stopped and the track not armed, also on edit-locked clips (MIDI tracks play through their instrument track), and nothing is recorded.
 - **Step sequencer** view of the same clip: rows are the Drum Rack's pads or Impulse's slots (or 16 notes), click or paint steps, right-click for velocity. Click a row's name to hear it while held.
 
-**Native devices** (64-bit, real-time safe, with dedicated editors; drag a knob, or double-click the value under it to type an exact one: "120 Hz", "2.5k", "-6 dB")
+**Native devices** (64-bit, real-time safe, with dedicated editors; drag a knob, or double-click the value under it to type an exact one: "120 Hz", "2.5k", "-6 dB", or a word the knob shows, such as "Off", "Full" or "-inf")
 - **EQ**: 4 bands (low/high cut, shelves, peaks) with a live spectrum analyser and draggable band handles.
 - **Compressor** with soft knee, makeup, mix and an **external sidechain** (pick any track).
 - **Limiter** (lookahead brickwall):
@@ -164,7 +164,11 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
     - **Soft Clip**: lets peaks up to 6 dB over the ceiling reach a saturation curve, which rounds them off below it for warmth and crunch.
     - **True Peak**: an 8x-oversampling detector keeps the peaks between samples under the ceiling too, for streaming and CD delivery. It adds 8 samples of latency, compensated automatically.
 - **Reverb** (feedback delay network) and tempo-synced **ping-pong delay**.
-- **Plate Reverb**: the dense, bright, smooth sound of a studio plate (after Dattorro's plate algorithm: four input diffusers into a modulated figure-eight tank with fourteen output taps). Pre-delay, Decay (reverb time to -60 dB), Size, Damping, Bandwidth, Low Cut, Diffusion, Modulation (keeps long tails from ringing), Width, Dry/Wet. The display shows the decay of the lows and of the highs. Short decays with little pre-delay make the classic short vocal plate.
+- **Plate Reverb**: the dense, bright, smooth sound of a studio plate (after Dattorro's plate algorithm: four input diffusers into a modulated figure-eight tank with fourteen output taps). Three pages:
+  - **Plate**: the material (**Steel**, the classic studio plate; **Gold Foil**, smaller, denser and brighter with tight lows; **Aluminium**, larger, more open, shimmering), Pre-delay (0 to 250 ms, or **Sync**ed to the tempo: 1/64 to 1/4), Decay (0.2 to 20 s to -60 dB), Size, Damping, Dry/Wet.
+  - **Tone**: **Low Decay** (25 to 200 % of the decay below **Low Freq**: a warmer or a tighter tail; the tank splits its feedback in two bands), Bandwidth (the input's brightness), Low Cut, High Cut, Width.
+  - **Motion**: Diffusion, Mod Rate and Mod Depth (a slow wobble that keeps long tails from ringing), **Drive** (the plate's driver saturating when pushed), **Ducking** (the reverb steps back while the dry signal plays and blooms in the gaps), **Freeze** (holds the tail forever, new input ignored).
+  - The display shows the decay of the lows, mids and highs after the pre-delay (or FROZEN). Short decays with little pre-delay make the classic short vocal plate.
 - **Echo**: two-line tape-style delay (stereo, ping-pong or mid/side; synced or free, linked or not) with resonant filter, time and filter modulation, drive, noise, wobble, ducking, reverb before/after/inside the feedback loop, width.
 - **Utility**: gain ±35 dB, width 0–200 % and Mono, Bass Mono (below a crossover), phase invert left/right, channel mode (left, right, swap), balance, mute, DC filter.
 - **Amp & Cabinet**: seven amp models (Clean to Heavy, and Bass) with 4x-oversampled gain stages, bass/middle/treble/presence, five cabinets and three microphone positions.
@@ -187,10 +191,31 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - Circuits: **Clean** (exact), **Warm** (OTA, its resonance saturates), **Ladder** (four-pole transistor ladder, 2x oversampled) and **Diode** (screaming resonance); Drive pushes them.
   - LFO: eight shapes, free or synced (1/64 to 8 bars), offset and stereo phase (180 degrees: one side opens as the other closes). The envelope follower opens or closes it with the level, of the input or of a **sidechain** track. The curve shows the cutoff moving.
 - **Gate**: Threshold, Return (hysteresis, so a signal at the threshold does not chatter), Attack, Hold, Release, Floor, **Flip** (passes only what is quiet), **Lookahead** (opens before a transient; reported as latency), an external **sidechain** through high- and low-pass key filters, and Listen.
-- **Glue Compressor**: a console-style bus compressor for gluing drums, groups and mixes. Fixed ratios (2:1, 4:1, 10:1), stepped attack (0.01 to 30 ms) and release (0.1 to 1.2 s, or **Auto**: fast after short peaks, slow once compression is sustained), soft knee, stereo-linked detection with a sidechain high-pass (keeps the low end from pumping it), Range, Makeup, Dry/Wet (parallel compression) and Soft Clip (rounds peaks above about -0.5 dBFS).
-- **Expander**: below the threshold, quiet sound is made quieter by the ratio (2:1: 1 dB under becomes 2 dB under), at most by Range. A gentler alternative to a gate for room noise, spill and breaths. Knee, Attack (opening), Release (closing), an external sidechain with a key high-pass, Output; the display shows its curve and the level.
-- **De-Esser**: tames sibilance and harsh highs. The detector listens above (High-Pass) or around (Band-Pass) Frequency. Over the Threshold it turns down (4:1, soft knee) by at most Range: only the highs above Frequency (**Split**), or the whole signal while the "s" lasts (**Wide**). Release, and Listen to hear what it detects. Quiet highs (a voice's normal air) are left alone.
-- **Soft Clipper**: rounds off peaks so they never pass the Ceiling, for loud drums and mixes without a limiter's pumping. Drive, Ceiling, Shape (Soft, Smooth or Hard), Softness (where the rounding starts), Oversampling (Off, 2x, 4x: no aliasing, a little latency that delay compensation takes care of; the ceiling holds after it too), Output and a latency-aligned Dry/Wet. The display shows the curve and how much it clips.
+- **The Glue**: an analog-modelled bus compressor after the big British consoles of the 80's, for smooth, transparent glue on drums, groups and whole mixes.
+  - **The circuit**, simulated sample by sample at the oversampled rate: a **feedback** topology (the gain cell turns down the main signal and the detector's input too, so the detector hears the compressed signal; the loop is solved implicitly every sample, so even the fastest attack at 10:1 never overshoots or chatters) and a **diode-based envelope follower** (a capacitor charged through a diode with a soft turn-on and discharged through the release; **Auto** release adds a slower capacitor that only charges while compression is demanded: fast after short peaks, slow on dense material).
+  - Threshold, fixed Ratios (2:1, 4:1, 10:1), stepped Attack (0.01 to 30 ms) and Release (0.1 to 1.2 s, or Auto), Makeup.
+  - **Mix** crossfades dry and compressed inside the oversampled domain (phase accurate at every frequency); it reads in decibels: the level of the compressed signal (0 dB fully compressed, -6 dB half, -inf dry).
+  - **Range** saturates the sidechain: the top of the detected signal is clipped away, so there is at most that much compression however loud it gets. **Full** keeps the cleanest circuit; lower settings behave like older units, or limit the pumping creatively.
+  - **Sidechain High Pass**: a soft -6 dB/oct high-pass on the detected signal (Off, or 20 Hz to 2 kHz). **External Sidechain**: another track drives the detector (through the same loop).
+  - **Peak Clip** (PEAKCLIP IN): a soft-clipping waveshaper rounding peaks just under 0 dBFS after the makeup; oversampling keeps its harmonics from aliasing.
+  - **Oversampling**: separate settings for real-time use and offline renders (2x and 8x by default), each Off (no latency, the lowest CPU), 2x, 4x or 8x, with **Minimum Phase** (the lowest latency), **Intermediate** or **Linear Phase** filters (the highest latency, the best phase alignment of the upper frequencies). Every setting has a whole number of samples of latency at DC, reported to the delay compensation (the page shows it for real time and offline: 2x linear phase is 50 samples, 8x 65).
+  - **VU meter**: the white needle shows the RMS compression (VU ballistics). Click the meter to show the yellow **Peak** needle (held briefly, then falling); the choice is saved with the device. Hover over it to read the RMS and Peak compression in dB below it.
+- **Expander**: the opposite of a compressor.
+  - **Downward**: below the threshold quiet sound is made quieter by the ratio (2:1: 1 dB under becomes 2 dB under), at most by Range; a gentler alternative to a gate for room noise, spill and breaths. **Upward**: above the threshold loud sound is made louder (restoring punch that compression took away), at most by Range.
+  - Knee; **Hysteresis** (once open it only closes that many dB under the threshold, so a level hovering at the threshold does not chatter); Attack, **Hold** (waits before closing), Release; Output and a latency-aligned Dry/Wet.
+  - **Detector**: Peak (follows transients) or RMS (follows loudness); **Lookahead** (1 to 10 ms) opens it before a transient arrives, so the first hit is never cut; an external sidechain with a **Key High-Pass** and **Key Low-Pass** (so only the right part of the sound drives it) and **Key Listen**.
+  - The displays: its curve with the level, and a history of the level, the threshold and the gain change.
+- **De-Esser**: tames sibilance ("s", "sh", "t") and harsh highs.
+  - **Band**: the sibilance lives **Above** Frequency, or in a **Band** between Frequency and High (the air above is left alone).
+  - **Detection**: **Absolute** compares the band's level with the Threshold (dBFS); **Relative** compares it with the whole signal (the highs' share), so the same setting works whether the singer whispers or belts (quiet passages are left alone).
+  - Over the threshold it turns down (4:1, soft knee) by at most Range, within half a millisecond, and lets go over Release: only the band (**Split**, crossovers that sum back flat) or the whole signal while the "s" lasts (**Wide**).
+  - **Lookahead** (1, 2 or 5 ms): the gain is already down when the "s" starts. **Stereo**: Linked, Unlinked, **Mid** or **Side** only. **Listen**: **Trigger** (what the detector hears, to find the sibilance) or **Delta** (what is being removed).
+  - The display shows the detector's band and a history of the sibilance level, the threshold and the reduction.
+- **Soft Clipper**: rounds off peaks so they never pass the Ceiling, for loud drums and mixes without a limiter's pumping.
+  - Input (with **Auto Gain** to judge the clipping at the same loudness), Ceiling, Shape (**Soft**, **Smooth**, **Hard** or **Tube**: a gradual, second-order bend), Softness (where the rounding starts), **Asymmetry** (the negative half clips earlier: even harmonics like a single-ended tube stage), **Stereo Link** (both sides clipped by the same amount: the image stays put), Output and a latency-aligned Dry/Wet.
+  - **Listen**: Delta plays only what the clipper removes.
+  - **Oversampling** as in The Glue (real time and offline, Off to 8x, minimum to linear phase). **Ceiling Guard** holds the ceiling after the downsampling filter too; off, heavy clipping with oversampling is at its cleanest (no aliasing at all), with peaks up to about 1 dB over the ceiling.
+  - The display shows the curve and how much it clips.
 - **Multiband Dynamics**: three bands (Linkwitz-Riley crossovers that add back up flat), each with an **Above** threshold and ratio (over 1:1 compresses downward, under 1:1 expands upward) and a **Below** threshold and ratio (over 1:1 expands downward, under 1:1 compresses upward), gain, solo and on/off. Attack, release, peak or RMS detection, soft knee, Amount, output and dry/wet; the display shows each band's level, thresholds and gain change.
 - **Roar**: three saturation stages for anything from subtle warmth to wild degradation.
   - Eleven shapes per stage (Soft Sine, Diode Clipper, Tube Preamp, Polynomial, Hard Clip, Rectifier, Tri Fold, Sine Fold, Bit Crusher, Fractal, Noise Injection), with amount, bias, a filter before or after it (low-, high-, band-pass, notch, peak) and a level; 2x oversampled.
@@ -232,7 +257,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Automation and export**
 - **Spline automation lanes** for volume, pan, sends and every device or plug-in parameter (A on the track header, or right-click > Add Automation Lane).
-- **Export** (Ctrl+R): offline (faster than real time) or real-time bounce, **WAV** (16/24/32-bit float), **FLAC**, **MP3** (LAME, 128–320 kbps), the mix and/or **stems** (one file per track).
+- **Export** (Ctrl+R): offline (faster than real time) or real-time bounce, **WAV** (16/24/32-bit float), **FLAC**, **MP3** (LAME, 128–320 kbps), the mix and/or **stems** (one file per track). An offline export switches devices to their offline settings first (e.g. The Glue's and the Soft Clipper's 8x oversampling) and re-aligns the delay compensation for their new latency.
 
 **Plug-ins**
 - **VST3 and CLAP** on both Windows and Linux: parameters (automatable), state saved with the project, their own editor windows, latency reported to the delay compensation.
@@ -265,14 +290,14 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - To add one, double-click it in the browser's **PRESET CHAINS** list, drag it onto a track or the Devices panel, or pick it in **+ Add Device > Preset Chains**. Its devices go after the track's own, and adding them is one undo step.
 - Dropped onto one device, a chain loads only that device's part. The device takes the entry of its kind at its own position, so the second EQ on a track takes the chain's second EQ.
 - Your own chains come from **Save Whole Chain as Preset...** and show up next to the built-in ones.
-- **Built-in chains** (each device's settings are in the file, readable). Where a chain needs a dedicated kind of device (De-Esser, Glue Compressor, Expander, Soft Clipper, Plate Reverb), it is a real device you can also add on its own from the browser:
+- **Built-in chains** (each device's settings are in the file, readable). Where a chain needs a dedicated kind of device (De-Esser, The Glue, Expander, Soft Clipper, Plate Reverb), it is a real device you can also add on its own from the browser:
 
   | Chain | For | Devices |
   | --- | --- | --- |
-  | **Punchy Drum Bus** | Drums | Drum EQ (low cut 30 Hz, +2.5 dB at 60 Hz, -3 dB at 420 Hz, +2.5 dB shelf from 8 kHz) > Glue Compressor (4:1, 10 ms attack, Auto release, 90 Hz sidechain high-pass, 65 % parallel) > Saturation (Overdrive, 30 %) > Bass Mono (below 120 Hz) > Soft Clipper (soft curve, -1 dBFS ceiling, 2x oversampling) |
+  | **Punchy Drum Bus** | Drums | Drum EQ (low cut 30 Hz, +2.5 dB at 60 Hz, -3 dB at 420 Hz, +2.5 dB shelf from 8 kHz) > The Glue (4:1, 10 ms attack, Auto release, 90 Hz sidechain high-pass, Mix -3.7 dB for parallel glue, 2x linear-phase oversampling, 8x offline) > Saturation (Overdrive, 30 %) > Bass Mono (below 120 Hz) > Soft Clipper (soft curve, -1 dBFS ceiling, stereo linked, ceiling guard, 2x oversampling) |
   | **Dusty Lo-Fi Drums** | Drums | Sampler Grit (Redux, 26 kHz, 12 bit) > Crunch (Roar, tube preamp) > Smash (10:1, 40 % parallel) > Dusty Filter (Auto Filter, warm 6.5 kHz low-pass, slow wander) > Thump EQ (+3 dB low shelf, -2 dB at 250 Hz) |
-  | **Pop Vocal Polish** | Vocals | Expander (3:1 under -55 dB, at most 20 dB) > Clean-Up EQ (low cut 100 Hz, -2.5 dB at 300 Hz, +2.5 dB at 3.5 kHz, +3 dB air) > Vocal Compressor (3.5:1) > De-Esser (split above 6.5 kHz, up to 8 dB) > Quarter Echo (ping-pong, ducked) > Vocal Plate (Plate Reverb, 1.8 s) |
-  | **Upfront Rap Vocal** | Vocals | Tight Gate > Vocal EQ (low cut 110 Hz, -3 dB at 250 Hz, +3.5 dB at 2.8 kHz) > Fast Compressor (8:1, 2 ms) > Grit (Pedal, 25 %) > De-Esser (split above 5.5 kHz) > Eighth Throw (Delay, 1/8 ping-pong) > Level Lock (Limiter, -1 dBFS) |
+  | **Pop Vocal Polish** | Vocals | Expander (downward, 3:1 under -55 dB, at most 20 dB, 3 dB hysteresis, 40 ms hold) > Clean-Up EQ (low cut 100 Hz, -2.5 dB at 300 Hz, +2.5 dB at 3.5 kHz, +3 dB air) > Vocal Compressor (3.5:1) > De-Esser (split, above 6.5 kHz, linked, up to 8 dB) > Quarter Echo (ping-pong, ducked) > Vocal Plate (Plate Reverb, steel, 1.8 s, lows at 90 %) |
+  | **Upfront Rap Vocal** | Vocals | Tight Gate > Vocal EQ (low cut 110 Hz, -3 dB at 250 Hz, +3.5 dB at 2.8 kHz) > Fast Compressor (8:1, 2 ms) > Grit (Pedal, 25 %) > De-Esser (split, above 5.5 kHz) > Eighth Throw (Delay, 1/8 ping-pong) > Level Lock (Limiter, -1 dBFS) |
   | **Drivers License Vocal Saturation** | Vocals | see below |
   | **Dreamy Wide Space** | General | Clean Lows (low cut 120 Hz) > Ensemble (Chorus-Ensemble) > Dream Echo (dotted-quarter ping-pong, wobble, into reverb) > Big Hall (6 s) > Wider (140 %) |
   | **Old Radio** | General | Band-Pass (350 Hz - 3.8 kHz, honk at 1.5 kHz) > Tube Distortion (Overdrive) > Low Rate (Redux, 11 kHz, 10 bit) > Mono |
@@ -286,7 +311,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   4. **Saturation** (Overdrive, the core sound): drive 20 %, mixed in at 25 %. It is subtle: a little warmth and harmonics.
   5. **Air EQ (Red Light)**: +5.5 dB high shelf from 10 kHz, the "expensive preamp" air.
   6. **Slapback Delay** (Echo): 92 ms on the left, 118 ms on the right, almost no feedback, filtered and at 18 %. Instead of a long reverb that gives the small room away, it adds space and width without pushing the vocal back.
-  7. **Short Plate** (Plate Reverb): a real plate, small (70 %), bright (damping at 12 kHz), 0.8 s long with 5 ms of pre-delay, at 14 %. A controlled, vintage studio decay that glues the saturation and the delay together.
+  7. **Short Plate** (Plate Reverb): a real steel plate, small (70 %), bright (damping at 12 kHz), 0.8 s long (the lows at 80 %, so the tail stays clean under 300 Hz) with 5 ms of pre-delay, at 14 %. A controlled, vintage studio decay that glues the saturation and the delay together.
 
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 
@@ -295,7 +320,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
 2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop.
 3. The bottom panel has four tabs: **Mixer** (F3), **Devices** of the selected track (F4), the **Editor** (F5) for the clip you double-clicked and the **Clip List** (F6). In the mixer, double-click the volume or pan value under a fader (or the master's GAIN) to type it: `-6`, `-inf`, `C`, `L20`, `R35`.
-4. The browser lists devices, plug-ins and presets at the top (with search; drag one onto a track, a device or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
+4. The browser lists devices, plug-ins and presets at the top (with search, by name, kind or what it is for: "comp" also finds The Glue, "sibilance" the De-Esser; drag one onto a track, a device or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
 5. Export with **Ctrl+R**; save with **Ctrl+S**.
 
 | Keys | Action |
@@ -407,7 +432,7 @@ src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), m
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
               clip playback / time-stretch / disk streaming, capture, file preview, device host,
               MP3 encoder
-src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, Glue Compressor, limiter,
+src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue, limiter,
               Gate, Expander, De-Esser, Soft Clipper, Multiband Dynamics, reverb, Plate Reverb,
               delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux,
               pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,

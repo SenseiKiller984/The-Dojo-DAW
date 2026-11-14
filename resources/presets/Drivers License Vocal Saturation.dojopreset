@@ -130,14 +130,24 @@
   </DEVICE>
   <DEVICE key="builtin:plate" name="Short Plate">
     <DOJO_DEVICE type="builtin:plate" version="1">
+      <PARAM id="plate" value="0.0"/>
       <PARAM id="predelay" value="5.0"/>
+      <PARAM id="sync" value="0.0"/>
+      <PARAM id="division" value="1.0"/>
       <PARAM id="decay" value="0.8"/>
       <PARAM id="size" value="70.0"/>
       <PARAM id="damping" value="12000.0"/>
+      <PARAM id="lowdecay" value="80.0"/>
+      <PARAM id="lowfreq" value="300.0"/>
       <PARAM id="bandwidth" value="16000.0"/>
-      <PARAM id="lowcut" value="300.0"/>
       <PARAM id="diffusion" value="75.0"/>
+      <PARAM id="modrate" value="0.8"/>
       <PARAM id="modulation" value="20.0"/>
+      <PARAM id="drive" value="0.0"/>
+      <PARAM id="ducking" value="0.0"/>
+      <PARAM id="freeze" value="0.0"/>
+      <PARAM id="lowcut" value="300.0"/>
+      <PARAM id="highcut" value="20000.0"/>
       <PARAM id="width" value="100.0"/>
       <PARAM id="mix" value="14.0"/>
       <EXTRA/>

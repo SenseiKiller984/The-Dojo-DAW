@@ -5,15 +5,23 @@
              description="A finished, radio-ready pop vocal: a gentle expander, clean low end, less mud, forward presence and air, even compression, de-essing, a ducked quarter-note echo and a smooth plate.">
   <DEVICE key="builtin:expander" name="Expander">
     <DOJO_DEVICE type="builtin:expander" version="1">
+      <PARAM id="mode" value="0.0"/>
       <PARAM id="threshold" value="-55.0"/>
       <PARAM id="ratio" value="3.0"/>
       <PARAM id="range" value="20.0"/>
       <PARAM id="knee" value="6.0"/>
+      <PARAM id="hysteresis" value="3.0"/>
       <PARAM id="attack" value="1.0"/>
+      <PARAM id="hold" value="40.0"/>
       <PARAM id="release" value="200.0"/>
+      <PARAM id="detect" value="0.0"/>
+      <PARAM id="lookahead" value="0.0"/>
       <PARAM id="sidechain" value="0.0"/>
       <PARAM id="keylow" value="100.0"/>
+      <PARAM id="keyhigh" value="20000.0"/>
+      <PARAM id="keylisten" value="0.0"/>
       <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="100.0"/>
       <EXTRA/>
     </DOJO_DEVICE>
   </DEVICE>
@@ -59,11 +67,15 @@
   <DEVICE key="builtin:deesser" name="De-Esser">
     <DOJO_DEVICE type="builtin:deesser" version="1">
       <PARAM id="freq" value="6500.0"/>
+      <PARAM id="high" value="12000.0"/>
+      <PARAM id="band" value="0.0"/>
       <PARAM id="threshold" value="-22.0"/>
       <PARAM id="range" value="8.0"/>
+      <PARAM id="detect" value="0.0"/>
       <PARAM id="mode" value="0.0"/>
-      <PARAM id="detection" value="0.0"/>
       <PARAM id="release" value="60.0"/>
+      <PARAM id="lookahead" value="0.0"/>
+      <PARAM id="stereo" value="0.0"/>
       <PARAM id="listen" value="0.0"/>
       <EXTRA/>
     </DOJO_DEVICE>
@@ -101,14 +113,24 @@
   </DEVICE>
   <DEVICE key="builtin:plate" name="Vocal Plate">
     <DOJO_DEVICE type="builtin:plate" version="1">
+      <PARAM id="plate" value="0.0"/>
       <PARAM id="predelay" value="25.0"/>
+      <PARAM id="sync" value="0.0"/>
+      <PARAM id="division" value="1.0"/>
       <PARAM id="decay" value="1.8"/>
       <PARAM id="size" value="100.0"/>
       <PARAM id="damping" value="9000.0"/>
+      <PARAM id="lowdecay" value="90.0"/>
+      <PARAM id="lowfreq" value="250.0"/>
       <PARAM id="bandwidth" value="14000.0"/>
-      <PARAM id="lowcut" value="250.0"/>
       <PARAM id="diffusion" value="70.0"/>
+      <PARAM id="modrate" value="0.8"/>
       <PARAM id="modulation" value="30.0"/>
+      <PARAM id="drive" value="0.0"/>
+      <PARAM id="ducking" value="0.0"/>
+      <PARAM id="freeze" value="0.0"/>
+      <PARAM id="lowcut" value="250.0"/>
+      <PARAM id="highcut" value="20000.0"/>
       <PARAM id="width" value="100.0"/>
       <PARAM id="mix" value="16.0"/>
       <EXTRA/>

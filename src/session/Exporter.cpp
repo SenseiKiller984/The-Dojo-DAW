@@ -176,11 +176,15 @@ juce::String Exporter::start(const ExportSettings& settings)
     progress_ = 0.0;
     speed_ = project_.getSession().getSpeed();
 
-    // Make sure the engine renders the current state of the document.
-    project_.getCompiler().rebuildNow();
-    latency_ = project_.getCompiler().getTotalLatency();
-    stemLatency_ = project_.getCompiler().getMasterInputLatency();
-    graphSerial_ = controller_.getLatestGraphSerial();
+    // Makes sure the engine renders the current state of the document, and measures its latency.
+    const auto compile = [this]
+    {
+        project_.getCompiler().rebuildNow();
+        latency_ = project_.getCompiler().getTotalLatency();
+        stemLatency_ = project_.getCompiler().getMasterInputLatency();
+        graphSerial_ = controller_.getLatestGraphSerial();
+    };
+    compile();
     previousPosition_ = engine.collectTelemetry().playheadSeconds;
     controller_.stop();
 
@@ -233,8 +237,14 @@ juce::String Exporter::start(const ExportSettings& settings)
         return "The audio device did not respond; try again.";
     }
 
+    // Devices render in their offline mode (some oversample more): their latency can change, so the
+    // graph is compiled again and measured with it before the files are set up.
+    project_.getDevices().setNonRealtime(true);
+    compile();
+
     if (auto error = prepareTargets(sampleRate_, false); error.isNotEmpty())
     {
+        project_.getDevices().setNonRealtime(false);
         engine.endOfflineRender();
         if (preparedForExport_)
             engine.release();
@@ -242,7 +252,6 @@ juce::String Exporter::start(const ExportSettings& settings)
         return error;
     }
 
-    project_.getDevices().setNonRealtime(true);
     running_ = true;
     startThread(juce::Thread::Priority::high);
     startTimerHz(30); // keeps the controller pumping graphs while the export thread waits for them

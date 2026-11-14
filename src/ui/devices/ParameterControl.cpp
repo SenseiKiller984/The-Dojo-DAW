@@ -228,9 +228,12 @@ void ParameterControl::finishValueEditor(bool apply)
 
     if (apply && text.isNotEmpty())
     {
-        // Native parameters need a number in the text; hosted plug-ins parse their own strings.
+        // Native parameters need a number in the text, or a word the parameter itself shows (such
+        // as "Off", "Full" or "-inf"); hosted plug-ins parse their own strings.
         const bool native = dynamic_cast<juce::RangedAudioParameter*>(&parameter_) != nullptr;
-        if (!native || devices::parseParameterNumber(text, parameter_.getLabel()).has_value())
+        const auto shownAs = [this](const juce::String& typed)
+        { return parameter_.getText(juce::jlimit(0.0f, 1.0f, parameter_.getValueForText(typed)), 32).trim().startsWithIgnoreCase(typed); };
+        if (!native || devices::parseParameterNumber(text, parameter_.getLabel()).has_value() || shownAs(text))
         {
             const float normalised = juce::jlimit(0.0f, 1.0f, parameter_.getValueForText(text));
             setFromUser(normalised);
