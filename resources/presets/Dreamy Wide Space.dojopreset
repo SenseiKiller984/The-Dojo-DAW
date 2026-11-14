@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Dreamy Wide Space: a built-in device chain (Clean Lows > Ensemble > Dream Echo > Big Hall > Wider). -->
+<DOJO_PRESET version="1" name="Dreamy Wide Space" category="General" chain="1"
+             description="Turns almost anything into a wide, dreamy wash: clean lows, an ensemble chorus, a filtered, wobbling ping-pong echo, a long hall and extra stereo width.">
+  <DEVICE key="builtin:eq" name="Clean Lows">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="120.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="0.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="500"/>
+      <PARAM id="band2Gain" value="0.0"/>
+      <PARAM id="band2Q" value="0.71"/>
+      <PARAM id="band3On" value="0.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="2500.0"/>
+      <PARAM id="band3Gain" value="0.0"/>
+      <PARAM id="band3Q" value="0.71"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="8000.0"/>
+      <PARAM id="band4Gain" value="2.0"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="5.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:chorus" name="Ensemble">
+    <DOJO_DEVICE type="builtin:chorus" version="1">
+      <PARAM id="mode" value="1.0"/>
+      <PARAM id="rate" value="0.5"/>
+      <PARAM id="amount" value="45.0"/>
+      <PARAM id="feedback" value="0.0"/>
+      <PARAM id="width" value="160.0"/>
+      <PARAM id="warmth" value="30.0"/>
+      <PARAM id="highpass" value="150.0"/>
+      <PARAM id="shape" value="0.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="40.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:echo" name="Dream Echo">
+    <DOJO_DEVICE type="builtin:echo" version="1">
+      <PARAM id="mode" value="1.0"/>
+      <PARAM id="sync" value="1.0"/>
+      <PARAM id="divl" value="9.0"/>
+      <PARAM id="divr" value="9.0"/>
+      <PARAM id="timel" value="375.0"/>
+      <PARAM id="timer" value="250.0"/>
+      <PARAM id="link" value="1.0"/>
+      <PARAM id="feedback" value="45.0"/>
+      <PARAM id="invert" value="0.0"/>
+      <PARAM id="input" value="0.0"/>
+      <PARAM id="filter" value="1.0"/>
+      <PARAM id="hp" value="300.0"/>
+      <PARAM id="lp" value="4000.0"/>
+      <PARAM id="res" value="15.0"/>
+      <PARAM id="modrate" value="0.4"/>
+      <PARAM id="moddepth" value="20.0"/>
+      <PARAM id="modfilter" value="0.0"/>
+      <PARAM id="drive" value="0.0"/>
+      <PARAM id="noise" value="0.0"/>
+      <PARAM id="wobble" value="0.0"/>
+      <PARAM id="duck" value="0.0"/>
+      <PARAM id="reverb" value="30.0"/>
+      <PARAM id="reverbdecay" value="50.0"/>
+      <PARAM id="reverbloc" value="1.0"/>
+      <PARAM id="width" value="120.0"/>
+      <PARAM id="mix" value="30.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:reverb" name="Big Hall">
+    <DOJO_DEVICE type="builtin:reverb" version="1">
+      <PARAM id="size" value="0.9"/>
+      <PARAM id="decay" value="6.0"/>
+      <PARAM id="damping" value="0.5"/>
+      <PARAM id="predelay" value="40.0"/>
+      <PARAM id="lowcut" value="200.0"/>
+      <PARAM id="width" value="1.0"/>
+      <PARAM id="mix" value="35.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:utility" name="Wider">
+    <DOJO_DEVICE type="builtin:utility" version="1">
+      <PARAM id="gain" value="0.0"/>
+      <PARAM id="width" value="140.0"/>
+      <PARAM id="mono" value="0.0"/>
+      <PARAM id="bassmono" value="0.0"/>
+      <PARAM id="bassfreq" value="120"/>
+      <PARAM id="phasel" value="0.0"/>
+      <PARAM id="phaser" value="0.0"/>
+      <PARAM id="channel" value="0.0"/>
+      <PARAM id="balance" value="0.0"/>
+      <PARAM id="mute" value="0.0"/>
+      <PARAM id="dc" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

@@ -1,0 +1,1128 @@
+#include "session/GraphCompiler.h"
+
+#include "core/ModulationSource.h"
+
+#include "engine/dsp/ClipStretcher.h"
+
+#include <juce_audio_basics/juce_audio_basics.h>
+
+#include <algorithm>
+#include <cmath>
+#include <set>
+
+namespace dojo::session
+{
+namespace
+{
+double dbToGain(double db) { return juce::Decibels::decibelsToGain(db, kMinusInfinityDb); }
+
+/** Sum of the latencies of the active devices of a chain. */
+int chainLatency(const std::vector<engine::RenderDevice>& devices)
+{
+    int latency = 0;
+    for (const auto& d : devices)
+        if (d.node != nullptr && !d.node->isBypassed())
+            latency += std::max(0, d.node->getLatencySamples());
+    return latency;
+}
+
+/** Directed graph of "a feeds b" edges over graph indices, refusing edges that would close a loop. */
+class RoutingGraph
+{
+public:
+    explicit RoutingGraph(std::size_t size)
+        : feeds_(size)
+    {
+    }
+
+    bool tryAdd(int from, int to)
+    {
+        if (from == to || reaches(to, from))
+            return false;
+        feeds_[static_cast<std::size_t>(from)].push_back(to);
+        return true;
+    }
+
+private:
+    [[nodiscard]] bool reaches(int from, int target) const
+    {
+        std::vector<bool> seen(feeds_.size(), false);
+        std::vector<int> stack{from};
+        while (!stack.empty())
+        {
+            const int node = stack.back();
+            stack.pop_back();
+            if (node == target)
+                return true;
+            if (seen[static_cast<std::size_t>(node)])
+                continue;
+            seen[static_cast<std::size_t>(node)] = true;
+            for (const int next : feeds_[static_cast<std::size_t>(node)])
+                stack.push_back(next);
+        }
+        return false;
+    }
+
+    std::vector<std::vector<int>> feeds_;
+};
+
+/** Which file channel each channel of a multichannel track plays (see fileChannelFor); one chosen
+    channel plays from the centre (or left and right). */
+void mapClipChannels(engine::RenderClip& clip, const engine::ChannelLayout& track)
+{
+    clip.numOutputs = track.numChannels;
+    clip.channelMap.fill(-1);
+    for (int o = 0; o < track.numChannels && o < engine::kMaxChannels; ++o)
+    {
+        const int source = clip.sourceChannel >= 0 ? (fileChannelFor(1, track, o) >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : -1)
+                                                   : fileChannelFor(clip.numChannels, track, o);
+        clip.channelMap[static_cast<std::size_t>(o)] = static_cast<std::int8_t>(source);
+    }
+}
+
+void applyCrossfades(std::vector<engine::RenderClip>& clips)
+{
+    for (std::size_t i = 0; i + 1 < clips.size(); ++i)
+    {
+        auto& a = clips[i];
+        auto& b = clips[i + 1];
+        const double overlap = std::min(a.endSeconds, b.endSeconds) - b.startSeconds;
+        if (overlap <= 0.0)
+            continue;
+
+        if (a.fadeOutSeconds < overlap)
+        {
+            a.fadeOutSeconds = overlap;
+            a.fadeOutEqualPower = true;
+        }
+        if (b.fadeInSeconds < overlap)
+        {
+            b.fadeInSeconds = overlap;
+            b.fadeInEqualPower = true;
+        }
+    }
+}
+} // namespace
+
+//==================================================================================================
+// GraphBuilder
+
+int GraphBuilder::getSlot(std::uint32_t trackId) const
+{
+    const auto it = slots_.find(trackId);
+    return it != slots_.end() ? it->second : -1;
+}
+
+void GraphBuilder::setRenderFormat(double sampleRate, int maximumBlockSize)
+{
+    if (sampleRate > 0.0)
+        sampleRate_ = sampleRate;
+    if (maximumBlockSize > 0)
+        maxBlock_ = std::max(maximumBlockSize, 64);
+}
+
+int GraphBuilder::assignSlot(std::uint32_t trackId, std::vector<bool>& used, bool wide)
+{
+    if (const auto it = slots_.find(trackId); it != slots_.end())
+    {
+        if (!wide || it->second >= engine::kFirstWideSlot)
+            return it->second;
+        used[static_cast<std::size_t>(it->second)] = false; // it needs a wide slot now
+        slots_.erase(it);
+    }
+
+    const auto take = [&](int from, int to)
+    {
+        for (int slot = from; slot < to; ++slot)
+        {
+            if (!used[static_cast<std::size_t>(slot)])
+            {
+                used[static_cast<std::size_t>(slot)] = true;
+                slots_[trackId] = slot;
+                return slot;
+            }
+        }
+        return -1;
+    };
+
+    // Stereo tracks fill the stereo slots first (the wide ones are kept for multichannel signals).
+    int slot = wide ? take(engine::kFirstWideSlot, engine::kMaxTracks) : take(0, engine::kFirstWideSlot);
+    if (slot < 0 && !wide)
+        slot = take(engine::kFirstWideSlot, engine::kMaxTracks);
+    return slot; // -1: more tracks than the engine renders
+}
+
+std::shared_ptr<engine::ClipStretcher> GraphBuilder::getStretcher(std::uint32_t clipId, int numChannels)
+{
+    auto& stretcher = stretchers_[clipId];
+    if (stretcher == nullptr || std::abs(stretcher->getConfiguredSampleRate() - sampleRate_) > 1.0e-6 ||
+        stretcher->getMaximumBlockSize() < maxBlock_ || stretcher->getNumChannels() != std::clamp(numChannels, 2, engine::kMaxChannels))
+        stretcher = std::make_shared<engine::ClipStretcher>(numChannels, sampleRate_, maxBlock_);
+    return stretcher;
+}
+
+std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session, AudioAssetCache& assets,
+                                                         DeviceManager* devices)
+{
+    using engine::TrackKind;
+
+    // Inactive tracks (and everything inside an inactive folder) are left out entirely: they are not
+    // rendered and their devices are not run.
+    // VCA Masters and Master Faders only control other tracks: they are not rendered themselves.
+    std::vector<juce::ValueTree> allTracks;
+    std::vector<juce::ValueTree> masterFaders;
+    for (const auto& t : session.getAllTracks())
+    {
+        if (!Session::isEffectivelyActive(t))
+            continue;
+        if (isRendered(track::getKind(t)))
+            allTracks.push_back(t);
+        else if (track::getKind(t) == TrackKind::masterFader)
+            masterFaders.push_back(t);
+    }
+
+    // --- Channel layouts: a track's own (stereo unless it is a multichannel audio track or bus) and
+    // its destination's (the bus it feeds or the master) --------------------------------------------
+    const auto masterLayout = getLayout(session.getMasterFormat());
+    const auto layoutOfTrack = [](const juce::ValueTree& t)
+    {
+        const auto format = track::getFormat(t);
+        return isMultichannel(format) ? getLayout(format) : engine::ChannelLayout::stereo();
+    };
+    const auto mayBeWide = [&](const juce::ValueTree& t)
+    {
+        // Its own layout, its destination's, or a fallback destination's (folder or master).
+        if (layoutOfTrack(t).isMultichannel() || masterLayout.isMultichannel())
+            return true;
+        if (const auto dest = session.getDestination(t); dest.isValid() && layoutOfTrack(dest).isMultichannel())
+            return true;
+        const auto folderTree = Session::getParentFolder(t);
+        return folderTree.isValid() && layoutOfTrack(folderTree).isMultichannel();
+    };
+
+    // --- Slots: forget tracks that no longer exist, keep the rest stable ----------------------------
+    std::set<std::uint32_t> liveIds;
+    for (const auto& t : allTracks)
+        liveIds.insert(track::getId(t));
+
+    std::vector<bool> used(static_cast<std::size_t>(engine::kMaxTracks), false);
+    for (auto it = slots_.begin(); it != slots_.end();)
+    {
+        if (liveIds.count(it->first) == 0)
+        {
+            it = slots_.erase(it);
+        }
+        else
+        {
+            used[static_cast<std::size_t>(it->second)] = true;
+            ++it;
+        }
+    }
+
+    // --- Graph indices --------------------------------------------------------------------------
+    std::vector<juce::ValueTree> trees;
+    std::map<std::uint32_t, int> indexOfId;
+    std::vector<int> slotOf;
+    for (const auto& t : allTracks)
+    {
+        const int slot = assignSlot(track::getId(t), used, track::getKind(t) != TrackKind::midi && mayBeWide(t));
+        if (slot < 0)
+            continue;
+        indexOfId[track::getId(t)] = static_cast<int>(trees.size());
+        trees.push_back(t);
+        slotOf.push_back(slot);
+    }
+
+    const auto count = trees.size();
+    const auto indexOf = [&](std::uint32_t id)
+    {
+        const auto it = indexOfId.find(id);
+        return it != indexOfId.end() ? it->second : -1;
+    };
+
+    auto graph = std::make_unique<engine::RenderGraph>();
+    graph->tempo = session.getTempo();
+    graph->speed = session.getSpeed();
+    graph->loopEnabled = session.isLoopEnabled();
+    graph->loopStart = session.getLoopStart();
+    graph->loopEnd = session.getLoopEnd();
+    graph->hasTransportSettings = true;
+    graph->arrangementEnd = session.getEndTime();
+    graph->inputOnlyMonitoring = session.isInputOnlyMonitoring();
+    const auto [punchStart, punchEnd] = session.getPunchWindow();
+    graph->punchStart = punchStart;
+    graph->punchEnd = std::isfinite(punchEnd) ? punchEnd : 1.0e300;
+    graph->masterGain = dbToGain(session.getMasterVolumeDb());
+    graph->tracks.resize(count);
+
+    const double globalTranspose = session.getTranspose();
+    const double speed = session.getSpeed();
+    // With "keep pitch", varispeed must not change the pitch: transpose audio back down.
+    const double speedCompensation = session.getKeepPitch() ? -12.0 * std::log2(speed) : 0.0;
+
+    // --- Device chains (needed first: sidechains are routing edges) ------------------------------
+    std::vector<std::vector<std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>>> chainNodes(count);
+    if (devices != nullptr)
+    {
+        for (std::size_t i = 0; i < count; ++i)
+            for (const auto& d : Session::getDevices(trees[i]))
+                if (auto node = devices->getNode(d))
+                    chainNodes[i].emplace_back(d, std::move(node));
+    }
+
+    // --- Routing edges, loops refused --------------------------------------------------------------
+    RoutingGraph routing(count);
+    std::vector<int> destination(count, -1); // -1 = master
+    std::vector<std::vector<int>> busSources(count);
+    std::vector<int> auxSource(count, -1);
+    std::vector<std::vector<std::pair<int, juce::ValueTree>>> incomingSends(count); // (source, SEND tree)
+    std::vector<std::vector<int>> sidechainOf(count); // per device, the source index (-1 = none)
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        if (track::getKind(trees[i]) == TrackKind::midi)
+        {
+            destination[i] = -2; // MIDI only: no audio output
+            continue;
+        }
+        const auto dest = session.getDestination(trees[i]);
+        int target = dest.isValid() ? indexOf(track::getId(dest)) : -1;
+        if (dest.isValid() && target < 0)
+        {
+            destination[i] = -2; // routed to an inactive bus: its output goes nowhere
+            continue;
+        }
+        if (target >= 0 && !routing.tryAdd(static_cast<int>(i), target))
+        {
+            // The assignment would close a loop: fall back to the folder, then to the master.
+            const auto folderTree = Session::getParentFolder(trees[i]);
+            target = folderTree.isValid() ? indexOf(track::getId(folderTree)) : -1;
+            if (target >= 0 && !routing.tryAdd(static_cast<int>(i), target))
+                target = -1;
+        }
+        destination[i] = target;
+        if (target >= 0)
+            busSources[static_cast<std::size_t>(target)].push_back(static_cast<int>(i));
+    }
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        if (track::getKind(trees[i]) != TrackKind::bus)
+            continue;
+        const int source = indexOf(track::getAuxSource(trees[i]));
+        if (source >= 0 && track::getKind(trees[static_cast<std::size_t>(source)]) == TrackKind::instrument &&
+            routing.tryAdd(source, static_cast<int>(i)))
+            auxSource[i] = source;
+    }
+
+    // MIDI tracks into instrument tracks.
+    std::vector<std::vector<int>> midiSources(count);
+    std::vector<int> midiTargetOf(count, -1);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        if (track::getKind(trees[i]) != TrackKind::midi)
+            continue;
+        const int target = indexOf(track::getMidiTarget(trees[i]));
+        if (target >= 0 && track::getKind(trees[static_cast<std::size_t>(target)]) == TrackKind::instrument &&
+            routing.tryAdd(static_cast<int>(i), target))
+        {
+            midiSources[static_cast<std::size_t>(target)].push_back(static_cast<int>(i));
+            midiTargetOf[i] = target;
+        }
+    }
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        for (const auto& s : Session::getSends(trees[i]))
+        {
+            const int target = indexOf(send::getTarget(s));
+            if (target < 0 || track::getKind(trees[static_cast<std::size_t>(target)]) != TrackKind::bus)
+                continue;
+            if (routing.tryAdd(static_cast<int>(i), target))
+                incomingSends[static_cast<std::size_t>(target)].emplace_back(static_cast<int>(i), s);
+        }
+    }
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        for (const auto& [deviceTree, node] : chainNodes[i])
+        {
+            int source = -1;
+            if (const auto id = device::getSidechain(deviceTree); id != 0 && node->hasSidechainInput())
+            {
+                source = indexOf(id);
+                if (source >= 0 && !routing.tryAdd(source, static_cast<int>(i)))
+                    source = -1;
+            }
+            sidechainOf[i].push_back(source);
+        }
+    }
+
+    std::vector<engine::ChannelLayout> layouts(count);
+    std::vector<engine::ChannelLayout> outputLayouts(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        layouts[i] = layoutOfTrack(trees[i]);
+        outputLayouts[i] = destination[i] >= 0   ? layoutOfTrack(trees[static_cast<std::size_t>(destination[i])])
+                           : destination[i] == -1 ? masterLayout
+                                                  : layouts[i];
+    }
+
+    // Instances for the channel groups of a multichannel signal.
+    const auto addCompanions = [&](engine::RenderDevice& device, const juce::ValueTree& deviceTree, const engine::ChannelGroups& groups)
+    {
+        if (devices == nullptr || groups.count <= 1)
+            return;
+        const auto companions = devices->getCompanions(deviceTree, groups.count - 1);
+        for (std::size_t k = 0; k < companions.size() && k < device.companions.size(); ++k)
+        {
+            device.companions[k] = companions[k].get();
+            graph->keepAlive.push_back(companions[k]);
+        }
+    };
+
+    // --- Dependency levels -------------------------------------------------------------------------
+    std::vector<std::vector<int>> dependsOn(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        auto& deps = dependsOn[i];
+        deps.insert(deps.end(), busSources[i].begin(), busSources[i].end());
+        for (const auto& [source, s] : incomingSends[i])
+            deps.push_back(source);
+        if (auxSource[i] >= 0)
+            deps.push_back(auxSource[i]);
+        deps.insert(deps.end(), midiSources[i].begin(), midiSources[i].end());
+        for (const int source : sidechainOf[i])
+            if (source >= 0)
+                deps.push_back(source);
+    }
+
+    std::vector<int> level(count, -1);
+    const std::function<int(int)> levelOf = [&](int index) -> int
+    {
+        auto& l = level[static_cast<std::size_t>(index)];
+        if (l >= 0)
+            return l;
+        l = 0; // edges are acyclic (enforced above), this just guards against surprises
+        int result = 0;
+        for (const int dep : dependsOn[static_cast<std::size_t>(index)])
+            result = std::max(result, levelOf(dep) + 1);
+        l = result;
+        return result;
+    };
+
+    int numLevels = 0;
+    for (std::size_t i = 0; i < count; ++i)
+        numLevels = std::max(numLevels, levelOf(static_cast<int>(i)) + 1);
+
+    graph->levels.resize(static_cast<std::size_t>(numLevels));
+    for (std::size_t i = 0; i < count; ++i)
+        graph->levels[static_cast<std::size_t>(level[i])].push_back(static_cast<int>(i));
+
+    // --- VCA Masters: gains, mutes and solos they pass down to their members ----------------------
+    struct VcaEffect
+    {
+        std::vector<engine::RenderTrack::VcaGain> gains;
+        bool muted = false;
+        bool soloed = false;
+    };
+    std::vector<VcaEffect> vcaOf(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        std::set<std::uint32_t> visited; // (nested VCAs; a loop just stops)
+        for (auto v = session.findTrack(track::getVca(trees[i])); v.isValid() && track::getKind(v) == TrackKind::vca
+                                                                 && visited.insert(track::getId(v)).second;
+             v = session.findTrack(track::getVca(v)))
+        {
+            if (!Session::isEffectivelyActive(v))
+                continue;
+            engine::RenderTrack::VcaGain gain;
+            gain.gain = dbToGain(track::getVolumeDb(v));
+            for (const auto& lane : Session::getAutomationLanes(v))
+                if (automation::getTarget(lane) == automation::volumeTarget())
+                    gain.automation = automation::toCurve(lane);
+            vcaOf[i].gains.push_back(std::move(gain));
+            vcaOf[i].muted = vcaOf[i].muted || track::isMuted(v);
+            vcaOf[i].soloed = vcaOf[i].soloed || track::isSoloed(v);
+        }
+    }
+    const auto isSoloed = [&](std::size_t i) { return track::isSoloed(trees[i]) || vcaOf[i].soloed; };
+
+    // --- Mute / solo across the routing tree ------------------------------------------------------
+    bool anySoloed = false;
+    for (std::size_t i = 0; i < count; ++i)
+        anySoloed = anySoloed || isSoloed(i);
+
+    std::vector<bool> soloedUpstream(count, false);   // this track or something feeding it is soloed
+    std::vector<bool> soloedDownstream(count, false); // this track or something it feeds is soloed
+    if (anySoloed)
+    {
+        // Levels give a topological order: sources before the busses they feed.
+        for (const auto& lvl : graph->levels)
+            for (const int i : lvl)
+            {
+                bool up = isSoloed(static_cast<std::size_t>(i));
+                for (const int dep : dependsOn[static_cast<std::size_t>(i)])
+                    up = up || soloedUpstream[static_cast<std::size_t>(dep)];
+                soloedUpstream[static_cast<std::size_t>(i)] = up;
+            }
+
+        for (auto lvl = graph->levels.rbegin(); lvl != graph->levels.rend(); ++lvl)
+            for (const int i : *lvl)
+            {
+                const auto ui = static_cast<std::size_t>(i);
+                bool down = isSoloed(ui);
+                if (destination[ui] >= 0)
+                    down = down || soloedDownstream[static_cast<std::size_t>(destination[ui])];
+                if (midiTargetOf[ui] >= 0)
+                    down = down || soloedDownstream[static_cast<std::size_t>(midiTargetOf[ui])];
+                for (std::size_t b = 0; b < count; ++b)
+                    for (const auto& [source, s] : incomingSends[b])
+                        if (source == i)
+                            down = down || soloedDownstream[b];
+                soloedDownstream[ui] = down;
+            }
+    }
+
+    // --- Tracks -------------------------------------------------------------------------------------
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const auto& t = trees[i];
+        auto& rt = graph->tracks[i];
+
+        rt.trackId = track::getId(t);
+        rt.slot = slotOf[i];
+        rt.kind = track::getKind(t);
+        rt.mono = rt.kind != TrackKind::instrument && track::getFormat(t) == TrackFormat::mono;
+        rt.volume = dbToGain(track::getVolumeDb(t));
+        rt.pan = track::getPan(t);
+        rt.audible = !track::isMuted(t) && !vcaOf[i].muted && (!anySoloed || soloedUpstream[i] || soloedDownstream[i]);
+        rt.vcaGains = vcaOf[i].gains;
+        rt.midiSources = midiSources[i];
+        rt.phaseInverted = track::isPhaseInverted(t);
+        rt.outputIndex = destination[i];
+        rt.layout = layouts[i];
+        rt.outputLayout = outputLayouts[i];
+        rt.groups = engine::channelGroupsOf(rt.layout);
+        rt.outputGroups = engine::channelGroupsOf(rt.outputLayout);
+        rt.panFrontRear = track::getPanFrontRear(t);
+        rt.panCentre = track::getPanCentre(t);
+
+        // Devices.
+        for (std::size_t d = 0; d < chainNodes[i].size(); ++d)
+        {
+            engine::RenderDevice device;
+            device.node = chainNodes[i][d].second.get();
+            device.sidechainSource = sidechainOf[i][d];
+            if (rt.layout.isMultichannel())
+                addCompanions(device, chainNodes[i][d].first, rt.groups);
+            rt.devices.push_back(device);
+            graph->keepAlive.push_back(chainNodes[i][d].second);
+        }
+
+        // Automation.
+        for (const auto& lane : Session::getAutomationLanes(t))
+        {
+            const auto target = automation::getTarget(lane);
+            std::uint32_t id = 0;
+            int parameterIndex = 0;
+
+            if (target == automation::volumeTarget())
+            {
+                rt.volumeAutomation = automation::toCurve(lane);
+            }
+            else if (target == automation::panTarget())
+            {
+                rt.panAutomation = automation::toCurve(lane);
+            }
+            else if (automation::parseParameterTarget(target, id, parameterIndex))
+            {
+                for (const auto& [deviceTree, node] : chainNodes[i])
+                {
+                    if (device::getId(deviceTree) != id)
+                        continue;
+                    const auto& parameters = node->getProcessor().getParameters();
+                    if (parameterIndex < parameters.size())
+                        rt.parameterLanes.push_back({parameters[parameterIndex], automation::toCurve(lane)});
+                }
+            }
+        }
+
+        // Sources.
+        const double trackPitch = track::getPitch(t);
+        const double trackSpeed = std::max(kMinStretch, track::getSpeed(t));
+
+        if (rt.kind == TrackKind::audio)
+        {
+            for (const auto& c : t)
+            {
+                if (!c.hasType(ids::clip))
+                    continue;
+
+                const auto file = clip::getFile(c);
+                const auto asset = assets.find(file);
+
+                if (asset == nullptr)
+                {
+                    if (!assets.isLoading(file))
+                        assets.request(file, {});
+                    continue;
+                }
+
+                engine::RenderClip rc;
+                rc.startSeconds = clip::getStart(c);
+                rc.endSeconds = clip::getEnd(c);
+                rc.sourceOffsetSeconds = clip::getOffset(c);
+                rc.fadeInSeconds = clip::getFadeIn(c);
+                rc.fadeOutSeconds = clip::getFadeOut(c);
+                rc.gain = clip::isGainBypassed(c) ? 1.0 : dbToGain(clip::getGainDb(c)); // (bypassed: the setting is kept)
+                rc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
+                rc.stretch = std::max(kMinStretch, clip::getStretch(c)) / trackSpeed;
+                rc.pitchSemitones = clip::getPitch(c) + trackPitch + globalTranspose + speedCompensation;
+                rc.numChannels = asset->numChannels;
+                rc.sourceChannel = clip::getSourceChannel(c);
+                rc.sourceLength = asset->numFrames;
+                rc.sourceSampleRate = asset->sampleRate;
+                if (rt.layout.isMultichannel())
+                    mapClipChannels(rc, rt.layout);
+
+                if (asset->isStreamed())
+                    rc.streamed = asset->streamed.get();
+                else
+                    rc.channels = asset->audio.getArrayOfReadPointers();
+
+                // Time-stretch (duration without pitch) and pitch-shift go through a persistent
+                // stretcher. Varispeed alone is plain resampling in the clip renderer.
+                if (std::abs(rc.pitchSemitones) > 1.0e-6 || std::abs(rc.stretch - 1.0) > 1.0e-9)
+                {
+                    auto stretcher = getStretcher(clip::getId(c), rc.sourceChannel >= 0 ? 1 : rc.numChannels);
+                    rc.stretcher = stretcher.get();
+                    graph->keepAlive.push_back(stretcher);
+                }
+
+                rt.clips.push_back(rc);
+                graph->keepAlive.push_back(asset);
+            }
+
+            std::sort(rt.clips.begin(), rt.clips.end(),
+                      [](const auto& a, const auto& b) { return a.startSeconds < b.startSeconds; });
+            applyCrossfades(rt.clips);
+
+            rt.inputChannel = track::getInput(t);
+            rt.inputStereo = track::isInputStereo(t);
+            rt.inputCount = rt.layout.isMultichannel() ? rt.layout.numChannels : 0;
+            rt.monitor = track::getMonitor(t);
+            rt.armed = track::isArmed(t);
+        }
+        else if (holdsMidi(rt.kind))
+        {
+            const int transpose = juce::roundToInt(globalTranspose + trackPitch);
+
+            for (const auto& c : t)
+            {
+                if (!c.hasType(ids::midiClip))
+                    continue;
+
+                engine::RenderMidiClip mc;
+                mc.startSeconds = clip::getStart(c);
+                mc.endSeconds = clip::getEnd(c);
+                mc.contentStartBeat = clip::getOffset(c);
+                mc.rate = trackSpeed;
+                mc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
+
+                for (const auto& n : c)
+                {
+                    if (n.hasType(ids::note))
+                    {
+                        engine::RenderNote rn;
+                        rn.startBeat = note::getStart(n);
+                        rn.endBeat = note::getEnd(n);
+                        rn.note = juce::jlimit(0, 127, note::getNote(n) + transpose);
+                        rn.velocity = note::getVelocity(n);
+                        rn.channel = note::getChannel(n);
+                        mc.notes.push_back(rn);
+                    }
+                    else if (n.hasType(ids::control))
+                    {
+                        engine::RenderControl control;
+                        control.beat = n.getProperty(ids::beat, 0.0);
+                        control.controller = n.getProperty(ids::controller, 1);
+                        control.value = static_cast<float>(static_cast<double>(n.getProperty(ids::value, 0.0)));
+                        control.channel = n.getProperty(ids::channel, 1);
+                        mc.controls.push_back(control);
+                    }
+                }
+
+                std::sort(mc.notes.begin(), mc.notes.end(),
+                          [](const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
+                std::sort(mc.controls.begin(), mc.controls.end(),
+                          [](const auto& a, const auto& b) { return a.beat < b.beat; });
+                rt.midiClips.push_back(std::move(mc));
+            }
+
+            std::sort(rt.midiClips.begin(), rt.midiClips.end(),
+                      [](const auto& a, const auto& b) { return a.startSeconds < b.startSeconds; });
+
+            rt.monitor = track::getMonitor(t);
+            rt.armed = track::isArmed(t);
+            rt.receivesLiveMidi = rt.armed || rt.monitor == engine::MonitorMode::always;
+        }
+        else // bus
+        {
+            rt.busSources = busSources[i];
+            rt.auxSourceIndex = auxSource[i];
+            rt.auxChannel = track::getAuxChannel(t);
+            rt.auxMatrix = engine::conversionMatrix(engine::ChannelLayout::stereo(), rt.layout);
+
+            for (const auto& [source, s] : incomingSends[i])
+            {
+                engine::RenderSend rs;
+                rs.sendId = send::getId(s);
+                rs.sourceIndex = source;
+                rs.gain = dbToGain(send::getGainDb(s));
+                rs.preFader = send::isPreFader(s);
+
+                const auto sendTarget = automation::sendTarget(send::getId(s));
+                for (const auto& lane : Session::getAutomationLanes(trees[static_cast<std::size_t>(source)]))
+                    if (automation::getTarget(lane) == sendTarget)
+                        rs.gainAutomation = automation::toCurve(lane);
+
+                // The source's channels (its own before the fader, its destination's after) into ours.
+                const auto& from = rs.preFader ? layouts[static_cast<std::size_t>(source)] : outputLayouts[static_cast<std::size_t>(source)];
+                rs.convert = from != rt.layout;
+                if (rs.convert)
+                    rs.matrix = engine::conversionMatrix(from, rt.layout);
+
+                if (rs.preFader)
+                    graph->tracks[static_cast<std::size_t>(source)].needsPreFaderCopy = true;
+
+                rt.sends.push_back(std::move(rs));
+            }
+        }
+    }
+
+    // Live MIDI reaches an instrument through an armed MIDI track playing it, not directly as well
+    // (every note would sound twice).
+    for (auto& rt : graph->tracks)
+        for (const int source : rt.midiSources)
+            if (graph->tracks[static_cast<std::size_t>(source)].receivesLiveMidi)
+                rt.receivesLiveMidi = false;
+
+    // Pre-fader flags were possibly set on tracks built earlier; make sure they stick for later ones.
+    for (std::size_t b = 0; b < count; ++b)
+        for (const auto& [source, s] : incomingSends[b])
+            if (send::isPreFader(s))
+                graph->tracks[static_cast<std::size_t>(source)].needsPreFaderCopy = true;
+
+    // --- Master ---------------------------------------------------------------------------------------
+    for (std::size_t i = 0; i < count; ++i)
+        if (destination[i] == -1)
+            graph->masterSources.push_back(static_cast<int>(i));
+
+    graph->masterLayout = masterLayout;
+    graph->masterGroups = engine::channelGroupsOf(masterLayout);
+    graph->masterFoldDown = engine::conversionMatrix(masterLayout, engine::ChannelLayout::stereo());
+
+    const auto masterTree = session.getMaster();
+    if (devices != nullptr && masterTree.isValid())
+    {
+        for (const auto& d : Session::getDevices(masterTree))
+        {
+            auto node = devices->getNode(d);
+            if (node == nullptr)
+                continue;
+
+            engine::RenderDevice device;
+            device.node = node.get();
+            if (const auto id = device::getSidechain(d); id != 0 && node->hasSidechainInput())
+                device.sidechainSource = indexOf(id);
+            if (masterLayout.isMultichannel())
+                addCompanions(device, d, graph->masterGroups);
+            graph->masterDevices.push_back(device);
+            graph->keepAlive.push_back(node);
+        }
+    }
+
+    if (masterTree.isValid())
+    {
+        for (const auto& lane : Session::getAutomationLanes(masterTree))
+        {
+            const auto target = automation::getTarget(lane);
+            std::uint32_t id = 0;
+            int parameterIndex = 0;
+
+            if (target == automation::volumeTarget())
+            {
+                graph->masterVolumeAutomation = automation::toCurve(lane);
+            }
+            else if (automation::parseParameterTarget(target, id, parameterIndex))
+            {
+                for (const auto& device : graph->masterDevices)
+                {
+                    const auto deviceTree = session.findDevice(id);
+                    if (!deviceTree.isValid() || devices == nullptr || devices->findNode(id).get() != device.node)
+                        continue;
+                    const auto& parameters = device.node->getProcessor().getParameters();
+                    if (parameterIndex < parameters.size())
+                        graph->masterParameterLanes.push_back({parameters[parameterIndex], automation::toCurve(lane)});
+                }
+            }
+        }
+    }
+
+    // --- Master Faders: the main output's, and those on busses (one per path; the first wins) ---------
+    std::set<std::uint32_t> pathsTaken;
+    for (const auto& fader : masterFaders)
+    {
+        const auto busId = track::getControlledBus(fader);
+        const int busIndex = busId != 0 ? indexOf(busId) : -1;
+        if ((busId != 0 && (busIndex < 0 || track::getKind(trees[static_cast<std::size_t>(busIndex)]) != TrackKind::bus))
+            || !pathsTaken.insert(busId).second)
+            continue;
+
+        engine::AutomationCurve volumeCurve;
+        std::vector<engine::RenderDevice> chain;
+        std::vector<engine::ParameterLane> lanes;
+        // Its post-fader devices run on the channels of the path it controls.
+        const auto& pathGroups = busIndex < 0 ? graph->masterGroups : graph->tracks[static_cast<std::size_t>(busIndex)].outputGroups;
+        if (devices != nullptr)
+        {
+            std::vector<std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>> nodes;
+            for (const auto& d : Session::getDevices(fader))
+                if (auto node = devices->getNode(d))
+                {
+                    engine::RenderDevice device;
+                    device.node = node.get();
+                    addCompanions(device, d, pathGroups);
+                    chain.push_back(device);
+                    graph->keepAlive.push_back(node);
+                    nodes.emplace_back(d, std::move(node));
+                }
+            for (const auto& lane : Session::getAutomationLanes(fader))
+            {
+                std::uint32_t id = 0;
+                int parameterIndex = 0;
+                if (!automation::parseParameterTarget(automation::getTarget(lane), id, parameterIndex))
+                    continue;
+                for (const auto& [deviceTree, node] : nodes)
+                    if (device::getId(deviceTree) == id && parameterIndex < node->getProcessor().getParameters().size())
+                        lanes.push_back({node->getProcessor().getParameters()[parameterIndex], automation::toCurve(lane)});
+            }
+        }
+        for (const auto& lane : Session::getAutomationLanes(fader))
+            if (automation::getTarget(lane) == automation::volumeTarget())
+                volumeCurve = automation::toCurve(lane);
+
+        if (busIndex < 0)
+        {
+            graph->hasMasterFader = true;
+            graph->masterFaderVolume = dbToGain(track::getVolumeDb(fader));
+            graph->masterFaderAudible = !track::isMuted(fader);
+            graph->masterFaderAutomation = std::move(volumeCurve);
+            graph->masterFaderDevices = std::move(chain);
+            graph->masterFaderParameterLanes = std::move(lanes);
+        }
+        else
+        {
+            auto& bus = graph->tracks[static_cast<std::size_t>(busIndex)];
+            bus.hasPostFader = true;
+            bus.postVolume = dbToGain(track::getVolumeDb(fader));
+            bus.postAudible = !track::isMuted(fader);
+            bus.postVolumeAutomation = std::move(volumeCurve);
+            bus.postDevices = std::move(chain);
+            bus.parameterLanes.insert(bus.parameterLanes.end(), lanes.begin(), lanes.end());
+        }
+    }
+
+    // --- Modulators (LFO devices) and what they move --------------------------------------------------
+    if (devices != nullptr)
+    {
+        const auto compileModulator = [&](const juce::ValueTree& d)
+        {
+            const auto mappings = Session::getModulations(d);
+            auto node = devices->getNode(d);
+            auto* source = node != nullptr ? dynamic_cast<ModulationSource*>(&node->getProcessor()) : nullptr;
+            if (source == nullptr)
+                return;
+            engine::RenderModulator modulator;
+            modulator.node = node.get();
+            modulator.source = source;
+            for (const auto& mapping : mappings)
+            {
+                engine::ModulationTarget t;
+                t.minimum = modulation::getMinimum(mapping);
+                t.maximum = modulation::getMaximum(mapping);
+                t.base = modulation::getBase(mapping);
+                const auto target = modulation::getTarget(mapping);
+                const auto trackId = modulation::getTrack(mapping);
+                const int index = trackId != 0 ? indexOf(trackId) : -1;
+                std::uint32_t id = 0;
+                int parameterIndex = 0;
+                bool resolved = false;
+                if (automation::parseParameterTarget(target, id, parameterIndex))
+                {
+                    if (auto targetNode = devices->findNode(id); targetNode != nullptr && parameterIndex < targetNode->getProcessor().getParameters().size())
+                    {
+                        t.kind = engine::ModulationTarget::Kind::parameter;
+                        t.parameter = targetNode->getProcessor().getParameters()[parameterIndex];
+                        graph->keepAlive.push_back(std::move(targetNode));
+                        resolved = true;
+                    }
+                }
+                else if (target == automation::volumeTarget() || target == automation::panTarget())
+                {
+                    const bool volume = target == automation::volumeTarget();
+                    if (trackId == 0 && volume)
+                    {
+                        t.kind = engine::ModulationTarget::Kind::masterVolume;
+                        resolved = true;
+                    }
+                    else if (index >= 0)
+                    {
+                        t.kind = volume ? engine::ModulationTarget::Kind::volume : engine::ModulationTarget::Kind::pan;
+                        t.slot = graph->tracks[static_cast<std::size_t>(index)].slot;
+                        resolved = true;
+                    }
+                }
+                else if (std::uint32_t sendId = 0; automation::parseSendTarget(target, sendId))
+                {
+                    // Sends are rendered by the bus they feed.
+                    for (std::size_t b = 0; b < graph->tracks.size() && !resolved; ++b)
+                    {
+                        const auto& sends = graph->tracks[b].sends;
+                        for (std::size_t k = 0; k < sends.size(); ++k)
+                            if (sends[k].sendId == sendId && k < static_cast<std::size_t>(engine::kMaxModulatedSends))
+                            {
+                                t.kind = engine::ModulationTarget::Kind::send;
+                                t.slot = graph->tracks[b].slot;
+                                t.sendIndex = static_cast<int>(k);
+                                resolved = true;
+                                break;
+                            }
+                    }
+                }
+                if (resolved)
+                    modulator.targets.push_back(t);
+            }
+            // (an LFO with no targets still runs: its display moves)
+            graph->modulators.push_back(std::move(modulator));
+            graph->keepAlive.push_back(std::move(node));
+        };
+        for (const auto& t : trees)
+            for (const auto& d : Session::getDevices(t))
+                compileModulator(d);
+        if (masterTree.isValid())
+            for (const auto& d : Session::getDevices(masterTree))
+                compileModulator(d);
+        for (const auto& fader : masterFaders)
+            for (const auto& d : Session::getDevices(fader))
+                compileModulator(d);
+    }
+
+    // --- Plug-in delay compensation ---------------------------------------------------------------
+    // Solved in one pass, in signal order (graph->levels: every source before what it feeds). Times
+    // are how late (in samples) a track's signal is relative to the timeline:
+    //   input[i]   where it enters the track (a bus: its latest input),
+    //   fader[i]   after its devices (where its fader, pre-fader sends and their automation are),
+    //   arrival[i] after its post-fader devices too (its output, before compensation).
+    // Every input that reaches a bus (or the master) earlier than its latest input waits for it: a
+    // track's main output by the track's own compensation delay, a send or an instrument's aux
+    // output by a delay line of its own (sends leave their source before its compensation delay).
+    // So a track that plays to the master and sends to a return with latency lines up with that
+    // return, and pre-fader sends are aligned like post-fader ones.
+    std::vector<int> input(count, 0);
+    std::vector<int> faderTime(count, 0);
+    std::vector<int> arrival(count, 0);
+    const auto instrumentLatency = [&](int source)
+    {
+        const auto& chain = graph->tracks[static_cast<std::size_t>(source)].devices;
+        return chain.empty() || chain.front().node == nullptr || chain.front().node->isBypassed()
+                   ? 0
+                   : std::max(0, chain.front().node->getLatencySamples());
+    };
+    const auto sendTap = [&](int source, const juce::ValueTree& s)
+    { return send::isPreFader(s) ? faderTime[static_cast<std::size_t>(source)] : arrival[static_cast<std::size_t>(source)]; };
+    const auto auxTap = [&](int source) { return input[static_cast<std::size_t>(source)] + instrumentLatency(source); };
+
+    for (const auto& lvl : graph->levels)
+    {
+        for (const int idx : lvl)
+        {
+            const auto i = static_cast<std::size_t>(idx);
+            int latest = 0;
+            for (const int source : busSources[i])
+                latest = std::max(latest, arrival[static_cast<std::size_t>(source)]);
+            for (const auto& [source, s] : incomingSends[i])
+                latest = std::max(latest, sendTap(source, s));
+            if (auxSource[i] >= 0)
+                latest = std::max(latest, auxTap(auxSource[i]));
+            input[i] = latest;
+            faderTime[i] = latest + chainLatency(graph->tracks[i].devices);
+            arrival[i] = faderTime[i] + chainLatency(graph->tracks[i].postDevices);
+        }
+    }
+
+    int masterInput = 0;
+    for (std::size_t i = 0; i < count; ++i)
+        if (destination[i] == -1) // (-2: silenced, it reaches nothing)
+            masterInput = std::max(masterInput, arrival[i]);
+
+    const auto limited = [](int delay) { return std::clamp(delay, 0, engine::kMaxCompensationSamples - 1); };
+    std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>> sendLines, auxLines;
+    const auto delayLine = [&](std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>>& previous,
+                               std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>>& next, std::uint32_t key, int channels,
+                               int delay) -> engine::InputDelayLine*
+    {
+        // The same line as last time while its delay is unchanged: its signal carries on.
+        std::shared_ptr<engine::InputDelayLine> line;
+        if (const auto it = previous.find(key);
+            it != previous.end() && it->second->length == delay && static_cast<int>(it->second->rings.size()) == channels)
+            line = it->second;
+        else
+            line = std::make_shared<engine::InputDelayLine>(channels, delay);
+        next[key] = line;
+        graph->keepAlive.push_back(line);
+        return line.get();
+    };
+
+    outputLatencies_.clear();
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        auto& rt = graph->tracks[i];
+        const int destinationInput = destination[i] >= 0 ? input[static_cast<std::size_t>(destination[i])]
+                                     : destination[i] == -1 ? masterInput
+                                                            : arrival[i];
+        rt.compensationDelay = limited(destinationInput - arrival[i]);
+        rt.inputLatency = input[i];
+        rt.faderLatency = faderTime[i];
+        outputLatencies_[rt.trackId] = arrival[i] + rt.compensationDelay;
+
+        // Incoming sends and aux outputs: each waits for this bus's latest input.
+        for (auto& rs : rt.sends)
+        {
+            const auto source = static_cast<std::size_t>(rs.sourceIndex);
+            const int tap = rs.preFader ? faderTime[source] : arrival[source];
+            rs.delay = limited(input[i] - tap);
+            if (rs.delay > 0)
+            {
+                const auto& from = graph->tracks[source];
+                rs.delayLine = delayLine(sendDelays_, sendLines, rs.sendId,
+                                         rs.preFader ? from.layout.numChannels : from.outputLayout.numChannels, rs.delay);
+            }
+        }
+        if (rt.auxSourceIndex >= 0)
+        {
+            rt.auxDelay = limited(input[i] - auxTap(rt.auxSourceIndex));
+            if (rt.auxDelay > 0)
+                rt.auxDelayLine = delayLine(auxDelays_, auxLines, rt.trackId, 2, rt.auxDelay);
+        }
+    }
+    sendDelays_ = std::move(sendLines);
+    auxDelays_ = std::move(auxLines);
+
+    // Post-fader sends leave before their source's compensation delay.
+    for (std::size_t b = 0; b < count; ++b)
+        for (const auto& rs : graph->tracks[b].sends)
+            if (!rs.preFader && graph->tracks[static_cast<std::size_t>(rs.sourceIndex)].compensationDelay > 0)
+                graph->tracks[static_cast<std::size_t>(rs.sourceIndex)].needsPostFaderCopy = true;
+
+    // Automation is read as late as the sound it shapes: each device's lanes by the delay of what
+    // comes before it in its chain (which starts `start` samples late).
+    const auto findLatency = [](const juce::AudioProcessorParameter* parameter, const std::vector<engine::RenderDevice>& chain, int start,
+                                int& latency)
+    {
+        for (const auto& device : chain)
+        {
+            if (device.node == nullptr)
+                continue;
+            const auto& parameters = device.node->getProcessor().getParameters();
+            if (std::find(parameters.begin(), parameters.end(), parameter) != parameters.end())
+            {
+                latency = start;
+                return true;
+            }
+            if (!device.node->isBypassed())
+                start += std::max(0, device.node->getLatencySamples());
+        }
+        return false;
+    };
+    for (std::size_t i = 0; i < count; ++i)
+        for (auto& lane : graph->tracks[i].parameterLanes)
+            if (!findLatency(lane.parameter, graph->tracks[i].devices, input[i], lane.latency))
+                (void) findLatency(lane.parameter, graph->tracks[i].postDevices, faderTime[i], lane.latency); // (a Master Fader's)
+    graph->masterVolumeLatency = masterInput + chainLatency(graph->masterDevices);
+    for (auto& lane : graph->masterParameterLanes)
+        (void) findLatency(lane.parameter, graph->masterDevices, masterInput, lane.latency);
+    for (auto& lane : graph->masterFaderParameterLanes)
+        (void) findLatency(lane.parameter, graph->masterFaderDevices, graph->masterVolumeLatency, lane.latency);
+
+    graph->masterInputLatency = masterInput;
+    graph->totalLatency = graph->masterVolumeLatency + chainLatency(graph->masterFaderDevices);
+    masterInputLatency_ = masterInput;
+
+    totalLatency_ = graph->totalLatency;
+
+    // Forget stretchers of clips that no longer exist.
+    std::set<std::uint32_t> liveClips;
+    for (const auto& t : trees)
+        for (const auto& c : t)
+            if (c.hasType(ids::clip))
+                liveClips.insert(clip::getId(c));
+    for (auto it = stretchers_.begin(); it != stretchers_.end();)
+        it = liveClips.count(it->first) == 0 ? stretchers_.erase(it) : std::next(it);
+
+    return graph;
+}
+
+//==================================================================================================
+// GraphCompiler
+
+GraphCompiler::GraphCompiler(Session& session, AudioAssetCache& assets, DeviceManager* devices, Publisher publish)
+    : session_(session)
+    , assets_(assets)
+    , devices_(devices)
+    , publish_(std::move(publish))
+{
+    session_.getState().addListener(this);
+    assets_.addListener(this);
+    triggerAsyncUpdate();
+}
+
+GraphCompiler::~GraphCompiler()
+{
+    cancelPendingUpdate();
+    assets_.removeListener(this);
+    session_.getState().removeListener(this);
+}
+
+void GraphCompiler::rebuildNow()
+{
+    cancelPendingUpdate();
+    handleAsyncUpdate();
+}
+
+void GraphCompiler::setRenderFormat(double sampleRate, int maximumBlockSize)
+{
+    builder_.setRenderFormat(sampleRate, maximumBlockSize);
+    triggerAsyncUpdate();
+}
+
+void GraphCompiler::valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier& property)
+{
+    // Pure UI state and saved device state don't change what is rendered.
+    if (property == ids::state || property == ids::collapsed || property == ids::showAutomation ||
+        property == ids::visible || property == ids::name || property == ids::colour)
+        return;
+    triggerAsyncUpdate();
+}
+
+void GraphCompiler::handleAsyncUpdate()
+{
+    if (devices_ != nullptr)
+        devices_->purgeUnused();
+
+    if (publish_)
+        publish_(builder_.build(session_, assets_, devices_));
+}
+
+} // namespace dojo::session

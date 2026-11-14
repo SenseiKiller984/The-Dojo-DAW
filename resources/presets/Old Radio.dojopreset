@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Old Radio: a built-in device chain (Band-Pass > Tube Distortion > Low Rate > Mono). -->
+<DOJO_PRESET version="1" name="Old Radio" category="General" chain="1"
+             description="Makes anything sound like it comes out of an old radio or a telephone: a narrow band, a honky midrange, tube distortion, a low sample rate, in mono.">
+  <DEVICE key="builtin:eq" name="Band-Pass">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="350.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.9"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="1500.0"/>
+      <PARAM id="band2Gain" value="4.0"/>
+      <PARAM id="band2Q" value="1.2"/>
+      <PARAM id="band3On" value="0.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="2500.0"/>
+      <PARAM id="band3Gain" value="0.0"/>
+      <PARAM id="band3Q" value="0.71"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="4.0"/>
+      <PARAM id="band4Freq" value="3800.0"/>
+      <PARAM id="band4Gain" value="0.0"/>
+      <PARAM id="band4Q" value="0.9"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:overdrive" name="Tube Distortion">
+    <DOJO_DEVICE type="builtin:overdrive" version="1">
+      <PARAM id="freq" value="1500.0"/>
+      <PARAM id="width" value="2.5"/>
+      <PARAM id="drive" value="45.0"/>
+      <PARAM id="tone" value="40.0"/>
+      <PARAM id="dynamics" value="30.0"/>
+      <PARAM id="output" value="-4.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:redux" name="Low Rate">
+    <DOJO_DEVICE type="builtin:redux" version="1">
+      <PARAM id="rate" value="11025.0"/>
+      <PARAM id="jitter" value="8.0"/>
+      <PARAM id="prefilter" value="1.0"/>
+      <PARAM id="postfilter" value="1.0"/>
+      <PARAM id="postoct" value="0.0"/>
+      <PARAM id="bits" value="10.0"/>
+      <PARAM id="shape" value="20.0"/>
+      <PARAM id="dcshift" value="0.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:utility" name="Mono">
+    <DOJO_DEVICE type="builtin:utility" version="1">
+      <PARAM id="gain" value="-1.0"/>
+      <PARAM id="width" value="100.0"/>
+      <PARAM id="mono" value="1.0"/>
+      <PARAM id="bassmono" value="0.0"/>
+      <PARAM id="bassfreq" value="120"/>
+      <PARAM id="phasel" value="0.0"/>
+      <PARAM id="phaser" value="0.0"/>
+      <PARAM id="channel" value="0.0"/>
+      <PARAM id="balance" value="0.0"/>
+      <PARAM id="mute" value="0.0"/>
+      <PARAM id="dc" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

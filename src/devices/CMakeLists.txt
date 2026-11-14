@@ -1,0 +1,80 @@
+add_library(dojo_devices STATIC
+    AmpCabinet.cpp
+    AmpCabinet.h
+    AnalogSynth.cpp
+    AnalogSynth.h
+    AutoFilter.cpp
+    AutoFilter.h
+    BuiltinProcessor.cpp
+    BuiltinProcessor.h
+    ChannelEq.cpp
+    ChannelEq.h
+    DeviceRegistry.cpp
+    DeviceRegistry.h
+    Drive.cpp
+    DriftSynth.cpp
+    DriftSynth.h
+    Drive.h
+    DeEsser.cpp
+    DeEsser.h
+    Dynamics.cpp
+    Dynamics.h
+    Echo.cpp
+    Echo.h
+    Expander.cpp
+    Expander.h
+    Equaliser.cpp
+    Equaliser.h
+    Gate.cpp
+    Gate.h
+    Impulse.cpp
+    Impulse.h
+    Instruments.cpp
+    Instruments.h
+    LfoDevice.cpp
+    LfoDevice.h
+    Meld.cpp
+    Meld.h
+    Modulators.cpp
+    Modulators.h
+    MultibandDynamics.cpp
+    MultibandDynamics.h
+    Operator.cpp
+    Operator.h
+    PlateReverb.cpp
+    PlateReverb.h
+    Roar.cpp
+    Roar.h
+    SampleSlot.cpp
+    SampleSlot.h
+    SoftClipper.cpp
+    SoftClipper.h
+    StudioDynamics.h
+    TapeA800.cpp
+    TapeA800.h
+    TheGlue.cpp
+    TheGlue.h
+    TimeEffects.cpp
+    TimeEffects.h
+    Utility.cpp
+    Click.cpp
+    Click.h
+    Utility.h
+    WavetableSynth.cpp
+    WavetableSynth.h
+    dsp/AnalogFilters.h
+    dsp/Biquad.h
+    dsp/DynamicsMath.h
+    dsp/Modulation.h
+    dsp/Oversampler.h
+    dsp/PhaseOversampler.h
+    dsp/SynthCore.cpp
+    dsp/SynthCore.h
+    dsp/VirtualAnalog.h)
+add_library(dojo::devices ALIAS dojo_devices)
+
+target_link_libraries(dojo_devices
+    PUBLIC  dojo::core dojo::juce
+    PRIVATE dojo::stretch)
+dojo_apply_project_warnings(dojo_devices)
+set_target_properties(dojo_devices PROPERTIES FOLDER "Dojo")
