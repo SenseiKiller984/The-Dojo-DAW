@@ -20,6 +20,7 @@
 #include "devices/PlateReverb.h"
 #include "devices/Roar.h"
 #include "devices/StudioDynamics.h"
+#include "devices/TapeA800.h"
 #include "devices/TimeEffects.h"
 #include "devices/Utility.h"
 #include "devices/Click.h"
@@ -65,6 +66,7 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Pedal::kTypeId, "Pedal", "Drive", false},
         {Overdrive::kTypeId, "Overdrive", "Drive", false},
         {Redux::kTypeId, "Redux", "Drive", false},
+        {TapeA800::kTypeId, "Studer A800 Tape Recorder", "Drive", false, "multichannel tape saturation analog multitrack"},
         {Click::kTypeId, "Click", "Utility", false},
     };
     return devices;
@@ -105,6 +107,8 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<DeEsser>();
     if (type == SoftClipper::kTypeId)
         return std::make_unique<SoftClipper>();
+    if (type == TapeA800::kTypeId)
+        return std::make_unique<TapeA800>();
     if (type == PlateReverb::kTypeId)
         return std::make_unique<PlateReverb>();
     if (type == Limiter::kTypeId)

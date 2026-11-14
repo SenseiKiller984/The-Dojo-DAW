@@ -50,6 +50,8 @@ add_library(dojo_devices STATIC
     SoftClipper.cpp
     SoftClipper.h
     StudioDynamics.h
+    TapeA800.cpp
+    TapeA800.h
     TheGlue.cpp
     TheGlue.h
     TimeEffects.cpp
