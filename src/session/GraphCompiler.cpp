@@ -732,6 +732,28 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                     if (automation::getTarget(lane) == sendTarget)
                         rs.gainAutomation = automation::toCurve(lane);
 
+                // A device send: two of a device's extra outputs on the source track (nothing when
+                // the device or those outputs are not there).
+                if (const auto deviceId = send::getSourceDevice(s); deviceId != 0)
+                {
+                    const auto& chain = chainNodes[static_cast<std::size_t>(source)];
+                    const auto it = std::find_if(chain.begin(), chain.end(), [deviceId](const DeviceNode& entry)
+                                                 { return device::getId(entry.first) == deviceId; });
+                    const auto [left, right] = send::getSourceChannels(s);
+                    if (it == chain.end() || std::min(left, right) < 0 || std::max(left, right) >= it->second->getNumAuxOutputs())
+                        continue;
+                    rs.auxNode = it->second.get();
+                    rs.auxLeft = left;
+                    rs.auxRight = right;
+                    rs.auxDevice = static_cast<int>(std::distance(chain.begin(), it));
+                    rs.preFader = false;
+                    rs.convert = !(rt.layout == engine::ChannelLayout::stereo());
+                    if (rs.convert)
+                        rs.matrix = engine::conversionMatrix(engine::ChannelLayout::stereo(), rt.layout);
+                    rt.sends.push_back(std::move(rs));
+                    continue;
+                }
+
                 // The source's channels (its own before the fader, its destination's after) into ours.
                 const auto& from = rs.preFader ? layouts[static_cast<std::size_t>(source)] : outputLayouts[static_cast<std::size_t>(source)];
                 rs.convert = from != rt.layout;
@@ -985,8 +1007,30 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                    ? 0
                    : std::max(0, chain.front().node->getLatencySamples());
     };
+    // A device send leaves its track where its device does: after the devices before it.
+    const auto deviceTap = [&](int source, int deviceIndex)
+    {
+        int time = input[static_cast<std::size_t>(source)];
+        const auto& chain = graph->tracks[static_cast<std::size_t>(source)].devices;
+        for (int d = 0; d <= deviceIndex && d < static_cast<int>(chain.size()); ++d)
+            if (const auto& device = chain[static_cast<std::size_t>(d)]; device.node != nullptr && !device.node->isBypassed())
+                time += std::max(0, device.node->getLatencySamples()) + chainLatency(device.loop);
+        return time;
+    };
+    const auto deviceIndexOf = [&](int source, std::uint32_t deviceId)
+    {
+        const auto& chain = chainNodes[static_cast<std::size_t>(source)];
+        for (std::size_t d = 0; d < chain.size(); ++d)
+            if (device::getId(chain[d].first) == deviceId)
+                return static_cast<int>(d);
+        return -1;
+    };
     const auto sendTap = [&](int source, const juce::ValueTree& s)
-    { return send::isPreFader(s) ? faderTime[static_cast<std::size_t>(source)] : arrival[static_cast<std::size_t>(source)]; };
+    {
+        if (const auto deviceId = send::getSourceDevice(s); deviceId != 0)
+            return deviceTap(source, deviceIndexOf(source, deviceId));
+        return send::isPreFader(s) ? faderTime[static_cast<std::size_t>(source)] : arrival[static_cast<std::size_t>(source)];
+    };
     const auto auxTap = [&](int source) { return input[static_cast<std::size_t>(source)] + instrumentLatency(source); };
 
     for (const auto& lvl : graph->levels)
@@ -1046,13 +1090,14 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         for (auto& rs : rt.sends)
         {
             const auto source = static_cast<std::size_t>(rs.sourceIndex);
-            const int tap = rs.preFader ? faderTime[source] : arrival[source];
+            const int tap = rs.auxNode != nullptr ? deviceTap(rs.sourceIndex, rs.auxDevice) : rs.preFader ? faderTime[source] : arrival[source];
             rs.delay = limited(input[i] - tap);
             if (rs.delay > 0)
             {
                 const auto& from = graph->tracks[source];
                 rs.delayLine = delayLine(sendDelays_, sendLines, rs.sendId,
-                                         rs.preFader ? from.layout.numChannels : from.outputLayout.numChannels, rs.delay);
+                                         rs.auxNode != nullptr ? 2 : rs.preFader ? from.layout.numChannels : from.outputLayout.numChannels,
+                                         rs.delay);
             }
         }
         if (rt.auxSourceIndex >= 0)

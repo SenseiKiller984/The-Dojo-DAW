@@ -53,6 +53,20 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
     nothing when it does not fit in a loop). */
 juce::ValueTree addDeviceToLoop(session::Session& session, juce::ValueTree host, const DeviceChoice& choice);
 
+// --- A device's own outputs (a console channel's buses, aux and cue sends) to busses ----------------
+/** The DAW bus called `name`, made (as a bus at the end of the track list) when there is none yet,
+    in the current undo step. */
+juce::ValueTree findOrAddBus(session::Session& session, const juce::String& name);
+/** Connects a device's extra outputs `left` / `right` to the bus called `busName` (made when needed)
+    with a device send, as one undo step; returns the send (the one there already, if any). Null
+    when the device is not on a track (the master has no sends) or the bus would close a loop. */
+juce::ValueTree connectDeviceOutput(session::Session& session, const juce::ValueTree& device, int left, int right,
+                                    const juce::String& busName);
+/** Removes that connection (one undo step). */
+void disconnectDeviceOutput(session::Session& session, const juce::ValueTree& device, int left, int right);
+/** The bus a device's outputs are connected to (invalid if none). */
+[[nodiscard]] juce::ValueTree connectedBus(const session::Session& session, const juce::ValueTree& device, int left, int right);
+
 /** Fills `menu` with native devices and plug-ins (instruments only if `includeInstruments`). */
 void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, bool includeInstruments,
                         std::function<void(const DeviceChoice&)> onChosen);

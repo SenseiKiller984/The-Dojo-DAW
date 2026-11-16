@@ -191,7 +191,7 @@ TEST_CASE("The browser lists presets (built-in and the user's), searchable and d
     CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
     browser->setDeviceSearch("channel eq");
     CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
-    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Channel EQ", "EMI TG12345"}); // (a console channel's EQ)
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Channel EQ", "Harrison 4032", "EMI TG12345"}); // (consoles' channel EQs)
     browser->setDeviceSearch("reverb");
     listed = browser->getListedPresetNames();
     CHECK(listed.contains("Glassy Pad"));

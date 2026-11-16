@@ -54,6 +54,7 @@ add_library(dojo_devices STATIC
     StudioDynamics.h
     TapeA800.cpp
     ConsoleTG12345.cpp
+    Harrison4032.cpp
     TapeA800.h
     TheGlue.cpp
     TheGlue.h

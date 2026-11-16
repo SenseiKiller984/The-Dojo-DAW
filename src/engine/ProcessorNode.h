@@ -55,6 +55,8 @@ public:
     [[nodiscard]] bool isLoopEngaged() const noexcept { return insertLoop_ != nullptr && insertLoop_->isLoopEngaged(); }
     /** The processor's insert loop (its name and return, for display); null when it has none. */
     [[nodiscard]] const InsertLoopHost* getInsertLoop() const noexcept { return insertLoop_; }
+    /** The processor's extra (aux) output channels, after its main output. */
+    [[nodiscard]] int getNumAuxOutputs() const noexcept { return auxOutputs_; }
     /** The two halves of an insert-loop device (stereo, in place); the engine runs the loop's devices
         in between. Not for bypassed devices (process() handles bypass). */
     void processSend(juce::AudioBuffer<Sample>& stereo, int numSamples, juce::MidiBuffer& midi) noexcept;

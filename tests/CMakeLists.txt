@@ -22,6 +22,7 @@ add_executable(dojo_tests
     MultichannelTests.cpp
     VideoTests.cpp
     DeviceEditorTests.cpp
+    DeviceSendTests.cpp
     DeviceTests.cpp
     DriveTests.cpp
     DynamicsFilterTests.cpp
@@ -50,6 +51,7 @@ add_executable(dojo_tests
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleTests.cpp
+    HarrisonTests.cpp
     InsertLoopTests.cpp
     RhodesTests.cpp
     TapeTests.cpp

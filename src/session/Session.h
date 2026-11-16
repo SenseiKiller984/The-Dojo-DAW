@@ -165,6 +165,9 @@ inline const juce::Identifier minimum      {"min"};
 inline const juce::Identifier maximum      {"max"};
 inline const juce::Identifier base         {"base"};
 inline const juce::Identifier preFader     {"preFader"};
+inline const juce::Identifier sourceDevice {"sourceDevice"};
+inline const juce::Identifier sourceLeft   {"sourceLeft"};
+inline const juce::Identifier sourceRight  {"sourceRight"};
 inline const juce::Identifier visible      {"visible"};
 inline const juce::Identifier time         {"time"};
 // clang-format on
@@ -409,6 +412,12 @@ double getGainDb(const juce::ValueTree& s);
 bool isPreFader(const juce::ValueTree& s);
 void setGainDb(juce::ValueTree s, double db, juce::UndoManager* um);
 void setPreFader(juce::ValueTree s, bool preFader, juce::UndoManager* um);
+/** A device send takes a device's extra outputs (a console channel's bus assignments, aux and
+    cue sends) instead of the track's own output: the device's id (0: the track's output). */
+std::uint32_t getSourceDevice(const juce::ValueTree& s);
+/** A device send's channels of the device's extra outputs: left and right (the same channel for a
+    mono output). */
+std::pair<int, int> getSourceChannels(const juce::ValueTree& s);
 } // namespace send
 
 /** AUTOMATION accessors. Targets: "volume", "pan", "send:<sendId>", "param:<deviceId>:<index>". */
@@ -757,6 +766,12 @@ public:
                             bool preFader = false);
     void removeSend(juce::ValueTree send);
     [[nodiscard]] static std::vector<juce::ValueTree> getSends(const juce::ValueTree& track);
+    /** A device send: from a device's extra outputs (channels `left` and `right`) on `track` to
+        `bus`, at `gainDb`. Null when the routing would close a loop. */
+    juce::ValueTree addDeviceSend(juce::ValueTree track, const juce::ValueTree& bus, const juce::ValueTree& device, int left, int right,
+                                  double gainDb = 0.0);
+    /** The device send of `device`'s channels `left` / `right` on `track`, if any. */
+    [[nodiscard]] static juce::ValueTree findDeviceSend(const juce::ValueTree& track, std::uint32_t deviceId, int left, int right);
 
     // --- Automation --------------------------------------------------------------------------------
     /** The lane for `target` on `owner` (a track or MASTER), created (with one point holding

@@ -21,6 +21,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **The Devices panel's header** shows the whole chain's delay (CHAIN DELAY), the sum over the devices that are on. Its tooltip also gives the whole project's delay after compensation.
   - **The status bar** shows the project's delay compensation (PDC) in milliseconds and samples.
   - Everything follows changes as you make them: a lookahead or mode that changes a device's delay, bypassing a device (a bypassed device adds no delay), and the sample rate.
+- **Device sends**: a send can take its signal from a device's own outputs instead of the track's: a console channel's bus assignments, aux and cue sends (the Harrison 4032). Each feeds a DAW bus, summed there with every other channel's, delay-compensated from where its device sits in the chain, and silent while its track is muted or soloed away. The mixer lists them on the track as "Bus 1-2 (Harrison 4032)". They go with their device and follow it into track copies.
 - **Insert loops**: a device can hold devices of its own, which the engine runs inside it, between the device's send and its return. This is how a hardware unit's effects loop works. The Rhodes Suitcase's accessory loop is one (in series); the EMI TG12345's echo send is another (in parallel: the channel waits for the loop's latency so its echo comes back in time).
   - The loop's devices belong to the device's track. Their delay counts in the track's delay compensation (and in the Devices panel's readouts), their automation lanes sit on the track and follow the delayed sound, and their sidechains order the tracks and refuse feedback like any other.
   - They are saved with the project, copied with Duplicate Track (with fresh ids, their lanes following them), undone in one step with their host, and kept in chain presets.
@@ -247,6 +248,29 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Echo / Aux**: the master echo send and return, for a shared chamber on a return bus fed by your sends: **Send Master** into the insert loop (the chamber), **Return Master** and the return's width out. With nothing in the loop the send goes straight to the return.
   - **Control Room & Studio** (monitoring, last on the master): **Listen** to the **Control Room** (its level, **Dim** -20 dB, **Mono**, **Cut**) or to the **Studio** playback (its level, plus the talkback from the sidechain input while **Talkback** is held). Talkback dims the control room. Offline exports pass the signal through untouched (it is monitoring); a real-time bounce records what you hear.
   - **Oversampling**: real time 2x and offline 4x by default (minimum-phase filters, 4 samples of latency at 2x).
+- **Harrison 4032** (1975 - 84, the in-line console of 32 buses and 40 to 56 inputs) as one device: a **Module** of the frame, built as one of its three **Revisions**. Its controls change with the module and the revision. Every page shows the revision's circuits, the EQ and filter curve, the lamps and the output meters (dBu). No latency.
+  - **Revisions**, each with its own circuits:
+    - **A** (1975 - 77): LM301A op-amps after discrete differential pairs, +-15 V (+22 dBu out), a slew-limited top end at full level; HF and LF bands peaking only; HMF / LMF at a fixed Q of 1.5; the filters switched in with EQ IN; dbx 202 / Allison EGC-101 VCAs (fast fader moves thump: control-voltage feedthrough); inverting bus summing (about -62 dB of crosstalk into the neighbouring buses).
+    - **B** (1977 - 79): TL071 / TL072 FET op-amps, +-18 V (+24.5 dBu), lower distortion at high levels; **Shelf / Peak** switches on HF and LF; differential summing (crosstalk about -85 dB).
+    - **C** (1979 - 84): NE5534 in the gain, summing and driver stages (the lowest noise and distortion), +26 dBu; continuously variable **Q** (0.5 - 3.0) on HMF and LMF; a 3-pole 18 dB/oct HPF from 20 Hz; a **FILTERS IN** switch of its own (track through the filters without the EQ); dbx 2150 VCAs with better control-voltage isolation (20 dB less thump).
+    - Measured: 20 Hz - 20 kHz within 0.25 dB; THD at +4 dBu 0.010 % (A), 0.007 % (B), 0.003 % (C); at +20 dBu 0.13 %, 0.07 %, 0.04 %; EIN -128 dBu on the C (Noise on), 1 to 2 dB more on A and B.
+  - **I/O Module** (in-line): two paths.
+    - The **channel path** takes the track through the microphone input or the line input. The microphone input has a Jensen JT-115-K-E 1:10 transformer, **PAD** -20 dB, **PHASE**, **+48V** (switching it pops, as it does), and **MIC GAIN** +10 to +60 dB: the track enters as a microphone would, -18 dBFS = -36 dBu, so +40 dB is unity. The line input has **LINE TRIM** +-10 dB.
+    - The **monitor path** takes the tape return: the device's sidechain input (route a playback track into it).
+    - **FLIP** swaps the two (tracking / mixdown, click-free like the CMOS switches).
+    - The channel path runs through **HPF** (12 dB/oct from 25 Hz, or the C's 18 dB/oct from 20 Hz, to 3.15 kHz) and **LPF** (12 dB/oct, 160 Hz - 20 kHz). Then the 4-band proportional-Q EQ (each band narrows as it is boosted or cut): **LF** 40 - 800 Hz, **LMF** 80 Hz - 1.5 kHz, **HMF** 800 Hz - 15 kHz and **HF** 800 Hz - 18 kHz, each +-15 dB, with **EQ IN** a hard bypass. Then the VCA **Fader** (off to +10 dB), the **Pan** pot (constant power, -3 dB centre; a balance for a stereo pair of modules) and **Mix** to the mix.
+    - **Pan Mode**: Stereo, Quad (Front / Back) or LCRS (centre and surround on the quad outputs).
+    - The monitor path has its own **Mon Level** and **Mon Pan**.
+    - **Format**: Stereo (a linked pair of modules) or Mono. **Noise** adds the input stage's hiss (EIN).
+  - **Sends**, on the module's own outputs, each connected to a DAW bus with a device send (see Routing above):
+    - The 32 **routing switches** feed the bus pairs "Bus 1-2" ... "Bus 31-32". The pair's bus is made with its first assignment, and **Bus Pan** divides the channel between odd and even buses.
+    - **AUX 1 - 4** (pre or post fader) feed "Aux 1" - "Aux 4".
+    - **CUE 1 - 2** (level and pan, from the monitor or the channel path) feed "Cue 1" and "Cue 2".
+    - The quad bus's channels 3 - 4 and the **Direct** output each have a bus of their own.
+    - Put a Harrison in **Bus Master** on those busses: the sub-group, aux and cue masters.
+  - **Bus Master**: a program sub-group, aux or cue master on its bus. It has an **Input Trim**, the summing amplifier, the **Master** fader and the line driver. The optional **Jensen output transformer** saturates the deep lows at high levels. **Solo** solos the bus.
+  - **Master Section** (on the master): the mix's summing amplifier, **Master Fader** and line drivers (and transformer). Then the control room **monitor matrix**: **Source** is the mix, an external source or both. The external source is the sidechain input: pick the tape, a bus, the 2-track or an aux return under **EXTERNAL**. Both together are a quad fold-down. Then **Mono** and the monitor **Volume**. Offline exports leave the monitoring out: they are the mix.
+  - Automation: the VCA fader, like every parameter, is automated with the DAW's automation lanes (the role the Allison / Harrison Auto-Set computers played).
 - **Shifter**: pitch shifting (+-48 semitones, window size), single-sideband **frequency shifting** (inharmonic, bell-like; negative shifts down) and **ring modulation**; stereo spread, an LFO (free or synced, stereo phase), an envelope follower, and a feedback delay for rising or falling spirals.
 - **Chorus-Ensemble**: **Classic** (two voices), **Ensemble** (three voices 120 degrees apart with a fast shimmer, string-machine style) or **Vibrato**; rate, amount, feedback (or inverted), width, warmth, a high-pass on the wet signal, output and dry/wet.
 - **Auto Pan**: rhythmic volume and panning: amount, rate or synced division, eight shapes, Phase (180 degrees pans, 0 is a tremolo), Offset, Invert and Square (hard switching for choppy gating).
@@ -461,13 +485,13 @@ resources/    embedded fonts and built-in presets (presets/*.dojopreset)
 scripts/      setup and build helpers (bash + PowerShell)
 src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), musical time
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
-              insert loops (devices inside a device, between its send and return),
+              insert loops (devices inside a device, between its send and return), device sends,
               clip playback / time-stretch / disk streaming, capture, file preview, device host,
               MP3 encoder
 src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue, limiter,
               Gate, Expander, De-Esser, Soft Clipper, Multiband Dynamics, reverb, Plate Reverb,
               delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux, Studer A800 tape,
-              EMI TG12345 console, pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
+              EMI TG12345 and Harrison 4032 consoles, pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
               Operator, Meld, Analog, Drift, Rhodes Suitcase 73 Mk II, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process

@@ -5,6 +5,7 @@
 #include "devices/AutoFilter.h"
 #include "devices/ChannelEq.h"
 #include "devices/ConsoleTG12345.h"
+#include "devices/Harrison4032.h"
 #include "devices/DriftSynth.h"
 #include "devices/Drive.h"
 #include "devices/Gate.h"
@@ -70,6 +71,8 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Overdrive::kTypeId, "Overdrive", "Drive", false},
         {Redux::kTypeId, "Redux", "Drive", false},
         {TapeA800::kTypeId, "Studer A800 Tape Recorder", "Drive", false, "multichannel tape saturation analog multitrack"},
+        {Harrison4032::kTypeId, "Harrison 4032", "Console", false,
+         "console channel strip in-line desk mixer preamp jensen parametric eq filters vca flip bus monitor"},
         {ConsoleTG12345::kTypeId, "EMI TG12345", "Console", false,
          "console channel strip desk mixer preamp transformer compressor limiter eq abbey road cassette echo monitor talkback"},
         {Click::kTypeId, "Click", "Utility", false},
@@ -114,6 +117,8 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<SoftClipper>();
     if (type == RhodesSuitcase::kTypeId)
         return std::make_unique<RhodesSuitcase>();
+    if (type == Harrison4032::kTypeId)
+        return std::make_unique<Harrison4032>();
     if (type == ConsoleTG12345::kTypeId)
         return std::make_unique<ConsoleTG12345>();
     if (type == TapeA800::kTypeId)

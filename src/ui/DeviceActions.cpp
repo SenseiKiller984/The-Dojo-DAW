@@ -140,6 +140,43 @@ bool fitsInLoop(const DeviceChoice& choice)
     return !choice.instrument && choice.type != "builtin:lfo";
 }
 
+juce::ValueTree findOrAddBus(session::Session& session, const juce::String& name)
+{
+    for (const auto& t : session.getAllTracks())
+        if (session::track::getKind(t) == session::TrackKind::bus && session::track::getName(t) == name)
+            return t;
+    return session.addTrack(session::TrackKind::bus, name);
+}
+
+juce::ValueTree connectDeviceOutput(session::Session& session, const juce::ValueTree& device, int left, int right, const juce::String& busName)
+{
+    const auto track = session::Session::getDeviceOwner(device);
+    if (!track.isValid() || !track.hasType(session::ids::track))
+        return {};
+    if (auto existing = session::Session::findDeviceSend(track, session::device::getId(device), left, right); existing.isValid())
+        return existing;
+    session.beginTransaction("Connect " + session::device::getName(device) + " to " + busName);
+    const auto bus = findOrAddBus(session, busName);
+    return session.addDeviceSend(track, bus, device, left, right);
+}
+
+void disconnectDeviceOutput(session::Session& session, const juce::ValueTree& device, int left, int right)
+{
+    const auto track = session::Session::getDeviceOwner(device);
+    if (auto existing = session::Session::findDeviceSend(track, session::device::getId(device), left, right); existing.isValid())
+    {
+        session.beginTransaction("Disconnect " + session::device::getName(device));
+        session.removeSend(existing);
+    }
+}
+
+juce::ValueTree connectedBus(const session::Session& session, const juce::ValueTree& device, int left, int right)
+{
+    const auto track = session::Session::getDeviceOwner(device);
+    const auto existing = session::Session::findDeviceSend(track, session::device::getId(device), left, right);
+    return existing.isValid() ? session.findTrack(session::send::getTarget(existing)) : juce::ValueTree();
+}
+
 juce::ValueTree addDeviceToLoop(session::Session& session, juce::ValueTree host, const DeviceChoice& choice)
 {
     if (!host.isValid() || !host.hasType(session::ids::device) || !fitsInLoop(choice))

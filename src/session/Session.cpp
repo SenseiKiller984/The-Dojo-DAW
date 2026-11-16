@@ -574,6 +574,14 @@ void setGainDb(juce::ValueTree s, double db, juce::UndoManager* um)
     s.setProperty(ids::gain, juce::jlimit(kMinusInfinityDb, kMaxVolumeDb, db), um);
 }
 void setPreFader(juce::ValueTree s, bool preFader, juce::UndoManager* um) { s.setProperty(ids::preFader, preFader, um); }
+std::uint32_t getSourceDevice(const juce::ValueTree& s)
+{
+    return static_cast<std::uint32_t>(static_cast<int>(s.getProperty(ids::sourceDevice, 0)));
+}
+std::pair<int, int> getSourceChannels(const juce::ValueTree& s)
+{
+    return {static_cast<int>(s.getProperty(ids::sourceLeft, 0)), static_cast<int>(s.getProperty(ids::sourceRight, 0))};
+}
 } // namespace send
 
 namespace automation
@@ -961,6 +969,16 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
                 node.removeChild(i, nullptr);
             }
         }
+        // Sends that took a device's outputs go when the device stays behind.
+        for (int i = node.getNumChildren(); --i >= 0;)
+        {
+            const auto child = node.getChild(i);
+            if (child.hasType(ids::send) && droppedDevices.count(send::getSourceDevice(child)) > 0)
+            {
+                droppedSends.insert(send::getId(child));
+                node.removeChild(i, nullptr);
+            }
+        }
         // Automation of a device or send that stayed behind has nothing left to control.
         for (int i = node.getNumChildren(); --i >= 0;)
         {
@@ -1010,7 +1028,7 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
         }
         else
         {
-            for (const auto& property : {ids::output, ids::auxSource, ids::sidechain, ids::target})
+            for (const auto& property : {ids::output, ids::auxSource, ids::sidechain, ids::target, ids::sourceDevice})
                 if (node.hasProperty(property))
                     node.setProperty(property, static_cast<int>(remap(static_cast<std::uint32_t>(static_cast<int>(node.getProperty(property))))), nullptr);
         }
@@ -2227,6 +2245,17 @@ void Session::removeDevice(juce::ValueTree d)
     for (const auto& t : getAllTracks())
         removeMappingsTo(t);
 
+    // ... and the sends that took the device's (or its loop's devices') outputs.
+    if (owner.isValid())
+    {
+        std::set<std::uint32_t> removed{device::getId(d)};
+        for (const auto& inner : getAllDevices(d))
+            removed.insert(device::getId(inner));
+        for (auto s : getSends(owner))
+            if (removed.count(send::getSourceDevice(s)) > 0)
+                removeSend(s);
+    }
+
     parent.removeChild(d, &undo_);
 }
 
@@ -2304,6 +2333,29 @@ juce::ValueTree Session::addSend(juce::ValueTree t, const juce::ValueTree& bus, 
     s.setProperty(ids::preFader, preFader, nullptr);
     t.addChild(s, -1, &undo_);
     return s;
+}
+
+juce::ValueTree Session::addDeviceSend(juce::ValueTree t, const juce::ValueTree& bus, const juce::ValueTree& device, int left, int right,
+                                       double gainDb)
+{
+    if (!device.isValid() || !device.hasType(ids::device) || left < 0 || right < 0)
+        return {};
+    // (one transaction: the send and where it takes its signal from)
+    auto s = addSend(t, bus, gainDb, false);
+    if (!s.isValid())
+        return {};
+    s.setProperty(ids::sourceDevice, static_cast<int>(device::getId(device)), &undo_);
+    s.setProperty(ids::sourceLeft, left, &undo_);
+    s.setProperty(ids::sourceRight, right, &undo_);
+    return s;
+}
+
+juce::ValueTree Session::findDeviceSend(const juce::ValueTree& t, std::uint32_t deviceId, int left, int right)
+{
+    for (const auto& s : getSends(t))
+        if (send::getSourceDevice(s) == deviceId && send::getSourceChannels(s) == std::make_pair(left, right))
+            return s;
+    return {};
 }
 
 void Session::removeSend(juce::ValueTree s)

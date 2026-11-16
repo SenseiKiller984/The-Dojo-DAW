@@ -153,6 +153,7 @@ device out += browser preview (live callbacks only)
 ```
 
 - **Insert loops.** A device whose processor implements `InsertLoopHost` (the Rhodes Suitcase) can hold devices of its own (DEVICE children of its DEVICE). When its loop is engaged and not empty, the compiler gives its `RenderDevice` a nested `loop` chain, and the engine runs the host in two halves around it: `processSend()` (up to the send; the buffer then holds the send), the loop's devices in order, then `processReturn()` (from the return to the output). A disengaged loop or a bypassed host runs the device in one piece. A loop can be in series (everything passes through it) or in parallel (the TG12345's echo send: the host mixes the return with its own signal, which it delays by the loop's latency, `RenderDevice::loopLatency`, passed to `processReturn()`). Loop devices count in their track's latency, automation lanes, sidechain dependencies and delay compensation; the loop switch reports a latency change, so the graph is recompiled when it flips.
+- **Device sends.** A SEND with a `sourceDevice` (and `sourceLeft` / `sourceRight`) takes two of that device's extra (aux) outputs instead of the track's output: a console channel's bus assignments, aux and cue sends. The compiler finds the device's node in the source track's chain; its tap time is the latency of the chain up to and including that device, so the bus's delay compensation aligns it like any other input. The engine reads the node's aux buffers (filled when the source track ran, an earlier level) and skips them while the source is muted or soloed away.
 - **Routing.** A track feeds its output bus, else its folder, else the master. Busses pull their inputs (so parallel tracks never write to shared buffers). The compiler refuses any edge (output, send, aux return, sidechain) that would close a loop.
 - **Delay compensation.** Each track's output latency is computed from its devices and inputs; every source is delayed (per-slot ring buffer, up to 8192 samples) to match the latest path into the same destination, iterated to a fixed point. Exports skip the total latency so files line up with the timeline.
 - **MIDI.** Notes are rendered sample-accurately per block (note-offs first); stop, locate and loop wraps send all-notes-off.
@@ -172,7 +173,7 @@ DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
     MIDICLIP*     position, content offset (beats); NOTE* and CC* children
     DEVICE*       type (native or "plugin" + PluginDescription), bypass, sidechain, saved state
       DEVICE*       (an insert loop's devices, in order; their lanes live on the track)
-    SEND*         target bus, level, pre/post
+    SEND*         target bus, level, pre/post (or a device's outputs: sourceDevice, sourceLeft, sourceRight)
     AUTOMATION*   target (volume, pan, send:<id>, param:<device>:<index>); POINT* children
     TRACK*        (folders contain tracks)
 ```

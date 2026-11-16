@@ -181,6 +181,12 @@ struct RenderSend
     /** From the source's (pre- or post-fader) channels to the bus's, when they differ. */
     bool convert = false;
     ChannelMatrix matrix;
+    /** A device send: it takes two of a device's extra (aux) outputs on the source track (a console
+        channel's bus assignments, aux and cue sends) instead of the track's output; null otherwise.
+        It follows the source's mute and solo. */
+    const ProcessorNode* auxNode = nullptr;
+    int auxLeft = 0, auxRight = 0;
+    int auxDevice = -1; ///< (the device's place in the source's chain: its latency up to there)
 };
 
 struct RenderTrack

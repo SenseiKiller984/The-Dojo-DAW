@@ -1001,6 +1001,39 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
         const auto& send = track.sends[sendIndex];
         const auto& sourceTrack = graph_->tracks[static_cast<std::size_t>(send.sourceIndex)];
         const auto& sourceSlot = slots_[static_cast<std::size_t>(sourceTrack.slot)];
+        double gain = send.gainAutomation.isEmpty() ? send.gain : automationToGain(send.gainAutomation.valueAt(automationTime(track.inputLatency)));
+        if (sendIndex < static_cast<std::size_t>(kMaxModulatedSends))
+            if (const double modulated = modulatedSends_[static_cast<std::size_t>(track.slot)][sendIndex]; !std::isnan(modulated))
+                gain = modulated;
+
+        if (send.auxNode != nullptr)
+        {
+            // A device send: two of the device's extra outputs (silent while its track is muted
+            // or soloed away, as the track's own sends are).
+            std::array<const Sample*, 2> outputs{send.auxNode->getAuxOutput(send.auxLeft), send.auxNode->getAuxOutput(send.auxRight)};
+            if (!sourceTrack.audible || outputs[0] == nullptr || outputs[1] == nullptr)
+                continue;
+            if (send.delay > 0 && send.delayLine != nullptr)
+            {
+                delayInto(*send.delayLine, outputs.data(), 2, slot.inputScratch, numSamples);
+                outputs = {slot.inputScratch.getReadPointer(0), slot.inputScratch.getReadPointer(1)};
+            }
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const Sample* source = outputs[static_cast<std::size_t>(ch)];
+                if (!send.convert)
+                {
+                    if (ch < numChannels)
+                        juce::FloatVectorOperations::addWithMultiply(slot.main.getWritePointer(ch), source, gain, numSamples);
+                    continue;
+                }
+                for (int o = 0; o < std::min(send.matrix.numOutputs, numChannels); ++o)
+                    if (const double g = send.matrix.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(ch)]; std::abs(g) > 1.0e-12)
+                        juce::FloatVectorOperations::addWithMultiply(slot.main.getWritePointer(o), source, g * gain, numSamples);
+            }
+            continue;
+        }
+
         const auto* tap = send.preFader ? &sourceSlot.pre : (sourceTrack.needsPostFaderCopy ? &sourceSlot.post : &sourceSlot.main);
         if (send.delay > 0 && send.delayLine != nullptr)
         {
@@ -1010,10 +1043,6 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
             tap = &slot.inputScratch;
         }
         const auto& buffer = *tap;
-        double gain = send.gainAutomation.isEmpty() ? send.gain : automationToGain(send.gainAutomation.valueAt(automationTime(track.inputLatency)));
-        if (sendIndex < static_cast<std::size_t>(kMaxModulatedSends))
-            if (const double modulated = modulatedSends_[static_cast<std::size_t>(track.slot)][sendIndex]; !std::isnan(modulated))
-                gain = modulated;
         if (send.convert)
         {
             // Into a bus of another layout: by speaker.

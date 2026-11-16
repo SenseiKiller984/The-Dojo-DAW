@@ -5,7 +5,10 @@
 #include "ui/Latency.h"
 #include "ui/PresetActions.h"
 #include "ui/components/ArrangerView.h"
+#include "ui/devices/ConsoleEditors.h"
 #include "ui/devices/DeviceEditors.h"
+#include "ui/devices/HarrisonEditors.h"
+#include "ui/devices/PagedEditor.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <algorithm>
@@ -442,6 +445,19 @@ public:
     [[nodiscard]] int getPreferredWidth() const noexcept { return preferredWidth_; }
     [[nodiscard]] const juce::ValueTree& getDevice() const noexcept { return device_; }
 
+    /** Its editor's pages, when it has pages (kept across the panel's rebuilds). */
+    [[nodiscard]] PagedEditor* getPagedEditor() const noexcept
+    {
+        auto* component = editorComponent_.get();
+        if (auto* paged = dynamic_cast<PagedEditor*>(component))
+            return paged;
+        if (auto* console = dynamic_cast<ConsoleEditor*>(component))
+            return &console->getPages();
+        if (auto* harrison = dynamic_cast<HarrisonEditor*>(component))
+            return &harrison->getPages();
+        return nullptr;
+    }
+
     void syncFromModel()
     {
         bypass_.setToggleState(!session::device::isBypassed(device_), juce::dontSendNotification);
@@ -816,6 +832,11 @@ juce::ValueTree DevicePanel::getOwner() const
 void DevicePanel::rebuild()
 {
     cancelPendingUpdate();
+    // The pages the cards' editors show stay as they are.
+    std::map<std::uint32_t, std::size_t> pages;
+    for (const auto& card : cards_)
+        if (const auto* paged = card->getPagedEditor())
+            pages[session::device::getId(card->getDevice())] = paged->getPage();
     loops_.clear();
     loopHosts_.clear();
     cards_.clear();
@@ -853,6 +874,11 @@ void DevicePanel::rebuild()
             holder_.addAndMakeVisible(*loop.end);
             loops_.push_back(std::move(loop));
         }
+
+    for (const auto& card : cards_)
+        if (auto* paged = card->getPagedEditor())
+            if (const auto it = pages.find(session::device::getId(card->getDevice())); it != pages.end())
+                paged->showPage(it->second);
 
     addButton_.setVisible(shownOwner_.isValid() && ownerTakesDevices(shownOwner_));
     closeStaleWindows();
@@ -1200,9 +1226,10 @@ void DevicePanel::editorStateChanged()
         triggerAsyncUpdate();
 }
 
-void DevicePanel::valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child)
+void DevicePanel::valueTreeChildAdded(juce::ValueTree&, juce::ValueTree& child)
 {
-    if (child.hasType(session::ids::device) || parent == shownOwner_)
+    // Devices, and tracks (the cards' sidechain lists); not the shown track's clips, sends or lanes.
+    if (child.hasType(session::ids::device) || child.hasType(session::ids::track))
         triggerAsyncUpdate();
 }
 

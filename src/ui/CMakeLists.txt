@@ -63,6 +63,8 @@ add_library(dojo_ui STATIC
     devices/KeysEditors.h
     devices/ConsoleEditors.cpp
     devices/ConsoleEditors.h
+    devices/HarrisonEditors.cpp
+    devices/HarrisonEditors.h
     devices/MoreDeviceEditors.cpp
     devices/MoreDeviceEditors.h
     devices/PagedEditor.h

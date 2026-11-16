@@ -321,8 +321,19 @@ void ChannelStrip::rebuildSends()
         slider.setWantsKeyboardFocus(false);
         const auto bus = session_.findTrack(session::send::getTarget(s));
         const auto busName = bus.isValid() ? session::track::getName(bus) : juce::String("?");
-        slider.setTextValueSuffix(" " + busName + (session::send::isPreFader(s) ? " (pre)" : ""));
-        slider.setTooltip("Send to " + busName + ". Right-click for pre/post fader or to remove.");
+        const auto sourceDevice = session_.findDevice(session::send::getSourceDevice(s));
+        if (sourceDevice.isValid())
+        {
+            // A device send (a console channel's bus, aux or cue output).
+            const auto deviceName = session::device::getName(sourceDevice);
+            slider.setTextValueSuffix(" " + busName + " (" + deviceName + ")");
+            slider.setTooltip("Send from " + deviceName + "'s own output to " + busName + ". Right-click to remove.");
+        }
+        else
+        {
+            slider.setTextValueSuffix(" " + busName + (session::send::isPreFader(s) ? " (pre)" : ""));
+            slider.setTooltip("Send to " + busName + ". Right-click for pre/post fader or to remove.");
+        }
         slider.setValue(session::send::getGainDb(s), juce::dontSendNotification);
         auto sendTree = s;
         slider.onDragStart = [this] { session_.beginTransaction("Send Level"); };
