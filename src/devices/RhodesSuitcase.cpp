@@ -395,8 +395,9 @@ void RhodesSuitcase::processSend(juce::AudioBuffer<double>& buffer, juce::MidiBu
         left[i] = right[i] = harp_[static_cast<std::size_t>(i)] * SuitcaseStage::kUnitsToDbfs;
 }
 
-void RhodesSuitcase::processReturn(juce::AudioBuffer<double>& buffer) noexcept
+void RhodesSuitcase::processReturn(juce::AudioBuffer<double>& buffer, int) noexcept
 {
+    // (a loop in series: its latency simply delays everything after it)
     // The loop's return (its two sides summed: the suitcase's vibrato takes a mono signal).
     const int numSamples = std::min(buffer.getNumSamples(), static_cast<int>(harp_.size()));
     double* left = buffer.getWritePointer(0);

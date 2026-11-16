@@ -136,7 +136,8 @@ TEST_CASE("Browser device search filters devices and plug-ins", "[browser]")
     CHECK(all.contains("Compressor"));
 
     browser->setDeviceSearch("comp");
-    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Compressor", "The Glue"}); // (The Glue: a bus compressor)
+    // (The Glue: a bus compressor; the EMI TG12345: a compressor / limiter on every channel)
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Compressor", "The Glue", "EMI TG12345"});
 
     browser->setDeviceSearch("sibilance"); // more words each device is known by
     CHECK(browser->getListedDeviceNames() == juce::StringArray{"De-Esser"});
@@ -190,7 +191,7 @@ TEST_CASE("The browser lists presets (built-in and the user's), searchable and d
     CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
     browser->setDeviceSearch("channel eq");
     CHECK(browser->getListedPresetNames() == juce::StringArray{"Synth Bite"});
-    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Channel EQ"});
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Channel EQ", "EMI TG12345"}); // (a console channel's EQ)
     browser->setDeviceSearch("reverb");
     listed = browser->getListedPresetNames();
     CHECK(listed.contains("Glassy Pad"));

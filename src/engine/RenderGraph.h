@@ -161,6 +161,7 @@ struct RenderDevice
     /** A device with an insert loop (an accessory / effects loop, see InsertLoopHost): the devices
         between its send and its return, in order (empty: it runs in one piece). Stereo tracks only. */
     std::vector<RenderDevice> loop;
+    int loopLatency = 0; ///< the loop's devices' latency (a parallel loop's host delays its own signal by it)
 };
 
 /** An incoming send, stored on the *receiving* bus (busses pull, so parallel tracks never write to

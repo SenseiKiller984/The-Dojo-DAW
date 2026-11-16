@@ -58,7 +58,7 @@ public:
     /** The two halves of an insert-loop device (stereo, in place); the engine runs the loop's devices
         in between. Not for bypassed devices (process() handles bypass). */
     void processSend(juce::AudioBuffer<Sample>& stereo, int numSamples, juce::MidiBuffer& midi) noexcept;
-    void processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples) noexcept;
+    void processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples, int loopLatency) noexcept;
 
     [[nodiscard]] juce::AudioProcessor& getProcessor() noexcept { return *processor_; }
     [[nodiscard]] const juce::AudioProcessor& getProcessor() const noexcept { return *processor_; }

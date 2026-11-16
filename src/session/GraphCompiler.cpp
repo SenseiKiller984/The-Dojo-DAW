@@ -554,6 +554,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                     device.loop.push_back(inner);
                     graph->keepAlive.push_back(loopNodes[i][d][k].second);
                 }
+            device.loopLatency = chainLatency(device.loop);
             rt.devices.push_back(device);
             graph->keepAlive.push_back(chainNodes[i][d].second);
         }

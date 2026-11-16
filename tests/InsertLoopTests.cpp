@@ -611,3 +611,88 @@ TEST_CASE("Projects saved with the separate Suitcase Base open with its effects 
 
     CHECK(Session::getDevices(session.getTrack(1)).size() == 1);
 }
+
+TEST_CASE("A console channel's echo loop runs in parallel, in time with the channel", "[engine][insertloop][console]")
+{
+    test::TempFolder temp;
+    const auto impulse = test::writeImpulse(temp.dir.getChildFile("imp.wav"), 4800, 9600, kRate, 0.1f);
+    const auto render = [&](float send, bool withChamber, int* tgLatency = nullptr)
+    {
+        Rig rig;
+        juce::String error;
+        auto asset = rig.assets.loadNow(impulse, error);
+        REQUIRE(asset != nullptr);
+        auto t = rig.session.addTrack();
+        rig.session.addClip(t, impulse, 0.0, asset->getLengthSeconds());
+        auto tg = rig.session.addDevice(t, "builtin:tg12345", "TG12345");
+        rig.set(tg, "echosend", send);
+        rig.set(tg, "echoreturn", 0.0f);
+        if (withChamber)
+            rig.set(rig.session.addDevice(tg, "builtin:limiter", "Chamber"), "lookahead", 5.0f); // 240 samples
+        const int own = rig.devices.getNode(tg)->getProcessor().getLatencySamples();
+        if (tgLatency != nullptr)
+            *tgLatency = own;
+        {
+            const auto graph = rig.builder.build(rig.session, rig.assets, &rig.devices);
+            const auto& device = graph->tracks.front().devices.front();
+            CHECK(device.loop.size() == (withChamber ? 1u : 0u));
+            CHECK(device.loopLatency == (withChamber ? 240 : 0));
+            CHECK(rig.builder.getTotalLatency() == own + (withChamber ? 240 : 0));
+        }
+        rig.publish();
+        rig.play();
+        rig.render(0.25);
+        return rig.left;
+    };
+    int own = 0;
+    const auto dry = render(-80.0f, true, &own);
+    const auto wet = render(0.0f, true);
+    // The channel waited for the chamber: the click and its echo (both channels' sends, twice the
+    // click on the mono echo bus) arrive together, three times as high.
+    const auto peak = test::indexOfPeak(dry);
+    CHECK(peak == test::indexOfPeak(wet));
+    CHECK(std::abs(static_cast<int>(peak) - (4800 + own + 240)) <= 2);
+    CHECK_THAT(test::peak(wet) / test::peak(dry), WithinAbs(3.0, 0.02));
+    // Without a chamber the send returns nothing.
+    CHECK_THAT(test::peak(render(0.0f, false)), WithinAbs(test::peak(dry), 1e-6));
+
+    // Its monitor section has no echo loop: the compiled graph leaves the loop out.
+    Rig rig;
+    auto t = rig.session.addTrack(TrackKind::bus, "Monitors");
+    auto tg = rig.session.addDevice(t, "builtin:tg12345", "TG12345");
+    rig.session.addDevice(tg, "builtin:echo", "Echo");
+    rig.set(tg, "cassette", 4.0f);
+    const auto graph = rig.builder.build(rig.session, rig.assets, &rig.devices);
+    CHECK(graph->tracks.front().devices.front().loop.empty());
+}
+
+TEST_CASE("The Devices panel offers a console's echo loop while its cassette has one", "[ui][insertloop][console]")
+{
+    juce::MessageManager::getInstance();
+    auto project = makeProject();
+    auto& session = project.getSession();
+    test::TempFolder temp;
+    plugins::PluginManager plugins(juce::File(), temp.dir.getChildFile("plugins.xml"));
+    ui::EditorState editorState;
+    auto track = session.addTrack(TrackKind::audio, "Vocal");
+    auto tg = session.addDevice(track, "builtin:tg12345", "TG12345");
+    editorState.selectTrack(track::getId(track));
+    project.getCompiler().rebuildNow();
+    ui::DevicePanel panel(project, plugins, editorState);
+    panel.setSize(1800, 360);
+    CHECK(panel.findLoopEnd(tg) != nullptr); // (Microphone: the echo send)
+
+    // The Main cassette has no echo send: the empty loop goes from the panel.
+    setValue(project, tg, "cassette", 2.0f);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(600);
+    CHECK(panel.findLoopEnd(tg) == nullptr);
+    // A loop that holds devices stays in view (nothing is hidden), whatever the cassette.
+    session.addDevice(tg, "builtin:plate", "Chamber");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    CHECK(panel.findLoopEnd(tg) != nullptr);
+    // The Echo / Aux cassette has its chamber again.
+    setValue(project, tg, "cassette", 3.0f);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(600);
+    CHECK(panel.findLoopEnd(tg) != nullptr);
+    (void) panel.createComponentSnapshot(panel.getLocalBounds());
+}

@@ -115,7 +115,7 @@ public:
     // InsertLoopHost: the accessory loop (send after the EQ, return into the vibrato).
     [[nodiscard]] bool isLoopEngaged() const noexcept override { return loop_->get(); }
     void processSend(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi) noexcept override;
-    void processReturn(juce::AudioBuffer<double>& buffer) noexcept override;
+    void processReturn(juce::AudioBuffer<double>& buffer, int loopLatency) noexcept override;
     [[nodiscard]] juce::String getLoopName() const override { return "Accessory Loop"; }
     [[nodiscard]] juce::String getReturnDescription() const override { return "vibrato, power amps, speakers"; }
 

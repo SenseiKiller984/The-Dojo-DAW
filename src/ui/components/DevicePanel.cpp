@@ -233,7 +233,9 @@ public:
         const auto count = session::Session::getDevices(host_).size();
         const auto name = (node_ != nullptr && node_->getInsertLoop() != nullptr ? node_->getInsertLoop()->getLoopName() : juce::String("Insert Loop"))
                               .toUpperCase();
-        const auto state = engaged ? (count > 0 ? juce::String("IN") : juce::String("EMPTY (NORMALLED)")) : juce::String("OUT (SWITCHED OFF)");
+        const bool series = node_ == nullptr || node_->getInsertLoop() == nullptr || node_->getInsertLoop()->isLoopInSeries();
+        const auto state = engaged ? (count > 0 ? juce::String("IN") : juce::String(series ? "EMPTY (NORMALLED)" : "EMPTY (NOTHING RETURNS)"))
+                                   : juce::String("OUT (SWITCHED OFF)");
         const auto shortState = engaged ? (count > 0 ? juce::String("IN") : juce::String("EMPTY")) : juce::String("OFF");
         // The longest title that fits: with its host's name, without it, or just the state.
         const auto title = area.reduced(10.0f, 3.0f).removeFromTop(14.0f);
@@ -815,6 +817,7 @@ void DevicePanel::rebuild()
 {
     cancelPendingUpdate();
     loops_.clear();
+    loopHosts_.clear();
     cards_.clear();
     shownOwner_ = getOwner();
     shownMaster_ = editor_.isMasterSelected();
@@ -829,6 +832,10 @@ void DevicePanel::rebuild()
             // A device with an insert loop: its loop follows it, in a frame.
             const auto node = project_.getDevices().getNode(device);
             if (node == nullptr || !node->hasInsertLoop() || shownOwner_.hasType(session::ids::master))
+                continue;
+            const bool shown = showsLoop(device, *node);
+            loopHosts_.push_back({device, node, shown});
+            if (!shown)
                 continue;
             LoopView loop;
             loop.frame = std::make_unique<LoopFrame>(device, node);
@@ -1211,11 +1218,24 @@ void DevicePanel::valueTreeChildOrderChanged(juce::ValueTree& parent, int, int)
         triggerAsyncUpdate();
 }
 
+bool DevicePanel::showsLoop(const juce::ValueTree& device, const engine::ProcessorNode& node)
+{
+    const auto* loop = node.getInsertLoop();
+    return loop != nullptr && (loop->isLoopAvailable() || !session::Session::getDevices(device).empty());
+}
+
 void DevicePanel::timerCallback()
 {
     refreshLatencies();
     for (auto& loop : loops_)
         loop.frame->repaint(); // (the loop's switch)
+    // A device's mode may offer its loop or not (a console's channel or monitor section).
+    for (const auto& host : loopHosts_)
+        if (showsLoop(host.device, *host.node) != host.shown)
+        {
+            triggerAsyncUpdate();
+            break;
+        }
 }
 
 void DevicePanel::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property)

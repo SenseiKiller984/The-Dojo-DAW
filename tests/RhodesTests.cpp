@@ -86,7 +86,7 @@ Stereo runSplit(ProcessorNode& node, std::size_t total, const std::vector<TimedM
         node.processSend(buffer, n, midi);
         if (inLoop)
             inLoop(buffer, offset, n);
-        node.processReturn(buffer, n);
+        node.processReturn(buffer, n, 0);
         for (int i = 0; i < n; ++i)
         {
             out.left[offset + static_cast<std::size_t>(i)] = buffer.getSample(0, i);

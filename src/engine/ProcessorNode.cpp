@@ -116,13 +116,13 @@ void ProcessorNode::processSend(juce::AudioBuffer<Sample>& stereo, int numSample
     insertLoop_->processSend(view, midiForProcessor);
 }
 
-void ProcessorNode::processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples) noexcept
+void ProcessorNode::processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples, int loopLatency) noexcept
 {
     if (insertLoop_ == nullptr || !prepared_ || numSamples <= 0 || stereo.getNumChannels() < 2)
         return;
     const juce::ScopedNoDenormals noDenormals;
     juce::AudioBuffer<double> view(stereo.getArrayOfWritePointers(), 2, numSamples);
-    insertLoop_->processReturn(view);
+    insertLoop_->processReturn(view, loopLatency);
 }
 
 template <typename FloatType>

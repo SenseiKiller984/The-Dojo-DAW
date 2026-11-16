@@ -134,6 +134,16 @@ private:
         std::size_t first = 0, last = 0; ///< (cards_ indices: first .. last - 1 are in the loop)
     };
     std::vector<LoopView> loops_;
+    /** Every device with an insert loop on the panel, and whether its loop is shown (a loop shows
+        while its device offers it, or while it holds devices). */
+    struct LoopHost
+    {
+        juce::ValueTree device;
+        std::shared_ptr<engine::ProcessorNode> node;
+        bool shown = false;
+    };
+    std::vector<LoopHost> loopHosts_;
+    [[nodiscard]] static bool showsLoop(const juce::ValueTree& device, const engine::ProcessorNode& node);
     juce::TextButton addButton_;
     juce::ValueTree shownOwner_;
     bool shownMaster_ = false;

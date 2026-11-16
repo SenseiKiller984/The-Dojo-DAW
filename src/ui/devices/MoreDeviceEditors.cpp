@@ -12,6 +12,7 @@
 #include "devices/MultibandDynamics.h"
 #include "devices/Roar.h"
 #include "engine/RenderGraph.h"
+#include "ui/devices/ConsoleEditors.h"
 #include "ui/devices/KeysEditors.h"
 #include "ui/devices/PagedEditor.h"
 #include "ui/devices/StudioDeviceEditors.h"
@@ -1146,6 +1147,8 @@ std::unique_ptr<juce::Component> createMoreDeviceEditor(juce::AudioProcessor& pr
         return studio;
     if (auto keys = createKeysDeviceEditor(processor, context, preferredWidth))
         return keys;
+    if (auto console = createConsoleDeviceEditor(processor, preferredWidth))
+        return console;
     if (auto* dynamics = dynamic_cast<devices::MultibandDynamics*>(&processor))
         return paged(processor, multibandPages(*dynamics), preferredWidth);
     if (auto* filter = dynamic_cast<devices::AutoFilter*>(&processor))

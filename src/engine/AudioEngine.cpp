@@ -1283,7 +1283,7 @@ void AudioEngine::runChain(const std::vector<RenderDevice>& chain, juce::AudioBu
             // An insert loop: the device up to its send, the loop's devices, then the rest of it.
             device.node->processSend(buffer, numSamples, midi);
             runChain(device.loop, buffer, 2, groups, midi, groupScratch);
-            device.node->processReturn(buffer, numSamples);
+            device.node->processReturn(buffer, numSamples, device.loopLatency);
             continue;
         }
 
