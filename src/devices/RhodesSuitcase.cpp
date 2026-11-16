@@ -178,13 +178,25 @@ RhodesSuitcase::RhodesSuitcase()
     volume_ = addFloat("volume", "Volume", {0.0f, 10.0f, 0.01f}, 7.0f);
     treble_ = addFloat("treble", "Treble", {-12.0f, 12.0f, 0.1f}, 0.0f, "dB");
     bass_ = addFloat("bass", "Bass", {-15.0f, 15.0f, 0.1f}, 0.0f, "dB");
-    loop_ = addBool("loop", "Accessory Loop", false);
+    loop_ = addBool("loop", "Accessory Loop", true);
     stage.speed = addFloatWithText("speed", "Speed", {0.0f, 10.0f, 0.01f}, 4.0f, {}, SuitcaseStage::speedText, SuitcaseStage::speedFromText);
     stage.intensity = addFloat("intensity", "Intensity", {0.0f, 10.0f, 0.01f}, 3.0f);
     stage.modulator = addChoice("modulator", "Modulator", {"Opto", "JFET"}, 0);
     stage.output = addChoice("out", "Output", {"Speakers", "Line Out"}, 0);
     stage.cabinet = addChoice("cabinet", "Speakers", {"4x10\"", "2x12\""}, 0);
     stage.master = addFloat("master", "Master", {-24.0f, 6.0f, 0.1f}, 0.0f, "dB");
+    loop_->addListener(this);
+}
+
+RhodesSuitcase::~RhodesSuitcase()
+{
+    loop_->removeListener(this);
+}
+
+void RhodesSuitcase::parameterValueChanged(int, float)
+{
+    // The loop's devices go in or out of the signal path: their delay too (the engine re-plans).
+    updateHostDisplay(ChangeDetails().withLatencyChanged(true));
 }
 
 void RhodesSuitcase::prepareDsp(double sampleRate, int maximumBlockSize)
@@ -368,7 +380,35 @@ void RhodesSuitcase::render(int from, int to) noexcept
 void RhodesSuitcase::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi) noexcept
 {
     const int numSamples = buffer.getNumSamples();
-    buffer.clear();
+    renderPreamp(midi, numSamples);
+    stage_.process(stage, harp_.data(), buffer.getWritePointer(0), buffer.getWritePointer(1), numSamples);
+}
+
+void RhodesSuitcase::processSend(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi) noexcept
+{
+    // The loop's send: post-EQ, pre-vibrato, 0 dBu (-18 dBFS), on both sides.
+    const int numSamples = std::min(buffer.getNumSamples(), static_cast<int>(harp_.size()));
+    renderPreamp(midi, numSamples);
+    double* left = buffer.getWritePointer(0);
+    double* right = buffer.getWritePointer(1);
+    for (int i = 0; i < numSamples; ++i)
+        left[i] = right[i] = harp_[static_cast<std::size_t>(i)] * SuitcaseStage::kUnitsToDbfs;
+}
+
+void RhodesSuitcase::processReturn(juce::AudioBuffer<double>& buffer) noexcept
+{
+    // The loop's return (its two sides summed: the suitcase's vibrato takes a mono signal).
+    const int numSamples = std::min(buffer.getNumSamples(), static_cast<int>(harp_.size()));
+    double* left = buffer.getWritePointer(0);
+    double* right = buffer.getWritePointer(1);
+    for (int i = 0; i < numSamples; ++i)
+        harp_[static_cast<std::size_t>(i)] = 0.5 * (left[i] + right[i]) / SuitcaseStage::kUnitsToDbfs;
+    stage_.process(stage, harp_.data(), left, right, numSamples);
+}
+
+void RhodesSuitcase::renderPreamp(juce::MidiBuffer& midi, int numSamples) noexcept
+{
+    numSamples = std::min(numSamples, static_cast<int>(harp_.size()));
     updateKeys();
     std::fill(harp_.begin(), harp_.begin() + numSamples, 0.0);
 
@@ -423,51 +463,6 @@ void RhodesSuitcase::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuf
         y = bassFilter_.process(trebleFilter_.process(y, treble), bass);
         s = kOpAmpClip * saturate(y / kOpAmpClip, 6.0); // (the op-amps on their +-15 V rails)
     }
-
-    double* left = buffer.getWritePointer(0);
-    double* right = buffer.getWritePointer(1);
-    if (loop_->get())
-    {
-        // The accessory loop's Send: post-EQ, pre-vibrato, 0 dBu.
-        for (int i = 0; i < numSamples; ++i)
-            left[i] = right[i] = harp_[static_cast<std::size_t>(i)] * SuitcaseStage::kUnitsToDbfs;
-        return;
-    }
-    stage_.process(stage, harp_.data(), left, right, numSamples);
-}
-
-//==================================================================================================
-// Suitcase Base
-
-SuitcaseBase::SuitcaseBase()
-    : BuiltinProcessor(kTypeId, "Suitcase Base",
-                       BusesProperties()
-                           .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                           .withOutput("Output", juce::AudioChannelSet::stereo(), true),
-                       false)
-{
-    stage.speed = addFloatWithText("speed", "Speed", {0.0f, 10.0f, 0.01f}, 4.0f, {}, SuitcaseStage::speedText, SuitcaseStage::speedFromText);
-    stage.intensity = addFloat("intensity", "Intensity", {0.0f, 10.0f, 0.01f}, 3.0f);
-    stage.modulator = addChoice("modulator", "Modulator", {"Opto", "JFET"}, 0);
-    stage.output = addChoice("out", "Output", {"Speakers", "Line Out"}, 0);
-    stage.cabinet = addChoice("cabinet", "Speakers", {"4x10\"", "2x12\""}, 0);
-    stage.master = addFloat("master", "Master", {-24.0f, 6.0f, 0.1f}, 0.0f, "dB");
-}
-
-void SuitcaseBase::prepareDsp(double sampleRate, int maximumBlockSize)
-{
-    mono_.assign(static_cast<std::size_t>(maximumBlockSize), 0.0);
-    stage_.prepare(sampleRate);
-}
-
-void SuitcaseBase::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) noexcept
-{
-    const int numSamples = buffer.getNumSamples();
-    double* left = buffer.getWritePointer(0);
-    double* right = buffer.getWritePointer(1);
-    for (int i = 0; i < numSamples; ++i)
-        mono_[static_cast<std::size_t>(i)] = 0.5 * (left[i] + right[i]) / SuitcaseStage::kUnitsToDbfs; // (-18 dBFS = 0 dBu)
-    stage_.process(stage, mono_.data(), left, right, numSamples);
 }
 
 } // namespace dojo::devices

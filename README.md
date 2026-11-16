@@ -21,6 +21,10 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **The Devices panel's header** shows the whole chain's delay (CHAIN DELAY), the sum over the devices that are on. Its tooltip also gives the whole project's delay after compensation.
   - **The status bar** shows the project's delay compensation (PDC) in milliseconds and samples.
   - Everything follows changes as you make them: a lookahead or mode that changes a device's delay, bypassing a device (a bypassed device adds no delay), and the sample rate.
+- **Insert loops**: a device can hold devices of its own, which the engine runs inside it, between the device's send and its return. This is how a hardware unit's effects loop works. The Rhodes Suitcase's accessory loop is one.
+  - The loop's devices belong to the device's track. Their delay counts in the track's delay compensation (and in the Devices panel's readouts), their automation lanes sit on the track and follow the delayed sound, and their sidechains order the tracks and refuse feedback like any other.
+  - They are saved with the project, copied with Duplicate Track (with fresh ids, their lanes following them), undone in one step with their host, and kept in chain presets.
+  - Switching the loop off, or bypassing its host, takes the whole loop out of the signal path (and its delay out of the compensation). Effects go into loops; instruments and the LFO do not. Loops run on mono and stereo tracks.
 - The graph renders on **all CPU cores**: independent tracks run in parallel.
 - Audio tracks and aux inputs (busses) are **mono or stereo**. A mono track plays its clips as one signal, or one chosen channel of each clip's file. It also records one input channel.
 
@@ -265,7 +269,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **The pickups**: each tine swings in front of a variable-reluctance pickup: the voltage is the change of the magnetic flux, which is not linear in the tine's position, so playing harder brings in the harmonics of the famous **bark**. **Voicing** sets the tines' alignment with their pickups (mellow, off-centre, to barky, closer to centre); **Hammer** the tips' hardness; **Tine** the bell; **Velocity** the touch; **Age** spreads tuning, voicing and tone-bar beating from key to key; **Tuning**.
   - **Harp Load**: into the Janus preamp's high-impedance input (over 1 MOhm) every harmonic stays; into a guitar amp (100 kOhm) or a mixer (10 kOhm) the harp's inductance rolls the top off.
   - **The Janus preamp**: **Volume** (an audio-taper slider: about 0 dBu for a mezzo-forte note at 7), **Treble** (+-12 dB shelf at 10 kHz) and **Bass** (+-15 dB shelf around 75 Hz) on +-15 V op-amps with about 21 dB of headroom.
-  - **Accessory Loop**: on, the output stops at the loop's send (after the EQ, before the vibrato, 0 dBu = -18 dBFS). Add effects after it on the track and finish the chain with a **Suitcase Base**, the loop's return (vibrato, power amps and speakers on their own; the **Add Suitcase Base** button adds one set up like the Rhodes' own). With nothing in between it sounds exactly the same.
+  - **Accessory Loop**: one device does it all, like the real suitcase with pedals plugged into its loop jacks. In the Devices panel the Rhodes' own loop follows its card in a frame (**ACCESSORY LOOP**). Drop effects into it from the browser, or add them with its **+ Add to Loop** button. They run between the loop's send (after the EQ, before the vibrato, mono at 0 dBu = -18 dBFS) and its return, which goes back into the same Rhodes: its vibrato, power amps and speakers. The loop's return is mono, like the suitcase's: a stereo effect in it is summed. The **Acc. Loop** switch (Janus Preamp page) takes the loop in and out. With nothing in it the contacts are normalled and the sound goes straight through. The frame shows whether the loop is **IN**, **EMPTY** or **OFF**, and the Rhodes' display shows its path ("send > Echo > Chorus-Ensemble > return"). Effects after the Rhodes card, outside the frame, process the suitcase's finished sound as usual.
   - **The vibrato** (stereo auto-panner): a smoothed-triangle LFO (**Speed** 1 to 10 Hz) swings the sound between the left and right amplifiers, 180 degrees apart, by **Intensity**: **Opto** (an LED and a photoresistor: quick to brighten, slow to darken, a rounded swing that narrows at fast speeds) or **JFET** (exact). The front-panel LED pulses with it.
   - **The power base**: two 40 W amplifiers into 4 ohms on unregulated +-32 V rails (under 0.5 % THD at the rated 40 W, rounding off about 3 dB above, the rails sagging on long loud passages) into four 10-inch speakers (a pair per side) or two 12-inch ones (darker), about 30 Hz - 15 kHz; or **Line Out**: the umbilical's 0 dBu signals, as when recording it direct. **Master** trims the output.
   - The display shows the keyboard with the sounding keys, the LED and the loop's state.
@@ -304,7 +308,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 **Preset chains**: a chain preset is a whole device chain in one `.dojopreset` file: every device in order, each with its own settings and its role in the chain as its name ("Subtractive EQ", "Slapback Delay"). A chain can use the same kind of device more than once.
 - To add one, double-click it in the browser's **PRESET CHAINS** list, drag it onto a track or the Devices panel, or pick it in **+ Add Device > Preset Chains**. Its devices go after the track's own, and adding them is one undo step.
 - Dropped onto one device, a chain loads only that device's part. The device takes the entry of its kind at its own position, so the second EQ on a track takes the chain's second EQ.
-- Your own chains come from **Save Whole Chain as Preset...** and show up next to the built-in ones.
+- Your own chains come from **Save Whole Chain as Preset...** and show up next to the built-in ones. A device's insert loop is saved with it: a Rhodes with effects in its accessory loop comes back with the same effects, in the same order, with their settings.
 - **Built-in chains** (each device's settings are in the file, readable). Where a chain needs a dedicated kind of device (De-Esser, The Glue, Expander, Soft Clipper, Plate Reverb), it is a real device you can also add on its own from the browser:
 
   | Chain | For | Devices |
@@ -445,12 +449,12 @@ resources/    embedded fonts and built-in presets (presets/*.dojopreset)
 scripts/      setup and build helpers (bash + PowerShell)
 src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), musical time
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
+              insert loops (devices inside a device, between its send and return),
               clip playback / time-stretch / disk streaming, capture, file preview, device host,
               MP3 encoder
 src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue, limiter,
               Gate, Expander, De-Esser, Soft Clipper, Multiband Dynamics, reverb, Plate Reverb,
               delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux, Studer A800 tape,
-              Suitcase Base,
               pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
               Operator, Meld, Analog, Drift, Rhodes Suitcase 73 Mk II, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning

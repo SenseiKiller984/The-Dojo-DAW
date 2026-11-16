@@ -1,6 +1,7 @@
 #pragma once
 
 #include "devices/BuiltinProcessor.h"
+#include "core/InsertLoop.h"
 #include "devices/dsp/Biquad.h"
 
 #include <array>
@@ -92,12 +93,14 @@ private:
     - The Janus preamp: Volume (an audio-taper slider), Treble (+-12 dB shelf at 10 kHz) and Bass
       (+-15 dB shelf at about 75 Hz) on +-15 V op-amps (0 dBu nominal, about +21 dBu before they
       clip).
-    - Accessory Loop: on, the output stops at the loop's Send (after the EQ, before the vibrato, 0 dBu
-      = -18 dBFS): put effects after it on the track and finish the chain with a Suitcase Base (the
-      Return: the vibrato, power amps and speakers).
+    - Accessory Loop: devices put into the Rhodes' own insert loop (in the Devices panel, the loop
+      right after it) run between the send (after the EQ, before the vibrato, 0 dBu = -18 dBFS) and
+      the return, like pedals plugged into the suitcase's loop jacks; the Accessory Loop switch takes
+      them in and out. With nothing in the loop the contacts are normalled: the signal goes straight
+      through.
     - The suitcase: see SuitcaseStage (vibrato, power amps, speakers or line out).
 */
-class RhodesSuitcase final : public BuiltinProcessor
+class RhodesSuitcase final : public BuiltinProcessor, public InsertLoopHost, private juce::AudioProcessorParameter::Listener
 {
 public:
     static constexpr const char* kTypeId = "builtin:rhodes73";
@@ -107,6 +110,14 @@ public:
     static constexpr int kModes = 4;            ///< fundamental, tone-bar beat, two bell overtones
 
     RhodesSuitcase();
+    ~RhodesSuitcase() override;
+
+    // InsertLoopHost: the accessory loop (send after the EQ, return into the vibrato).
+    [[nodiscard]] bool isLoopEngaged() const noexcept override { return loop_->get(); }
+    void processSend(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi) noexcept override;
+    void processReturn(juce::AudioBuffer<double>& buffer) noexcept override;
+    [[nodiscard]] juce::String getLoopName() const override { return "Accessory Loop"; }
+    [[nodiscard]] juce::String getReturnDescription() const override { return "vibrato, power amps, speakers"; }
 
     /** Keys sounding now (for the display and tests). */
     [[nodiscard]] int getSoundingKeys() const noexcept { return sounding_.load(std::memory_order_relaxed); }
@@ -159,6 +170,10 @@ private:
         bool held = false, active = false;
     };
 
+    void parameterValueChanged(int index, float value) override;
+    void parameterGestureChanged(int, bool) override {}
+    /** The harp and the Janus preamp: `n` samples of the post-EQ signal (circuit units) into harp_. */
+    void renderPreamp(juce::MidiBuffer& midi, int n) noexcept;
     void handleMidi(const std::uint8_t* data, int size) noexcept;
     void strike(int key, double velocity) noexcept;
     void release(int key) noexcept;
@@ -175,31 +190,6 @@ private:
     std::array<float, 8> signature_{}; ///< (when the key tables were last computed)
     std::atomic<int> sounding_{0};
     std::array<std::atomic<std::uint64_t>, 2> keyMask_{};
-};
-
-/**
-    Suitcase Base: the return of the Rhodes Suitcase's accessory loop, its lower half on its own: the
-    vibrato, the two power amplifiers and the speakers (or Line Out), fed with the loop's 0 dBu
-    signal (-18 dBFS). Put it at the end of a chain that starts with a Rhodes Suitcase whose
-    Accessory Loop is on, with effects in between.
-*/
-class SuitcaseBase final : public BuiltinProcessor
-{
-public:
-    static constexpr const char* kTypeId = "builtin:suitcasebase";
-
-    SuitcaseBase();
-    [[nodiscard]] float getLfo() const noexcept { return stage_.getLfo(); }
-
-    SuitcaseStage::Controls stage{};
-
-protected:
-    void prepareDsp(double sampleRate, int maximumBlockSize) override;
-    void processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi) noexcept override;
-
-private:
-    SuitcaseStage stage_;
-    std::vector<double> mono_;
 };
 
 } // namespace dojo::devices

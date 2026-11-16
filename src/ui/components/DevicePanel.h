@@ -17,12 +17,17 @@ namespace dojo::ui
 
 class DeviceCard;
 class LatencyBadge;
+class LoopEnd;
+class LoopFrame;
 
 /**
     The device chain of the selected track (or the master bus), left to right in signal order.
 
     Each device is a card: a header (name, bypass, sidechain source for devices that have a
-    sidechain input, presets, plug-in window, move left/right, remove) above its editor. The "+"
+    sidechain input, presets, plug-in window, move left/right, remove) above its editor. A device
+    with an insert loop (an accessory / effects loop, such as the Rhodes Suitcase's) is followed by
+    its loop in a frame: the loop's devices, then a slot to add or drop effects into it, after which
+    the signal returns into the device. The "+"
     card adds a native device or a plug-in; devices and plug-ins can also be dropped here from the
     browser. Hosted plug-ins open their own GUI in a separate window.
 
@@ -68,6 +73,8 @@ public:
     // --- Tests -----------------------------------------------------------------------------------
     /** The card showing `device` (a DragAndDropTarget and a FileDragAndDropTarget), or nullptr. */
     [[nodiscard]] juce::Component* findCard(const juce::ValueTree& device) const;
+    /** The end of `host`'s insert loop (its "+ Add to Loop" button and drop target), if shown. */
+    [[nodiscard]] juce::Component* findLoopEnd(const juce::ValueTree& host) const;
     /** The message the card of `device` shows right now (empty when none). */
     [[nodiscard]] juce::String getNotice(const juce::ValueTree& device) const;
     /** The message the panel itself shows right now (a preset dropped on it). */
@@ -100,7 +107,7 @@ private:
     void dropPreset(const session::presets::Preset& preset);
     void layoutHeader();
     [[nodiscard]] juce::String getHeaderTitle() const;
-    void timerCallback() override { refreshLatencies(); }
+    void timerCallback() override;
     void addChainItems(juce::PopupMenu& menu);
     void setPanelNotice(const juce::String& text);
 
@@ -119,6 +126,14 @@ private:
     juce::Viewport viewport_;
     juce::Component holder_;
     std::vector<std::unique_ptr<DeviceCard>> cards_;
+    /** An insert loop shown in the chain: its frame, its cards (cards_[first .. end)) and its end. */
+    struct LoopView
+    {
+        std::unique_ptr<LoopFrame> frame;
+        std::unique_ptr<LoopEnd> end;
+        std::size_t first = 0, last = 0; ///< (cards_ indices: first .. last - 1 are in the loop)
+    };
+    std::vector<LoopView> loops_;
     juce::TextButton addButton_;
     juce::ValueTree shownOwner_;
     bool shownMaster_ = false;

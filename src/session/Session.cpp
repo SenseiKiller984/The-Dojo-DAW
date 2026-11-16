@@ -1,5 +1,9 @@
 #include "session/Session.h"
 
+#include "devices/RhodesSuitcase.h"
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -947,7 +951,11 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
             if (drop)
             {
                 if (child.hasType(ids::device))
+                {
                     droppedDevices.insert(device::getId(child));
+                    for (const auto& inner : getAllDevices(child)) // (the devices in its insert loop)
+                        droppedDevices.insert(device::getId(inner));
+                }
                 if (child.hasType(ids::send))
                     droppedSends.insert(send::getId(child));
                 node.removeChild(i, nullptr);
@@ -1256,7 +1264,7 @@ bool Session::canFeed(const juce::ValueTree& source, const juce::ValueTree& bus)
         {
             if (track::getAuxSource(other) == track::getId(from) && reaches(other))
                 return true;
-            for (const auto& d : getDevices(other))
+            for (const auto& d : getAllDevices(other))
                 if (device::getSidechain(d) == track::getId(from) && reaches(other))
                     return true;
         }
@@ -2196,16 +2204,23 @@ void Session::removeDevice(juce::ValueTree d)
     if (!parent.isValid())
         return;
 
-    // Automation of the device's parameters goes with it, and so do modulators' mappings to them.
-    const auto prefix = "param:" + juce::String(static_cast<int>(device::getId(d))) + ":";
-    for (auto lane : getAutomationLanes(parent))
-        if (automation::getTarget(lane).startsWith(prefix))
-            parent.removeChild(lane, &undo_);
-    const auto removeMappingsTo = [&](const juce::ValueTree& owner)
+    // Automation of the device's parameters goes with it (and of the devices in its insert loop:
+    // the lanes live on the track), and so do modulators' mappings to them.
+    auto owner = getDeviceOwner(d);
+    std::vector<juce::String> prefixes{"param:" + juce::String(static_cast<int>(device::getId(d))) + ":"};
+    for (const auto& inner : getAllDevices(d))
+        prefixes.push_back("param:" + juce::String(static_cast<int>(device::getId(inner))) + ":");
+    const auto targets = [&prefixes](const juce::String& target)
+    { return std::any_of(prefixes.begin(), prefixes.end(), [&target](const juce::String& p) { return target.startsWith(p); }); };
+    if (owner.isValid())
+        for (auto lane : getAutomationLanes(owner))
+            if (targets(automation::getTarget(lane)))
+                owner.removeChild(lane, &undo_);
+    const auto removeMappingsTo = [&](const juce::ValueTree& tree)
     {
-        for (const auto& modulator : getDevices(owner))
+        for (const auto& modulator : getAllDevices(tree))
             for (auto mapping : getModulations(modulator))
-                if (modulation::getTarget(mapping).startsWith(prefix))
+                if (targets(modulation::getTarget(mapping)))
                     removeModulation(mapping);
     };
     removeMappingsTo(getMaster());
@@ -2234,13 +2249,13 @@ juce::ValueTree Session::findDevice(std::uint32_t deviceId) const
     if (deviceId == 0)
         return {};
 
-    for (const auto& d : getDevices(getMaster()))
+    for (const auto& d : getAllDevices(getMaster()))
         if (device::getId(d) == deviceId)
             return d;
 
     for (const auto& t : getAllTracks())
-        for (const auto& d : t)
-            if (d.hasType(ids::device) && device::getId(d) == deviceId)
+        for (const auto& d : getAllDevices(t))
+            if (device::getId(d) == deviceId)
                 return d;
 
     return {};
@@ -2253,6 +2268,26 @@ std::vector<juce::ValueTree> Session::getDevices(const juce::ValueTree& owner)
         if (child.hasType(ids::device))
             devices.push_back(child);
     return devices;
+}
+
+std::vector<juce::ValueTree> Session::getAllDevices(const juce::ValueTree& owner)
+{
+    std::vector<juce::ValueTree> devices;
+    for (const auto& d : getDevices(owner))
+    {
+        devices.push_back(d);
+        const auto inner = getAllDevices(d);
+        devices.insert(devices.end(), inner.begin(), inner.end());
+    }
+    return devices;
+}
+
+juce::ValueTree Session::getDeviceOwner(const juce::ValueTree& device)
+{
+    auto owner = device.getParent();
+    while (owner.isValid() && owner.hasType(ids::device))
+        owner = owner.getParent();
+    return owner;
 }
 
 // --- Sends ----------------------------------------------------------------------------------------
@@ -2359,7 +2394,7 @@ std::vector<juce::ValueTree> Session::findModulationsOf(std::uint32_t trackId, c
     std::vector<juce::ValueTree> result;
     const auto collect = [&](const juce::ValueTree& owner)
     {
-        for (const auto& d : getDevices(owner))
+        for (const auto& d : getAllDevices(owner))
             for (const auto& m : getModulations(d))
                 if (modulation::getTarget(m) == target && (target.startsWith("param:") || modulation::getTrack(m) == trackId))
                     result.push_back(m);
@@ -2463,6 +2498,100 @@ void forEachMediaClip(juce::ValueTree parent, Fn&& fn)
             forEachMediaClip(child, fn);
     }
 }
+
+/** A native device's saved settings as XML (DOJO_DEVICE), or null. */
+std::unique_ptr<juce::XmlElement> readDeviceState(const juce::ValueTree& d)
+{
+    juce::MemoryBlock block;
+    if (!block.fromBase64Encoding(d.getProperty(ids::state).toString()) || block.getSize() == 0)
+        return nullptr;
+    auto xml = juce::AudioProcessor::getXmlFromBinary(block.getData(), static_cast<int>(block.getSize()));
+    return xml != nullptr && xml->hasTagName("DOJO_DEVICE") ? std::move(xml) : nullptr;
+}
+
+/**
+    Files from the build that had a separate "Suitcase Base" device (the Rhodes' loop return, at
+    the end of its track's chain): the effects between a Rhodes and its Suitcase Base move into the
+    Rhodes' own accessory loop, the Base's suitcase settings (vibrato, power amps, speakers) go into
+    the Rhodes, and the Base goes (with any automation of it). The sound stays the same.
+*/
+void mergeSuitcaseBases(juce::ValueTree owner)
+{
+    static const juce::String rhodesType = devices::RhodesSuitcase::kTypeId;
+    static const juce::String baseType = "builtin:suitcasebase";
+    const auto typeOf = [](const juce::ValueTree& c) { return c.hasType(ids::device) ? device::getType(c) : juce::String(); };
+
+    for (int i = 0; i < owner.getNumChildren(); ++i)
+    {
+        auto rhodes = owner.getChild(i);
+        if (typeOf(rhodes) != rhodesType)
+            continue;
+        int baseIndex = -1;
+        for (int j = i + 1; j < owner.getNumChildren() && baseIndex < 0; ++j)
+        {
+            const auto type = typeOf(owner.getChild(j));
+            if (type == rhodesType)
+                break;
+            if (type == baseType)
+                baseIndex = j;
+        }
+        if (baseIndex < 0)
+            continue;
+        const auto base = owner.getChild(baseIndex);
+
+        // The Base's settings (the suitcase's parameter ids are the same on both) into the Rhodes.
+        if (const auto baseState = readDeviceState(base))
+        {
+            auto state = readDeviceState(rhodes);
+            if (state == nullptr)
+            {
+                state = std::make_unique<juce::XmlElement>("DOJO_DEVICE");
+                state->setAttribute("type", rhodesType);
+                state->setAttribute("version", 1);
+            }
+            for (const auto* parameter : baseState->getChildWithTagNameIterator("PARAM"))
+            {
+                const auto id = parameter->getStringAttribute("id");
+                auto* target = state->getChildByAttribute("id", id);
+                if (target == nullptr)
+                {
+                    target = state->createNewChildElement("PARAM");
+                    target->setAttribute("id", id);
+                }
+                target->setAttribute("value", parameter->getDoubleAttribute("value"));
+            }
+            juce::MemoryBlock block;
+            juce::AudioProcessor::copyXmlToBinary(*state, block);
+            rhodes.setProperty(ids::state, block.toBase64Encoding(), nullptr);
+        }
+
+        // The devices in between into the Rhodes' loop, in order.
+        std::vector<juce::ValueTree> between;
+        for (int j = i + 1; j < baseIndex; ++j)
+            if (owner.getChild(j).hasType(ids::device))
+                between.push_back(owner.getChild(j));
+        for (auto d : between)
+        {
+            owner.removeChild(d, nullptr);
+            rhodes.appendChild(d, nullptr);
+        }
+
+        // The Base and its lanes.
+        const auto baseId = device::getId(base);
+        for (int k = owner.getNumChildren(); --k >= 0;)
+        {
+            const auto lane = owner.getChild(k);
+            std::uint32_t id = 0;
+            int index = 0;
+            if (lane.hasType(ids::automation) && automation::parseParameterTarget(automation::getTarget(lane), id, index) && id == baseId)
+                owner.removeChild(k, nullptr);
+        }
+        owner.removeChild(base, nullptr);
+    }
+    for (auto child : owner)
+        if (child.hasType(ids::track))
+            mergeSuitcaseBases(child);
+}
 } // namespace
 
 juce::Result Session::save(const juce::File& file) const
@@ -2524,6 +2653,9 @@ juce::Result Session::load(const juce::File& file)
     if (!loaded.getChildWithName(ids::master).isValid())
         loaded.addChild(juce::ValueTree(ids::master), 0, nullptr);
     loaded.setProperty(ids::version, kFileFormatVersion, nullptr);
+    for (auto child : loaded)
+        if (child.hasType(ids::track))
+            mergeSuitcaseBases(child);
 
     state_.copyPropertiesAndChildrenFrom(loaded, nullptr);
     undo_.clearUndoHistory();

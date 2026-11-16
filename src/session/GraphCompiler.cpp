@@ -7,6 +7,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <set>
 
@@ -16,15 +17,18 @@ namespace
 {
 double dbToGain(double db) { return juce::Decibels::decibelsToGain(db, kMinusInfinityDb); }
 
-/** Sum of the latencies of the active devices of a chain. */
+/** Sum of the latencies of the active devices of a chain (with the devices of their insert loops). */
 int chainLatency(const std::vector<engine::RenderDevice>& devices)
 {
     int latency = 0;
     for (const auto& d : devices)
         if (d.node != nullptr && !d.node->isBypassed())
-            latency += std::max(0, d.node->getLatencySamples());
+            latency += std::max(0, d.node->getLatencySamples()) + chainLatency(d.loop);
     return latency;
 }
+
+/** A device and its node. */
+using DeviceNode = std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>;
 
 /** Directed graph of "a feeds b" edges over graph indices, refusing edges that would close a loop. */
 class RoutingGraph
@@ -261,13 +265,24 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     const double speedCompensation = session.getKeepPitch() ? -12.0 * std::log2(speed) : 0.0;
 
     // --- Device chains (needed first: sidechains are routing edges) ------------------------------
-    std::vector<std::vector<std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>>> chainNodes(count);
+    std::vector<std::vector<DeviceNode>> chainNodes(count);
+    // Per track, per device: the devices of its insert loop, when it has one that is engaged (an
+    // accessory / effects loop: they run between its send and its return).
+    std::vector<std::vector<std::vector<DeviceNode>>> loopNodes(count);
     if (devices != nullptr)
     {
         for (std::size_t i = 0; i < count; ++i)
             for (const auto& d : Session::getDevices(trees[i]))
                 if (auto node = devices->getNode(d))
+                {
+                    std::vector<DeviceNode> loop;
+                    if (node->hasInsertLoop() && node->isLoopEngaged())
+                        for (const auto& inner : Session::getDevices(d))
+                            if (auto innerNode = devices->getNode(inner))
+                                loop.emplace_back(inner, std::move(innerNode));
                     chainNodes[i].emplace_back(d, std::move(node));
+                    loopNodes[i].push_back(std::move(loop));
+                }
     }
 
     // --- Routing edges, loops refused --------------------------------------------------------------
@@ -277,6 +292,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     std::vector<int> auxSource(count, -1);
     std::vector<std::vector<std::pair<int, juce::ValueTree>>> incomingSends(count); // (source, SEND tree)
     std::vector<std::vector<int>> sidechainOf(count); // per device, the source index (-1 = none)
+    std::vector<std::vector<std::vector<int>>> loopSidechainOf(count); // per device, per device of its loop
 
     for (std::size_t i = 0; i < count; ++i)
     {
@@ -345,16 +361,24 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     for (std::size_t i = 0; i < count; ++i)
     {
-        for (const auto& [deviceTree, node] : chainNodes[i])
+        const auto sidechainFor = [&](const juce::ValueTree& deviceTree, const engine::ProcessorNode& node)
         {
             int source = -1;
-            if (const auto id = device::getSidechain(deviceTree); id != 0 && node->hasSidechainInput())
+            if (const auto id = device::getSidechain(deviceTree); id != 0 && node.hasSidechainInput())
             {
                 source = indexOf(id);
                 if (source >= 0 && !routing.tryAdd(source, static_cast<int>(i)))
                     source = -1;
             }
-            sidechainOf[i].push_back(source);
+            return source;
+        };
+        for (std::size_t d = 0; d < chainNodes[i].size(); ++d)
+        {
+            sidechainOf[i].push_back(sidechainFor(chainNodes[i][d].first, *chainNodes[i][d].second));
+            std::vector<int> inLoop;
+            for (const auto& [innerTree, innerNode] : loopNodes[i][d])
+                inLoop.push_back(sidechainFor(innerTree, *innerNode));
+            loopSidechainOf[i].push_back(std::move(inLoop));
         }
     }
 
@@ -395,6 +419,10 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         for (const int source : sidechainOf[i])
             if (source >= 0)
                 deps.push_back(source);
+        for (const auto& inLoop : loopSidechainOf[i])
+            for (const int source : inLoop)
+                if (source >= 0)
+                    deps.push_back(source);
     }
 
     std::vector<int> level(count, -1);
@@ -516,6 +544,16 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             device.sidechainSource = sidechainOf[i][d];
             if (rt.layout.isMultichannel())
                 addCompanions(device, chainNodes[i][d].first, rt.groups);
+            else
+                for (std::size_t k = 0; k < loopNodes[i][d].size(); ++k)
+                {
+                    // (insert loops run in stereo)
+                    engine::RenderDevice inner;
+                    inner.node = loopNodes[i][d][k].second.get();
+                    inner.sidechainSource = loopSidechainOf[i][d][k];
+                    device.loop.push_back(inner);
+                    graph->keepAlive.push_back(loopNodes[i][d][k].second);
+                }
             rt.devices.push_back(device);
             graph->keepAlive.push_back(chainNodes[i][d].second);
         }
@@ -537,13 +575,19 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             }
             else if (automation::parseParameterTarget(target, id, parameterIndex))
             {
-                for (const auto& [deviceTree, node] : chainNodes[i])
+                const auto addLane = [&](const DeviceNode& entry)
                 {
-                    if (device::getId(deviceTree) != id)
-                        continue;
-                    const auto& parameters = node->getProcessor().getParameters();
+                    if (device::getId(entry.first) != id)
+                        return;
+                    const auto& parameters = entry.second->getProcessor().getParameters();
                     if (parameterIndex < parameters.size())
                         rt.parameterLanes.push_back({parameters[parameterIndex], automation::toCurve(lane)});
+                };
+                for (std::size_t d = 0; d < chainNodes[i].size(); ++d)
+                {
+                    addLane(chainNodes[i][d]);
+                    for (const auto& inner : loopNodes[i][d]) // (the devices of its insert loop)
+                        addLane(inner);
                 }
             }
         }
@@ -1028,8 +1072,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     // Automation is read as late as the sound it shapes: each device's lanes by the delay of what
     // comes before it in its chain (which starts `start` samples late).
-    const auto findLatency = [](const juce::AudioProcessorParameter* parameter, const std::vector<engine::RenderDevice>& chain, int start,
-                                int& latency)
+    const std::function<bool(const juce::AudioProcessorParameter*, const std::vector<engine::RenderDevice>&, int, int&)> findLatency =
+        [&findLatency](const juce::AudioProcessorParameter* parameter, const std::vector<engine::RenderDevice>& chain, int start, int& latency)
     {
         for (const auto& device : chain)
         {
@@ -1041,8 +1085,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 latency = start;
                 return true;
             }
+            // (a device in an insert loop: the sound reaches it after what comes before its host)
+            if (findLatency(parameter, device.loop, start, latency))
+                return true;
             if (!device.node->isBypassed())
-                start += std::max(0, device.node->getLatencySamples());
+                start += std::max(0, device.node->getLatencySamples()) + chainLatency(device.loop);
         }
         return false;
     };

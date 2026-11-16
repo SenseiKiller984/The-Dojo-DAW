@@ -9,6 +9,7 @@ ProcessorNode::ProcessorNode(std::unique_ptr<juce::AudioProcessor> processor)
     : processor_(std::move(processor))
 {
     jassert(processor_ != nullptr);
+    insertLoop_ = dynamic_cast<InsertLoopHost*>(processor_.get());
     negotiateLayout();
 }
 
@@ -102,6 +103,26 @@ void ProcessorNode::process(juce::AudioBuffer<Sample>& stereo, int numSamples, j
         runProcessor(doubleScratch_, stereo, numSamples, midi, sidechain);
     else
         runProcessor(floatScratch_, stereo, numSamples, midi, sidechain);
+}
+
+void ProcessorNode::processSend(juce::AudioBuffer<Sample>& stereo, int numSamples, juce::MidiBuffer& midi) noexcept
+{
+    if (insertLoop_ == nullptr || !prepared_ || numSamples <= 0 || stereo.getNumChannels() < 2)
+        return;
+    const juce::ScopedNoDenormals noDenormals;
+    juce::AudioBuffer<double> view(stereo.getArrayOfWritePointers(), 2, numSamples);
+    juce::MidiBuffer& midiForProcessor = processor_->acceptsMidi() ? midi : emptyMidi_;
+    emptyMidi_.clear();
+    insertLoop_->processSend(view, midiForProcessor);
+}
+
+void ProcessorNode::processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples) noexcept
+{
+    if (insertLoop_ == nullptr || !prepared_ || numSamples <= 0 || stereo.getNumChannels() < 2)
+        return;
+    const juce::ScopedNoDenormals noDenormals;
+    juce::AudioBuffer<double> view(stereo.getArrayOfWritePointers(), 2, numSamples);
+    insertLoop_->processReturn(view);
 }
 
 template <typename FloatType>

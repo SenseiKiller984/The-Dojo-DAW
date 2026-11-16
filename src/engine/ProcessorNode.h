@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/InsertLoop.h"
 #include "core/Types.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -48,6 +49,17 @@ public:
     void process(juce::AudioBuffer<Sample>& stereo, int numSamples, juce::MidiBuffer& midi,
                  const juce::AudioBuffer<Sample>* sidechain) noexcept;
 
+    /** Devices with an insert loop (see InsertLoopHost): whether this is one, and whether its loop is
+        engaged now. */
+    [[nodiscard]] bool hasInsertLoop() const noexcept { return insertLoop_ != nullptr; }
+    [[nodiscard]] bool isLoopEngaged() const noexcept { return insertLoop_ != nullptr && insertLoop_->isLoopEngaged(); }
+    /** The processor's insert loop (its name and return, for display); null when it has none. */
+    [[nodiscard]] const InsertLoopHost* getInsertLoop() const noexcept { return insertLoop_; }
+    /** The two halves of an insert-loop device (stereo, in place); the engine runs the loop's devices
+        in between. Not for bypassed devices (process() handles bypass). */
+    void processSend(juce::AudioBuffer<Sample>& stereo, int numSamples, juce::MidiBuffer& midi) noexcept;
+    void processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples) noexcept;
+
     [[nodiscard]] juce::AudioProcessor& getProcessor() noexcept { return *processor_; }
     [[nodiscard]] const juce::AudioProcessor& getProcessor() const noexcept { return *processor_; }
 
@@ -72,6 +84,7 @@ private:
                       juce::MidiBuffer& midi, const juce::AudioBuffer<Sample>* sidechain) noexcept;
 
     std::unique_ptr<juce::AudioProcessor> processor_;
+    InsertLoopHost* insertLoop_ = nullptr; ///< (the processor, when it has an insert loop)
     bool doublePrecision_ = false;
     bool prepared_ = false;
 

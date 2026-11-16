@@ -119,6 +119,141 @@ bool anyPresetFile(const juce::StringArray& files)
 
 //==================================================================================================
 /** A hosted plug-in's own editor in a window. Keeps the node alive while open. */
+/**
+    The end of an insert loop (a device's accessory / effects loop) in the chain: effects dropped
+    here, or added with its button, go into the loop; after it the signal returns to its host.
+*/
+class LoopEnd final : public juce::Component, public juce::DragAndDropTarget
+{
+public:
+    LoopEnd(session::Project& project, plugins::PluginManager& plugins, juce::ValueTree host, juce::String returnDescription)
+        : project_(project)
+        , plugins_(plugins)
+        , host_(std::move(host))
+        , returnDescription_(std::move(returnDescription))
+    {
+        add_.setButtonText("+ Add to Loop");
+        add_.setTooltip("Add an effect to this loop (or drag one here from the browser)");
+        add_.setWantsKeyboardFocus(false);
+        add_.onClick = [this] { showAddMenu(); };
+        addAndMakeVisible(add_);
+    }
+
+    [[nodiscard]] const juce::ValueTree& getHost() const noexcept { return host_; }
+
+    void showAddMenu()
+    {
+        juce::Component::SafePointer<LoopEnd> safe(this);
+        juce::PopupMenu menu;
+        deviceActions::buildAddDeviceMenu(menu, plugins_, false,
+                                          [safe](const deviceActions::DeviceChoice& choice)
+                                          {
+                                              if (safe != nullptr)
+                                                  deviceActions::addDeviceToLoop(safe->project_.getSession(), safe->host_, choice);
+                                          });
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&add_));
+    }
+
+    bool isInterestedInDragSource(const SourceDetails& details) override
+    {
+        const auto choice = deviceActions::fromDragDescription(details.description.toString(), plugins_);
+        return choice.has_value() && deviceActions::fitsInLoop(*choice);
+    }
+    void itemDragEnter(const SourceDetails&) override
+    {
+        dropping_ = true;
+        repaint();
+    }
+    void itemDragExit(const SourceDetails&) override
+    {
+        dropping_ = false;
+        repaint();
+    }
+    void itemDropped(const SourceDetails& details) override
+    {
+        dropping_ = false;
+        if (const auto choice = deviceActions::fromDragDescription(details.description.toString(), plugins_))
+            deviceActions::addDeviceToLoop(project_.getSession(), host_, *choice);
+        repaint();
+    }
+
+    void resized() override { add_.setBounds(getLocalBounds().reduced(8).removeFromTop(28)); }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        auto area = getLocalBounds().toFloat().reduced(1.0f);
+        g.setColour(colour::panelRaised.withAlpha(0.5f));
+        g.fillRoundedRectangle(area, 5.0f);
+        const float dashes[] = {5.0f, 4.0f};
+        g.setColour(dropping_ ? colour::play : colour::outline);
+        juce::Path outline;
+        outline.addRoundedRectangle(area, 5.0f);
+        juce::PathStrokeType(1.2f).createDashedStroke(outline, outline, dashes, 2);
+        g.fillPath(outline);
+        g.setColour(colour::textMuted);
+        g.setFont(sans(11.0f));
+        auto text = juce::String::fromUTF8("Drop effects here.\n\n\xe2\x86\xa9 Back into ") + session::device::getName(host_);
+        if (returnDescription_.isNotEmpty())
+            text << ":\n" << returnDescription_;
+        g.drawFittedText(text, getLocalBounds().reduced(8).withTrimmedTop(36), juce::Justification::centredTop, 6);
+    }
+
+private:
+    session::Project& project_;
+    plugins::PluginManager& plugins_;
+    juce::ValueTree host_;
+    juce::String returnDescription_;
+    juce::TextButton add_;
+    bool dropping_ = false;
+};
+
+/** The frame around an insert loop's devices: its name, and whether it is in the signal path. */
+class LoopFrame final : public juce::Component
+{
+public:
+    LoopFrame(juce::ValueTree host, std::shared_ptr<engine::ProcessorNode> node)
+        : host_(std::move(host))
+        , node_(std::move(node))
+    {
+        setInterceptsMouseClicks(false, false);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        using namespace theme;
+        const bool engaged = node_ != nullptr && node_->isLoopEngaged();
+        auto area = getLocalBounds().toFloat().reduced(1.0f);
+        g.setColour((engaged ? colour::accent : colour::outline).withAlpha(0.12f));
+        g.fillRoundedRectangle(area, 7.0f);
+        g.setColour(engaged ? colour::accent : colour::outline);
+        g.drawRoundedRectangle(area, 7.0f, 1.4f);
+        g.setColour(engaged ? colour::accentBright : colour::textMuted);
+        g.setFont(label(9.5f));
+        const auto count = session::Session::getDevices(host_).size();
+        const auto name = (node_ != nullptr && node_->getInsertLoop() != nullptr ? node_->getInsertLoop()->getLoopName() : juce::String("Insert Loop"))
+                              .toUpperCase();
+        const auto state = engaged ? (count > 0 ? juce::String("IN") : juce::String("EMPTY (NORMALLED)")) : juce::String("OUT (SWITCHED OFF)");
+        const auto shortState = engaged ? (count > 0 ? juce::String("IN") : juce::String("EMPTY")) : juce::String("OFF");
+        // The longest title that fits: with its host's name, without it, or just the state.
+        const auto title = area.reduced(10.0f, 3.0f).removeFromTop(14.0f);
+        const auto font = label(9.5f);
+        juce::String text;
+        for (const auto& candidate : {name + "  -  inside " + session::device::getName(host_).toUpperCase() + "  -  " + state,
+                                      name + "  -  " + state, name + "  -  " + shortState})
+        {
+            text = candidate;
+            if (juce::GlyphArrangement::getStringWidth(font, candidate) <= title.getWidth())
+                break;
+        }
+        g.drawText(text, title, juce::Justification::centredLeft, true);
+    }
+
+private:
+    juce::ValueTree host_;
+    std::shared_ptr<engine::ProcessorNode> node_;
+};
+
 class DevicePanel::PluginWindow final : public juce::DocumentWindow
 {
 public:
@@ -169,11 +304,15 @@ class DeviceCard final : public juce::Component,
                          private juce::Timer
 {
 public:
-    DeviceCard(DevicePanel& panel, session::Project& project, EditorState& editor, juce::ValueTree device, juce::ValueTree owner)
+    /** `owner`: the track, the master, or (for a device in an insert loop) the loop's host device,
+        whose node is `loopHost`. */
+    DeviceCard(DevicePanel& panel, session::Project& project, EditorState& editor, juce::ValueTree device, juce::ValueTree owner,
+               std::shared_ptr<engine::ProcessorNode> loopHost = nullptr)
         : panel_(panel)
         , project_(project)
         , device_(std::move(device))
         , owner_(std::move(owner))
+        , loopHost_(std::move(loopHost))
     {
         auto& session = project_.getSession();
         auto* um = &session.getUndoManager();
@@ -258,9 +397,10 @@ public:
             sidechain_.setWantsKeyboardFocus(false);
             sidechain_.addItem("No sidechain", 1);
             int itemId = 2;
+            const auto ownerTrack = session::Session::getDeviceOwner(device_); // (also from inside an insert loop)
             for (const auto& t : session.getAllTracks())
             {
-                if (t == owner_ || (owner_.hasType(session::ids::track) && !session.canFeed(t, owner_)))
+                if (t == ownerTrack || (ownerTrack.hasType(session::ids::track) && !session.canFeed(t, ownerTrack)))
                     continue;
                 sidechainIds_.push_back(session::track::getId(t));
                 sidechain_.addItem("SC: " + session::track::getName(t), itemId++);
@@ -310,8 +450,11 @@ public:
     /** The delay this device adds now (none while bypassed or missing). */
     [[nodiscard]] int getActiveLatency() const
     {
+        if (loopHost_ != nullptr && (!loopHost_->isLoopEngaged() || loopHost_->isBypassed()))
+            return 0; // (in a loop that is out of the signal path)
         return node_ != nullptr && !session::device::isBypassed(device_) ? std::max(0, node_->getLatencySamples()) : 0;
     }
+    [[nodiscard]] bool isInLoop() const noexcept { return loopHost_ != nullptr; }
 
     /** Shows this device's delay; `chainSoFar` is the chain's delay up to and including it. */
     void showLatency(double sampleRate, int chainSoFar)
@@ -605,6 +748,7 @@ private:
     session::Project& project_;
     juce::ValueTree device_;
     juce::ValueTree owner_;
+    std::shared_ptr<engine::ProcessorNode> loopHost_; ///< (a device in an insert loop: the loop's host)
     std::shared_ptr<engine::ProcessorNode> node_;
     juce::TextButton bypass_;
     juce::TextButton left_;
@@ -670,6 +814,7 @@ juce::ValueTree DevicePanel::getOwner() const
 void DevicePanel::rebuild()
 {
     cancelPendingUpdate();
+    loops_.clear();
     cards_.clear();
     shownOwner_ = getOwner();
     shownMaster_ = editor_.isMasterSelected();
@@ -680,6 +825,26 @@ void DevicePanel::rebuild()
             auto card = std::make_unique<DeviceCard>(*this, project_, editor_, device, shownOwner_);
             holder_.addAndMakeVisible(*card);
             cards_.push_back(std::move(card));
+
+            // A device with an insert loop: its loop follows it, in a frame.
+            const auto node = project_.getDevices().getNode(device);
+            if (node == nullptr || !node->hasInsertLoop() || shownOwner_.hasType(session::ids::master))
+                continue;
+            LoopView loop;
+            loop.frame = std::make_unique<LoopFrame>(device, node);
+            holder_.addAndMakeVisible(*loop.frame);
+            loop.frame->toBack();
+            loop.first = cards_.size();
+            for (const auto& inner : session::Session::getDevices(device))
+            {
+                auto innerCard = std::make_unique<DeviceCard>(*this, project_, editor_, inner, device, node);
+                holder_.addAndMakeVisible(*innerCard);
+                cards_.push_back(std::move(innerCard));
+            }
+            loop.last = cards_.size();
+            loop.end = std::make_unique<LoopEnd>(project_, plugins_, device, node->getInsertLoop()->getReturnDescription());
+            holder_.addAndMakeVisible(*loop.end);
+            loops_.push_back(std::move(loop));
         }
 
     addButton_.setVisible(shownOwner_.isValid() && ownerTakesDevices(shownOwner_));
@@ -764,9 +929,33 @@ juce::String DevicePanel::getChainLatencyTooltip() const
 void DevicePanel::layoutCards()
 {
     const int height = std::max(0, viewport_.getMaximumVisibleHeight());
+    constexpr int kFrameTitle = 18; // (room for a loop frame's title above its cards)
     int x = 4;
-    for (auto& card : cards_)
+    std::size_t nextLoop = 0;
+    for (std::size_t i = 0; i <= cards_.size(); ++i)
     {
+        // An insert loop starts here (its frame, then its cards, then its end slot).
+        while (nextLoop < loops_.size() && loops_[nextLoop].first == i)
+        {
+            auto& loop = loops_[nextLoop];
+            const int start = x;
+            x += 8;
+            for (std::size_t k = loop.first; k < loop.last; ++k)
+            {
+                auto& card = cards_[k];
+                card->setBounds(x, 4 + kFrameTitle, card->getPreferredWidth(), std::max(0, height - 12 - kFrameTitle));
+                x += card->getPreferredWidth() + 6;
+            }
+            loop.end->setBounds(x, 4 + kFrameTitle, kAddCardWidth + 30, std::max(0, height - 12 - kFrameTitle));
+            x += kAddCardWidth + 30 + 8;
+            loop.frame->setBounds(start, 2, x - start, std::max(0, height - 4));
+            x += 6;
+            i = loop.last;
+            ++nextLoop;
+        }
+        if (i >= cards_.size())
+            break;
+        auto& card = cards_[i];
         card->setBounds(x, 4, card->getPreferredWidth(), std::max(0, height - 8));
         x += card->getPreferredWidth() + 6;
     }
@@ -964,6 +1153,14 @@ juce::Component* DevicePanel::findCard(const juce::ValueTree& device) const
     return nullptr;
 }
 
+juce::Component* DevicePanel::findLoopEnd(const juce::ValueTree& host) const
+{
+    for (const auto& loop : loops_)
+        if (loop.end != nullptr && loop.end->getHost() == host)
+            return loop.end.get();
+    return nullptr;
+}
+
 juce::String DevicePanel::getNotice(const juce::ValueTree& device) const
 {
     if (const auto* card = dynamic_cast<const DeviceCard*>(findCard(device)))
@@ -1010,8 +1207,15 @@ void DevicePanel::valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree
 
 void DevicePanel::valueTreeChildOrderChanged(juce::ValueTree& parent, int, int)
 {
-    if (parent == shownOwner_)
+    if (parent == shownOwner_ || parent.hasType(session::ids::device)) // (or inside an insert loop)
         triggerAsyncUpdate();
+}
+
+void DevicePanel::timerCallback()
+{
+    refreshLatencies();
+    for (auto& loop : loops_)
+        loop.frame->repaint(); // (the loop's switch)
 }
 
 void DevicePanel::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property)

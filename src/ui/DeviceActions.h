@@ -46,6 +46,13 @@ std::optional<DeviceChoice> fromDragDescription(const juce::String& description,
 */
 juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice);
 
+/** Whether a choice can go into a device's insert loop (an accessory / effects loop): effects only
+    (no instruments, and no modulators such as the LFO, which move other devices' controls). */
+[[nodiscard]] bool fitsInLoop(const DeviceChoice& choice);
+/** Adds an effect at the end of `host`'s insert loop as one undo step and returns the DEVICE (or
+    nothing when it does not fit in a loop). */
+juce::ValueTree addDeviceToLoop(session::Session& session, juce::ValueTree host, const DeviceChoice& choice);
+
 /** Fills `menu` with native devices and plug-ins (instruments only if `includeInstruments`). */
 void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, bool includeInstruments,
                         std::function<void(const DeviceChoice&)> onChosen);

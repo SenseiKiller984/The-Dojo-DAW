@@ -838,7 +838,7 @@ std::vector<LfoEditor::Candidate> LfoEditor::getCandidates() const
                                   ownerName + " > Send to " + (bus.isValid() ? session::track::getName(bus) : juce::String("?"))});
             }
         }
-        for (const auto& d : session::Session::getDevices(owner))
+        for (const auto& d : session::Session::getAllDevices(owner))
         {
             if (d == device_)
                 continue; // (not its own controls)

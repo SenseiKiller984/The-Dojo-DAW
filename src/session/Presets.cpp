@@ -15,6 +15,49 @@ namespace
 constexpr const char* kPresetTag = "DOJO_PRESET";
 constexpr const char* kDeviceTag = "DEVICE";
 constexpr const char* kNativeStateTag = "DOJO_DEVICE";
+constexpr const char* kLoopTag = "LOOP";
+
+/** Writes a device's settings (and, for chains, its insert loop's devices) as a DEVICE element. */
+void writeDevice(juce::XmlElement& parent, const DeviceSettings& d)
+{
+    auto* element = parent.createNewChildElement(kDeviceTag);
+    element->setAttribute("key", d.key);
+    element->setAttribute("name", d.deviceName);
+    // A native device's settings are written out readably; anything else is kept as it is.
+    auto native = d.state.getSize() > 0 ? juce::AudioProcessor::getXmlFromBinary(d.state.getData(), static_cast<int>(d.state.getSize()))
+                                        : nullptr;
+    if (native != nullptr && native->hasTagName(kNativeStateTag))
+        element->addChildElement(native.release());
+    else
+        element->setAttribute("state", d.state.toBase64Encoding());
+    if (!d.loop.empty())
+    {
+        // (after the settings: readers that know no loops take the first child as the settings)
+        auto* loop = element->createNewChildElement(kLoopTag);
+        for (const auto& inner : d.loop)
+            writeDevice(*loop, inner);
+    }
+}
+
+/** Reads a DEVICE element; nothing when it holds no usable settings. Loops only in chains. */
+std::optional<DeviceSettings> readDevice(const juce::XmlElement& element, bool chain)
+{
+    DeviceSettings d;
+    d.key = element.getStringAttribute("key");
+    d.deviceName = element.getStringAttribute("name");
+    if (const auto* native = element.getFirstChildElement(); native != nullptr && !native->hasTagName(kLoopTag))
+        juce::AudioProcessor::copyXmlToBinary(*native, d.state);
+    else if (!d.state.fromBase64Encoding(element.getStringAttribute("state")))
+        d.state.reset();
+    if (d.key.isEmpty() || d.state.getSize() == 0)
+        return std::nullopt;
+    if (chain)
+        if (const auto* loop = element.getChildByName(kLoopTag))
+            for (const auto* inner : loop->getChildWithTagNameIterator(kDeviceTag))
+                if (auto settings = readDevice(*inner, true))
+                    d.loop.push_back(std::move(*settings));
+    return d;
+}
 constexpr const char* kBuiltInPrefix = "builtin:";
 
 juce::String& userFolderOverride()
@@ -135,18 +178,7 @@ std::unique_ptr<juce::XmlElement> Preset::toXml() const
         xml->setAttribute("chain", 1);
 
     for (const auto& d : devices)
-    {
-        auto* element = xml->createNewChildElement(kDeviceTag);
-        element->setAttribute("key", d.key);
-        element->setAttribute("name", d.deviceName);
-        // A native device's settings are written out readably; anything else is kept as it is.
-        auto native = d.state.getSize() > 0 ? juce::AudioProcessor::getXmlFromBinary(d.state.getData(), static_cast<int>(d.state.getSize()))
-                                            : nullptr;
-        if (native != nullptr && native->hasTagName(kNativeStateTag))
-            element->addChildElement(native.release());
-        else
-            element->setAttribute("state", d.state.toBase64Encoding());
-    }
+        writeDevice(*xml, d);
     return xml;
 }
 
@@ -170,19 +202,13 @@ std::optional<Preset> Preset::fromXml(const juce::XmlElement& xml, juce::String&
     preset.chain = xml.getBoolAttribute("chain", false);
     for (const auto* element : xml.getChildWithTagNameIterator(kDeviceTag))
     {
-        DeviceSettings d;
-        d.key = element->getStringAttribute("key");
-        d.deviceName = element->getStringAttribute("name");
-        if (const auto* native = element->getFirstChildElement())
-            juce::AudioProcessor::copyXmlToBinary(*native, d.state);
-        else if (!d.state.fromBase64Encoding(element->getStringAttribute("state")))
-            d.state.reset();
-        if (d.key.isEmpty() || d.state.getSize() == 0)
+        auto d = readDevice(*element, preset.chain);
+        if (!d)
             continue;
         if (preset.chain)
-            preset.add(std::move(d));
+            preset.add(std::move(*d));
         else
-            preset.put(std::move(d));
+            preset.put(std::move(*d));
     }
 
     if (preset.devices.empty())

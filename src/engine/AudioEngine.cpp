@@ -1278,6 +1278,15 @@ void AudioEngine::runChain(const std::vector<RenderDevice>& chain, juce::AudioBu
             sidechain = &slots_[static_cast<std::size_t>(source.slot)].main;
         }
 
+        if (!device.loop.empty() && !device.node->isBypassed())
+        {
+            // An insert loop: the device up to its send, the loop's devices, then the rest of it.
+            device.node->processSend(buffer, numSamples, midi);
+            runChain(device.loop, buffer, 2, groups, midi, groupScratch);
+            device.node->processReturn(buffer, numSamples);
+            continue;
+        }
+
         if (numChannels <= 2 || groups.count <= 1)
         {
             device.node->process(buffer, numSamples, midi, sidechain);

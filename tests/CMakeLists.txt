@@ -49,6 +49,7 @@ add_executable(dojo_tests
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
+    InsertLoopTests.cpp
     RhodesTests.cpp
     TapeTests.cpp
     SurroundTests.cpp

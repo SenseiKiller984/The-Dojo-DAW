@@ -727,13 +727,20 @@ public:
     [[nodiscard]] static juce::ValueTree findNoteAt(const juce::ValueTree& midiClip, double beat, int noteNumber);
 
     // --- Devices -----------------------------------------------------------------------------------
-    /** Adds a device to a track (or the MASTER node) at chain position `index` (-1 = end). */
+    /** Adds a device to a track (or the MASTER node, or a device's insert loop) at chain position
+        `index` (-1 = end). */
     juce::ValueTree addDevice(juce::ValueTree owner, const juce::String& type, const juce::String& name,
                               int index = -1);
     void removeDevice(juce::ValueTree device);
     void moveDevice(juce::ValueTree device, int newIndex);
     [[nodiscard]] juce::ValueTree findDevice(std::uint32_t deviceId) const;
+    /** The devices of a track, the master, or a device's insert loop (an accessory / effects loop:
+        a device can hold devices of its own, which run between its send and its return). */
     [[nodiscard]] static std::vector<juce::ValueTree> getDevices(const juce::ValueTree& owner);
+    /** getDevices(), each followed by the devices of its insert loop (recursively), in signal order. */
+    [[nodiscard]] static std::vector<juce::ValueTree> getAllDevices(const juce::ValueTree& owner);
+    /** The track (or the master) a device belongs to, also from inside an insert loop. */
+    [[nodiscard]] static juce::ValueTree getDeviceOwner(const juce::ValueTree& device);
 
     // --- Modulation (the LFO device) ----------------------------------------------------------------
     /** Maps a modulator device to a target on a track (0 = the master), sweeping its whole range;

@@ -158,6 +158,9 @@ struct RenderDevice
     /** On a multichannel signal: linked instances for channel groups 1.. (group 0 is `node`); each
         block they take over `node`'s parameter values and bypass. */
     std::array<ProcessorNode*, kMaxChannelGroups - 1> companions{};
+    /** A device with an insert loop (an accessory / effects loop, see InsertLoopHost): the devices
+        between its send and its return, in order (empty: it runs in one piece). Stereo tracks only. */
+    std::vector<RenderDevice> loop;
 };
 
 /** An incoming send, stored on the *receiving* bus (busses pull, so parallel tracks never write to

@@ -35,6 +35,45 @@ std::optional<deviceActions::DeviceChoice> choiceFor(const presets::DeviceSettin
         }
     return std::nullopt;
 }
+
+/** A device's settings with those of the devices in its insert loop (for chain presets). */
+std::optional<presets::DeviceSettings> captureWithLoop(session::Project& project, const juce::ValueTree& device)
+{
+    const auto node = project.getDevices().getNode(device);
+    if (node == nullptr)
+        return std::nullopt;
+    auto settings = presets::capture(device, node->getProcessor());
+    for (const auto& inner : session::Session::getDevices(device))
+        if (auto innerSettings = captureWithLoop(project, inner))
+            settings.loop.push_back(std::move(*innerSettings));
+    return settings;
+}
+
+/** Adds a chain entry's loop devices into `host`'s insert loop (in the current undo step). */
+int addLoop(session::Project& project, plugins::PluginManager& plugins, const juce::ValueTree& host,
+            const std::vector<presets::DeviceSettings>& loop, juce::StringArray& missing)
+{
+    auto& session = project.getSession();
+    int added = 0;
+    for (const auto& entry : loop)
+    {
+        auto choice = choiceFor(entry, plugins);
+        if (!choice || !deviceActions::fitsInLoop(*choice))
+        {
+            missing.add(entry.deviceName.isNotEmpty() ? entry.deviceName : entry.key);
+            continue;
+        }
+        auto device = session.addDevice(host, choice->type, entry.deviceName.isNotEmpty() ? entry.deviceName : choice->name);
+        if (!device.isValid())
+            continue;
+        if (choice->descriptionXml.isNotEmpty())
+            device.setProperty(session::ids::description, choice->descriptionXml, &session.getUndoManager());
+        (void) presets::applySettings(entry, device, session, project.getDevices());
+        ++added;
+        added += addLoop(project, plugins, device, entry.loop, missing);
+    }
+    return added;
+}
 } // namespace
 
 juce::String toDragDescription(const presets::Preset& preset)
@@ -129,8 +168,8 @@ Outcome saveChain(session::Project& project, const juce::ValueTree& owner, const
     preset.name = file.getFileNameWithoutExtension();
     preset.chain = true;
     for (const auto& device : session::Session::getDevices(owner))
-        if (const auto node = project.getDevices().getNode(device))
-            preset.add(presets::capture(device, node->getProcessor()));
+        if (auto settings = captureWithLoop(project, device))
+            preset.add(std::move(*settings));
     if (preset.devices.empty())
         return {false, "There are no devices to save."};
     if (const auto result = preset.save(file); result.failed())
@@ -177,6 +216,7 @@ juce::ValueTree addChain(session::Project& project, plugins::PluginManager& plug
             break;
         (void) presets::applySettings(entry, device, session, project.getDevices()); // (same undo step)
         ++added;
+        added += addLoop(project, plugins, device, entry.loop, missing);
     }
 
     if (message != nullptr)

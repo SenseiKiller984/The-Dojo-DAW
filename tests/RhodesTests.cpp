@@ -1,7 +1,6 @@
 #include "devices/DeviceRegistry.h"
 #include "devices/RhodesSuitcase.h"
 #include "session/Project.h"
-#include "ui/devices/KeysEditors.h"
 #include "EffectTestHelpers.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -13,7 +12,6 @@ using namespace dojo;
 using namespace dojo::test::devices;
 using Catch::Matchers::WithinAbs;
 using devices::RhodesSuitcase;
-using devices::SuitcaseBase;
 using devices::SuitcaseStage;
 
 namespace
@@ -67,6 +65,35 @@ double energyAboveDb(const std::vector<double>& x, double hz, double from, doubl
             energy += y * y;
     }
     return 10.0 * std::log10(energy + 1e-30);
+}
+
+/** Runs a Rhodes in the engine's two halves, block by block: up to its accessory loop's send, then
+    `inLoop` on the send (what the loop's devices do; it may replace it), then from the return on. */
+using InLoop = std::function<void(juce::AudioBuffer<double>& buffer, std::size_t offset, int n)>;
+Stereo runSplit(ProcessorNode& node, std::size_t total, const std::vector<TimedMidi>& events, const InLoop& inLoop)
+{
+    Stereo out(total);
+    juce::AudioBuffer<double> buffer(2, kBlock);
+    juce::MidiBuffer midi;
+    for (std::size_t offset = 0; offset < total; offset += kBlock)
+    {
+        const int n = static_cast<int>(std::min<std::size_t>(kBlock, total - offset));
+        buffer.clear();
+        midi.clear();
+        for (const auto& e : events)
+            if (e.sample >= static_cast<int>(offset) && e.sample < static_cast<int>(offset) + n)
+                midi.addEvent(e.message, e.sample - static_cast<int>(offset));
+        node.processSend(buffer, n, midi);
+        if (inLoop)
+            inLoop(buffer, offset, n);
+        node.processReturn(buffer, n);
+        for (int i = 0; i < n; ++i)
+        {
+            out.left[offset + static_cast<std::size_t>(i)] = buffer.getSample(0, i);
+            out.right[offset + static_cast<std::size_t>(i)] = buffer.getSample(1, i);
+        }
+    }
+    return out;
 }
 } // namespace
 
@@ -246,13 +273,24 @@ TEST_CASE("Rhodes: the vibrato swings between left and right, by optocoupler or 
 
 TEST_CASE("Rhodes: power amps (40 W, under 0.5 % THD, then the rails), speakers and line out", "[devices][rhodes]")
 {
+    // A tone into the suitcase's loop return (as an effect in the accessory loop would send it):
+    // the vibrato (off here), the power amps and the speakers, or the line out.
     const auto base = [](double levelDb, double frequency, float output, float cabinet, double seconds = 0.6)
     {
-        auto [node, b] = makeNode<SuitcaseBase>();
-        setParameter(*b, "intensity", 0.0f);
-        setParameter(*b, "out", output);
-        setParameter(*b, "cabinet", cabinet);
-        return run(*node, tone(frequency, at(seconds), level(levelDb)));
+        auto [node, rhodes] = makeNode<RhodesSuitcase>();
+        setParameter(*rhodes, "intensity", 0.0f);
+        setParameter(*rhodes, "out", output);
+        setParameter(*rhodes, "cabinet", cabinet);
+        const auto input = tone(frequency, at(seconds), level(levelDb));
+        return runSplit(*node, input.left.size(), {},
+                        [&input](juce::AudioBuffer<double>& buffer, std::size_t offset, int n)
+                        {
+                            for (int i = 0; i < n; ++i)
+                            {
+                                buffer.setSample(0, i, input.left[offset + static_cast<std::size_t>(i)]);
+                                buffer.setSample(1, i, input.right[offset + static_cast<std::size_t>(i)]);
+                            }
+                        });
     };
     const auto thd = [](const Stereo& out, double f)
     {
@@ -288,7 +326,7 @@ TEST_CASE("Rhodes: power amps (40 W, under 0.5 % THD, then the rails), speakers 
     CHECK(gain(10000.0, 1.0f) < gain(10000.0, 0.0f) - 3.0);
 }
 
-TEST_CASE("Rhodes: the accessory loop sends after the EQ; a Suitcase Base returns it", "[devices][rhodes]")
+TEST_CASE("Rhodes: one device, its accessory loop inside it (send after the EQ, return into the vibrato)", "[devices][rhodes]")
 {
     const std::vector<TimedMidi> events{{0, juce::MidiMessage::noteOn(1, 57, static_cast<juce::uint8>(100))},
                                         {0, juce::MidiMessage::noteOn(1, 64, static_cast<juce::uint8>(90))}};
@@ -297,49 +335,57 @@ TEST_CASE("Rhodes: the accessory loop sends after the EQ; a Suitcase Base return
         setParameter(p, "intensity", 8.0f);
         setParameter(p, "speed", 5.0f);
         setParameter(p, "cabinet", 1.0f);
+        setParameter(p, "treble", 6.0f);
     };
-    // Whole: the Rhodes with its own suitcase.
+    // Whole: the Rhodes in one piece (nothing in its loop).
     auto [whole, rhodes] = makeNode<RhodesSuitcase>();
     setUp(*rhodes);
-    setParameter(*rhodes, "treble", 6.0f);
+    CHECK(whole->hasInsertLoop());
+    CHECK(whole->isLoopEngaged()); // (the switch is on by default: an empty loop is normalled)
+    REQUIRE(whole->getInsertLoop() != nullptr);
+    CHECK(whole->getInsertLoop()->getLoopName() == "Accessory Loop");
+    CHECK(whole->getInsertLoop()->getReturnDescription().contains("speakers"));
     const auto reference = run(*whole, Stereo(at(1.0)), nullptr, events);
-    // Split: the loop's send (no vibrato: both sides the same), then a Suitcase Base.
-    auto [send, looped] = makeNode<RhodesSuitcase>();
+
+    // Split as the engine runs it around the loop's devices: the send is mono at 0 dBu = -18 dBFS
+    // (after the EQ: the treble boost is in it), and with nothing changing it, the same sound.
+    auto [split, looped] = makeNode<RhodesSuitcase>();
     setUp(*looped);
-    setParameter(*looped, "treble", 6.0f);
-    setParameter(*looped, "loop", 1.0f);
-    const auto sent = run(*send, Stereo(at(1.0)), nullptr, events);
-    CHECK(sent.left == sent.right);
-    auto [ret, returned] = makeNode<SuitcaseBase>();
-    setUp(*returned);
-    const auto out = run(*ret, sent);
+    double sendPeak = 0.0;
+    bool sendMono = true;
+    const auto out = runSplit(*split, at(1.0), events,
+                              [&](juce::AudioBuffer<double>& buffer, std::size_t, int n)
+                              {
+                                  for (int i = 0; i < n; ++i)
+                                  {
+                                      sendMono = sendMono && buffer.getSample(0, i) == buffer.getSample(1, i);
+                                      sendPeak = std::max(sendPeak, std::abs(buffer.getSample(0, i)));
+                                  }
+                              });
+    CHECK(sendMono);
+    CHECK(sendPeak > level(-30.0));
+    CHECK(sendPeak < level(0.0));
     double error = 0.0;
     for (std::size_t i = 0; i < out.left.size(); ++i)
         error = std::max({error, std::abs(out.left[i] - reference.left[i]), std::abs(out.right[i] - reference.right[i])});
-    CHECK(error < 1e-9); // (with nothing in the loop, the same sound)
+    CHECK(error < 1e-9);
 
-    // The editor's button adds the return at the end of the track, set up like the Rhodes' suitcase.
-    juce::MessageManager::getInstance();
-    session::Project project([](std::unique_ptr<engine::RenderGraph>) {},
-                             [](const juce::ValueTree& d, double, int, juce::String&) { return devices::createBuiltinDevice(session::device::getType(d)); });
-    auto& session = project.getSession();
-    auto track = session.addTrack(session::TrackKind::instrument, "Keys");
-    const auto device = session.addDevice(track, RhodesSuitcase::kTypeId, "Rhodes");
-    const auto node = project.getDevices().getNode(device);
-    REQUIRE(node != nullptr);
-    auto& keys = dynamic_cast<RhodesSuitcase&>(node->getProcessor());
-    setParameter(keys, "loop", 1.0f);
-    setParameter(keys, "intensity", 7.5f);
-    session.addDevice(track, "builtin:echo", "Echo"); // (an effect in the loop)
-    CHECK_FALSE(ui::hasSuitcaseBaseAfter(device));
-    const auto added = ui::addSuitcaseBase(project, device, keys);
-    CHECK(ui::hasSuitcaseBaseAfter(device));
-    const auto chain = session::Session::getDevices(track);
-    REQUIRE(chain.size() == 3);
-    CHECK(chain.back() == added);
-    const auto baseNode = project.getDevices().getNode(added);
-    REQUIRE(baseNode != nullptr);
-    CHECK_THAT(dynamic_cast<SuitcaseBase&>(baseNode->getProcessor()).stage.intensity->get(), WithinAbs(7.5, 1e-3));
-    session.getUndoManager().undo();
-    CHECK_FALSE(ui::hasSuitcaseBaseAfter(device));
+    // An effect in the loop (here: 6 dB down) changes what the suitcase's amps get. On the line out,
+    // without vibrato, that is exactly 6 dB less.
+    const auto lineOut = [&](double loopGain)
+    {
+        auto [node, r] = makeNode<RhodesSuitcase>();
+        setParameter(*r, "intensity", 0.0f);
+        setParameter(*r, "out", 1.0f);
+        return runSplit(*node, at(0.5), events,
+                        [loopGain](juce::AudioBuffer<double>& buffer, std::size_t, int n) { buffer.applyGain(0, n, loopGain); });
+    };
+    const auto direct = lineOut(1.0);
+    const auto padded = lineOut(level(-6.0));
+    CHECK_THAT(toDb(rmsOf(padded.left, at(0.1), at(0.5)) / rmsOf(direct.left, at(0.1), at(0.5))), WithinAbs(-6.0, 0.01));
+
+    // The Accessory Loop switch takes the loop out (the engine then runs the Rhodes in one piece).
+    setParameter(*looped, "loop", 0.0f);
+    CHECK_FALSE(split->isLoopEngaged());
+    CHECK(split->hasInsertLoop());
 }

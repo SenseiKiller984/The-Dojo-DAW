@@ -193,7 +193,7 @@ void DeviceManager::storeStates()
 {
     const auto store = [this](const juce::ValueTree& owner)
     {
-        for (auto d : Session::getDevices(owner))
+        for (auto d : Session::getAllDevices(owner)) // (insert loops' devices too)
             if (auto node = findNode(device::getId(d)))
                 storeState(d, *node);
     };
@@ -234,12 +234,9 @@ void DeviceManager::valueTreeChildRemoved(juce::ValueTree&, juce::ValueTree& chi
     const auto snapshot = [this](juce::ValueTree tree, auto& self) -> void
     {
         if (tree.hasType(ids::device))
-        {
             if (auto node = findNode(device::getId(tree)))
                 storeState(tree, *node);
-            return;
-        }
-        for (auto c : tree)
+        for (auto c : tree) // (a track's devices, a device's insert loop)
             self(c, self);
     };
     snapshot(child, snapshot);

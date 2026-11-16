@@ -135,6 +135,22 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
     return device;
 }
 
+bool fitsInLoop(const DeviceChoice& choice)
+{
+    return !choice.instrument && choice.type != "builtin:lfo";
+}
+
+juce::ValueTree addDeviceToLoop(session::Session& session, juce::ValueTree host, const DeviceChoice& choice)
+{
+    if (!host.isValid() || !host.hasType(session::ids::device) || !fitsInLoop(choice))
+        return {};
+    session.beginTransaction("Add " + choice.name + " to the Loop");
+    auto device = session.addDevice(host, choice.type, choice.name);
+    if (choice.descriptionXml.isNotEmpty())
+        device.setProperty(session::ids::description, choice.descriptionXml, &session.getUndoManager());
+    return device;
+}
+
 void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, bool includeInstruments,
                         std::function<void(const DeviceChoice&)> onChosen)
 {

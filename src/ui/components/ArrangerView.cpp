@@ -2847,7 +2847,7 @@ void ArrangerView::addAutomationMenuItems(juce::PopupMenu& menu, const juce::Val
         if (const auto bus = session_.findTrack(session::send::getTarget(s)); bus.isValid())
             menu.addItem("Send > " + session::track::getName(bus), addLane(session::automation::sendTarget(session::send::getId(s))));
 
-    for (const auto& d : session::Session::getDevices(trackTree))
+    for (const auto& d : session::Session::getAllDevices(trackTree))
     {
         auto node = project_.getDevices().findNode(session::device::getId(d));
         if (node == nullptr)

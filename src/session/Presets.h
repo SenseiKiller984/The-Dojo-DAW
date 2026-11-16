@@ -56,6 +56,8 @@ struct DeviceSettings
     juce::String key;        ///< the kind of device it is for (see keyOf())
     juce::String deviceName; ///< that device's name, for display ("EQ")
     juce::MemoryBlock state; ///< what the device's getStateInformation() gave
+    /** Chain presets: the devices in this device's insert loop (a Rhodes' accessory loop), in order. */
+    std::vector<DeviceSettings> loop;
 };
 
 /** A preset: a name, a description and settings for one or more devices (or a whole chain). */
