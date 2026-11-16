@@ -18,6 +18,7 @@
 #include "devices/Meld.h"
 #include "devices/Operator.h"
 #include "devices/PlateReverb.h"
+#include "devices/RhodesSuitcase.h"
 #include "devices/Roar.h"
 #include "devices/StudioDynamics.h"
 #include "devices/TapeA800.h"
@@ -40,6 +41,7 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Meld::kTypeId, "Meld", "Synth", true},
         {AnalogSynth::kTypeId, "Analog", "Synth", true},
         {DriftSynth::kTypeId, "Drift", "Synth", true},
+        {RhodesSuitcase::kTypeId, "1980s Rhodes Suitcase 73 Mk II", "Keys", true, "rhodes electric piano ep suitcase mark tine keys"},
         {Equaliser::kTypeId, "EQ", "EQ", false},
         {ChannelEq::kTypeId, "Channel EQ", "EQ", false},
         {AutoFilter::kTypeId, "Auto Filter", "Filter", false},
@@ -66,6 +68,7 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Pedal::kTypeId, "Pedal", "Drive", false},
         {Overdrive::kTypeId, "Overdrive", "Drive", false},
         {Redux::kTypeId, "Redux", "Drive", false},
+        {SuitcaseBase::kTypeId, "Suitcase Base", "Drive", false, "rhodes suitcase vibrato tremolo auto-pan amp speakers accessory loop return"},
         {TapeA800::kTypeId, "Studer A800 Tape Recorder", "Drive", false, "multichannel tape saturation analog multitrack"},
         {Click::kTypeId, "Click", "Utility", false},
     };
@@ -107,6 +110,10 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<DeEsser>();
     if (type == SoftClipper::kTypeId)
         return std::make_unique<SoftClipper>();
+    if (type == RhodesSuitcase::kTypeId)
+        return std::make_unique<RhodesSuitcase>();
+    if (type == SuitcaseBase::kTypeId)
+        return std::make_unique<SuitcaseBase>();
     if (type == TapeA800::kTypeId)
         return std::make_unique<TapeA800>();
     if (type == PlateReverb::kTypeId)

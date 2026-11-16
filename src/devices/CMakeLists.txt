@@ -43,6 +43,8 @@ add_library(dojo_devices STATIC
     Operator.h
     PlateReverb.cpp
     PlateReverb.h
+    RhodesSuitcase.cpp
+    RhodesSuitcase.h
     Roar.cpp
     Roar.h
     SampleSlot.cpp

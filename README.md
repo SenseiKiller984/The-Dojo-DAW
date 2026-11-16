@@ -260,6 +260,15 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - Two engines, **A** and **B**, **layered** on every note or **split** across the keyboard. Each has a macro oscillator, tuning, a filter (four circuits), amplitude and modulation envelopes, two LFOs, level and pan.
   - Thirteen macro oscillators, each with two macros: Basic Shapes, Swarm, Harmonic FM, Inharmonic FM, Fold FM, Squelch, Pluck, Bitgrunge, Noise Loop, Shepard's Tone (endlessly rising or falling), Chip, Additive and Rain (granular droplets).
   - A 12-slot modulation matrix: both engines' envelopes and LFOs, velocity, key, pressure, slide, pitch bend, mod wheel and a random value per note, to either engine's macros, pitch, cutoff, resonance, level, pan and LFO rate. MPE: each note's own bend, pressure and slide.
+- **1980s Rhodes Suitcase 73 Mk II**: an electric piano modelled stage by stage, from the tines to the speakers.
+  - **The harp**: 73 keys (E1 to E7). Each tine and tone bar is struck by a neoprene hammer whose force lasts its contact time (shorter for harder tips and harder playing, which reaches the bell overtones): the tine's fundamental and the tone bar's slow beat against it ring for seconds (about 9 s at the bottom, 1 s at the top), the bell overtones only briefly. **Decay** scales how long the tines sing; **Release** is the damper felt on the key's release (the top 19 keys have no dampers, as on the instrument); the sustain pedal (CC 64) lifts the dampers; striking a ringing key adds to its swing.
+  - **The pickups**: each tine swings in front of a variable-reluctance pickup: the voltage is the change of the magnetic flux, which is not linear in the tine's position, so playing harder brings in the harmonics of the famous **bark**. **Voicing** sets the tines' alignment with their pickups (mellow, off-centre, to barky, closer to centre); **Hammer** the tips' hardness; **Tine** the bell; **Velocity** the touch; **Age** spreads tuning, voicing and tone-bar beating from key to key; **Tuning**.
+  - **Harp Load**: into the Janus preamp's high-impedance input (over 1 MOhm) every harmonic stays; into a guitar amp (100 kOhm) or a mixer (10 kOhm) the harp's inductance rolls the top off.
+  - **The Janus preamp**: **Volume** (an audio-taper slider: about 0 dBu for a mezzo-forte note at 7), **Treble** (+-12 dB shelf at 10 kHz) and **Bass** (+-15 dB shelf around 75 Hz) on +-15 V op-amps with about 21 dB of headroom.
+  - **Accessory Loop**: on, the output stops at the loop's send (after the EQ, before the vibrato, 0 dBu = -18 dBFS). Add effects after it on the track and finish the chain with a **Suitcase Base**, the loop's return (vibrato, power amps and speakers on their own; the **Add Suitcase Base** button adds one set up like the Rhodes' own). With nothing in between it sounds exactly the same.
+  - **The vibrato** (stereo auto-panner): a smoothed-triangle LFO (**Speed** 1 to 10 Hz) swings the sound between the left and right amplifiers, 180 degrees apart, by **Intensity**: **Opto** (an LED and a photoresistor: quick to brighten, slow to darken, a rounded swing that narrows at fast speeds) or **JFET** (exact). The front-panel LED pulses with it.
+  - **The power base**: two 40 W amplifiers into 4 ohms on unregulated +-32 V rails (under 0.5 % THD at the rated 40 W, rounding off about 3 dB above, the rails sagging on long loud passages) into four 10-inch speakers (a pair per side) or two 12-inch ones (darker), about 30 Hz - 15 kHz; or **Line Out**: the umbilical's 0 dBu signals, as when recording it direct. **Master** trims the output.
+  - The display shows the keyboard with the sounding keys, the LED and the loop's state.
 
 **Automation and export**
 - **Spline automation lanes** for volume, pan, sends and every device or plug-in parameter (A on the track header, or right-click > Add Automation Lane).
@@ -441,8 +450,9 @@ src/engine    AudioEngine (audio thread + worker pool), render graph, routing, d
 src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue, limiter,
               Gate, Expander, De-Esser, Soft Clipper, Multiband Dynamics, reverb, Plate Reverb,
               delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux, Studer A800 tape,
+              Suitcase Base,
               pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
-              Operator, Meld, Analog, Drift, Sampler, Drum Rack, Impulse
+              Operator, Meld, Analog, Drift, Rhodes Suitcase 73 Mk II, Sampler, Drum Rack, Impulse
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),

@@ -59,6 +59,8 @@ add_library(dojo_ui STATIC
     components/TransportBar.h
     devices/DeviceEditors.cpp
     devices/DeviceEditors.h
+    devices/KeysEditors.cpp
+    devices/KeysEditors.h
     devices/MoreDeviceEditors.cpp
     devices/MoreDeviceEditors.h
     devices/PagedEditor.h
