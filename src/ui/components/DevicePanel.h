@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/TrackTaps.h"
 #include "plugins/PluginManager.h"
 #include "session/Presets.h"
 #include "session/Project.h"
@@ -94,6 +95,10 @@ public:
     /** What the presets menu of the card of `device` lists (section headers in brackets). */
     [[nodiscard]] juce::StringArray getPresetMenuItems(const juce::ValueTree& device) const;
 
+    /** Where editors can watch other tracks' sound (the EQ's spectrum overlay). */
+    void setTrackTaps(engine::TrackTaps* taps) noexcept { taps_ = taps; }
+    [[nodiscard]] engine::TrackTaps* getTrackTaps() const noexcept { return taps_; }
+
 private:
     class PluginWindow;
 
@@ -121,6 +126,7 @@ private:
 
     session::Project& project_;
     plugins::PluginManager& plugins_;
+    engine::TrackTaps* taps_ = nullptr;
     EditorState& editor_;
 
     juce::Viewport viewport_;

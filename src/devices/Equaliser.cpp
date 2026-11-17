@@ -26,7 +26,8 @@ Equaliser::Equaliser()
     : BuiltinProcessor(kTypeId, "EQ",
                        BusesProperties()
                            .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                           .withOutput("Output", juce::AudioChannelSet::stereo(), true),
+                           .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+                           .withInput("Sidechain", juce::AudioChannelSet::stereo(), true),
                        false)
 {
     for (int b = 0; b < kNumBands; ++b)
@@ -45,6 +46,8 @@ Equaliser::Equaliser()
     output_ = addFloat("output", "Output", {-24.0f, 24.0f, 0.1f}, 0.0f, "dB");
 
     for (auto& value : analyser_)
+        value.store(0.0f, std::memory_order_relaxed);
+    for (auto& value : sidechain_)
         value.store(0.0f, std::memory_order_relaxed);
 }
 
@@ -150,6 +153,17 @@ void Equaliser::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&)
     }
 
     analyserWrite_.store(write, std::memory_order_release);
+
+    // The sidechain (another track, to show its spectrum behind this one's): kept as it comes.
+    if (buffer.getNumChannels() >= 4)
+    {
+        const double* sideLeft = buffer.getReadPointer(2);
+        const double* sideRight = buffer.getReadPointer(3);
+        std::uint32_t at = sidechainWrite_.load(std::memory_order_relaxed);
+        for (int i = 0; i < numSamples; ++i, ++at)
+            sidechain_[at % kAnalyserSize].store(static_cast<float>(0.5 * (sideLeft[i] + sideRight[i])), std::memory_order_relaxed);
+        sidechainWrite_.store(at, std::memory_order_release);
+    }
 }
 
 double Equaliser::getBandMagnitudeAt(int band, double frequency) const
@@ -178,6 +192,17 @@ void Equaliser::copyAnalyserSamples(float* destination, int count) const noexcep
     {
         const std::uint32_t index = write - static_cast<std::uint32_t>(count) + static_cast<std::uint32_t>(i);
         destination[i] = analyser_[index % kAnalyserSize].load(std::memory_order_relaxed);
+    }
+}
+
+void Equaliser::copySidechainSamples(float* destination, int count) const noexcept
+{
+    count = std::min(count, kAnalyserSize);
+    const std::uint32_t write = sidechainWrite_.load(std::memory_order_acquire);
+    for (int i = 0; i < count; ++i)
+    {
+        const std::uint32_t index = write - static_cast<std::uint32_t>(count) + static_cast<std::uint32_t>(i);
+        destination[i] = sidechain_[index % kAnalyserSize].load(std::memory_order_relaxed);
     }
 }
 

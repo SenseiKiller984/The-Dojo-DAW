@@ -15,7 +15,8 @@ namespace dojo::devices
     Each band is a biquad whose shape is selectable (low cut, low shelf, peak, high shelf, high cut)
     with frequency, gain and Q. Parameter changes are smoothed and coefficients recomputed every
     32 samples, so sweeping a band never zippers. The post-EQ signal (mono sum) is published to a
-    lock-free ring for the UI's analyser.
+    lock-free ring for the UI's analyser. A sidechain input (another track) is kept in a ring of its
+    own, for the editor to show that track's spectrum behind this one's.
 */
 class Equaliser final : public BuiltinProcessor
 {
@@ -46,6 +47,9 @@ public:
 
     /** Message thread: copies the newest `count` analyser samples (oldest first). */
     void copyAnalyserSamples(float* destination, int count) const noexcept;
+    /** Message thread: the newest `count` samples of the sidechain input (another track, whose
+        spectrum the editor shows behind this one's), oldest first. */
+    void copySidechainSamples(float* destination, int count) const noexcept;
 
     double getTailLengthSeconds() const override { return 0.05; }
 
@@ -77,6 +81,8 @@ private:
 
     std::array<std::atomic<float>, kAnalyserSize> analyser_{};
     std::atomic<std::uint32_t> analyserWrite_{0};
+    std::array<std::atomic<float>, kAnalyserSize> sidechain_{};
+    std::atomic<std::uint32_t> sidechainWrite_{0};
 };
 
 } // namespace dojo::devices

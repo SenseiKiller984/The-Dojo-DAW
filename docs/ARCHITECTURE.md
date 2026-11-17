@@ -26,7 +26,8 @@ src/
   engine/   AudioEngine (real-time state, process(), offline render), WorkerPool, RenderGraph,
             command/telemetry protocol, ProcessorNode (runs any juce::AudioProcessor in the 64-bit
             path), Automation (monotone splines), RealtimeHandoff (ReleasePool, LiveMidiQueue,
-            CaptureStream, DiskWriterThread), EngineController (the UI's facade),
+            CaptureStream, DiskWriterThread), TrackTaps (watched tracks' sound for displays),
+            EngineController (the UI's facade),
             io/ (AudioDeviceHost: driver + MIDI binding, LameMp3Format),
             Preview (browser file preview: decoder thread + PreviewPlayer on the audio thread),
             dsp/ (clip renderer, ClipStretcher, StreamedAudio, test tone)
@@ -45,7 +46,8 @@ src/
             MainComponent (commands, menus, document actions), arranger, mixer,
             devices panel + device editors (hardware replicas draw their machine with
             HardwarePainting: meters, lamps, wood, leather, faders; consoles set a
-            ConsoleLookAndFeel on their editor), clip editor (piano roll, step sequencer, inspector),
+            ConsoleLookAndFeel on their editor; SpectrumAnalysis: the EQ's spectra and masking),
+            clip editor (piano roll, step sequencer, inspector),
             browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
   app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
@@ -139,6 +141,8 @@ Continuous status (peak levels, DSP load, playhead, transport state) is publishe
 Peak values are "max since last read". The audio thread raises them with a CAS max and the UI collects and resets them with `exchange(0)` once per frame, so a one-sample transient can't fall between two UI frames.
 
 The UI **pulls** telemetry from a `juce::VBlankAttachment` callback once per display refresh. The audio thread never calls into the UI.
+
+**Track taps.** Displays that need a track's sound rather than a number (the EQ's spectrum overlays) watch it in `engine::TrackTaps`: 16 taps, each a track id and a ring of 8192 atomic floats with a write index. `watch()` and `unwatch()` are counted, so several EQs can follow one track; they run on the message thread, and claiming a tap publishes its id last with release order. The audio thread writes each watched track's post-fader output, summed to mono, after its fader and phase (`AudioEngine::processTrack`). When no tap is in use that is one atomic load per track; otherwise it is a compare per tap. The UI copies the newest samples at its own pace and runs the FFT itself (`ui::spectrum::Analyser`). Nothing is allocated or locked on the audio thread. The EQ's sidechain input is the other way to get a track's sound: the compiler routes the picked track to the device's second input bus, and the EQ keeps that bus's mono sum in its own analyser ring.
 
 ## 7. Signal path and precision
 

@@ -83,6 +83,7 @@ MainComponent::MainComponent(AppServices& services)
     addAndMakeVisible(arranger_);
     addAndMakeVisible(mixer_);
     addChildComponent(devicePanel_);
+    devicePanel_.setTrackTaps(&services.controller.getTrackTaps());
     addChildComponent(clipEditor_);
     addChildComponent(clipList_);
     addAndMakeVisible(statusBar_);

@@ -1,12 +1,15 @@
 #pragma once
 
 #include "engine/ProcessorNode.h"
+#include "engine/TrackTaps.h"
 #include "session/Project.h"
 #include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 namespace dojo::ui
 {
@@ -18,6 +21,7 @@ struct DeviceEditorContext
     EditorState& editor;
     juce::ValueTree device; ///< the DEVICE tree
     juce::ValueTree owner;  ///< its track (or the MASTER node)
+    engine::TrackTaps* taps = nullptr; ///< other tracks' sound for spectrum displays (none in tests)
 };
 
 /**
@@ -31,5 +35,14 @@ struct DeviceEditorContext
 */
 std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node, const DeviceEditorContext& context,
                                                     int& preferredWidth);
+
+/** The EQ editor's spectrum overlay, from outside (tests). */
+namespace eqEditor
+{
+/** Overlays these tracks' spectra (as its OVERLAY menu does; kept on the device). */
+void setOverlays(juce::Component& editor, const std::vector<std::uint32_t>& tracks);
+/** Takes the newest sound; returns the names of the spectra over its own and its masking readout. */
+std::pair<juce::StringArray, juce::String> inspect(juce::Component& editor);
+} // namespace eqEditor
 
 } // namespace dojo::ui

@@ -140,6 +140,11 @@ ChannelPeaks EngineController::collectTrackPeaks(int slot) noexcept
     return engine_.collectTrackPeaks(slot);
 }
 
+TrackTaps& EngineController::getTrackTaps() noexcept
+{
+    return engine_.getTrackTaps();
+}
+
 double EngineController::getSampleRateOr(double fallback) const noexcept
 {
     const double rate = engine_.getSampleRate();

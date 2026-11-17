@@ -49,6 +49,7 @@ add_executable(dojo_tests
     TrackSelectionTests.cpp
     SessionTests.cpp
     RealtimeGuardTests.cpp
+    SpectrumOverlayTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleLookTests.cpp

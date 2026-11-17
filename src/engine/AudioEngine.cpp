@@ -768,6 +768,8 @@ void AudioEngine::processTrack(int graphIndex) noexcept
     applyFader(track, slot);
     if (track.hasPostFader)
         applyPostFader(track, slot);
+    // (a spectrum display may be watching this track's sound)
+    taps_.write(track.trackId, slot.main.getArrayOfReadPointers(), std::min(track.outputLayout.numChannels, slot.main.getNumChannels()), numSamples);
     if (track.needsPostFaderCopy)
     {
         // Post-fader sends leave before the compensation delay (their busses align them).

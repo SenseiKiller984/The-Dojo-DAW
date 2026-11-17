@@ -5,6 +5,7 @@
 #include "core/rt/ThreadOwnershipChecker.h"
 #include "engine/EngineCommands.h"
 #include "engine/EngineTelemetry.h"
+#include "engine/TrackTaps.h"
 #include "engine/Preview.h"
 #include "engine/RealtimeHandoff.h"
 #include "engine/RenderGraph.h"
@@ -97,6 +98,8 @@ public:
 
     /** The play head the engine exposes to devices and plug-ins (tempo, position, loop). */
     [[nodiscard]] juce::AudioPlayHead* getPlayHead() noexcept { return &playHead_; }
+    /** Taps of watched tracks' post-fader sound, for spectrum displays (UI-safe, lock-free). */
+    [[nodiscard]] TrackTaps& getTrackTaps() noexcept { return taps_; }
 
     //==============================================================================================
     // Message thread
@@ -296,6 +299,7 @@ private:
     rt::SpscQueue<EngineCommand> commands_{kCommandQueueCapacity};
     rt::SpscQueue<RenderGraph*> retiredGraphs_{64};
     EngineTelemetry telemetry_;
+    TrackTaps taps_;
     rt::ThreadOwnershipChecker commandProducer_;
     LiveMidiQueue liveMidi_;
     WorkerPool workers_;

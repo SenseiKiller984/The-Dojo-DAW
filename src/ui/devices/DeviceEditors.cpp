@@ -15,6 +15,7 @@
 #include "ui/devices/MoreDeviceEditors.h"
 #include "ui/devices/PagedEditor.h"
 #include "ui/devices/ParameterControl.h"
+#include "ui/devices/SpectrumAnalysis.h"
 #include "ui/devices/TempoDetectPanel.h"
 #include "ui/theme/DojoTheme.h"
 
@@ -197,13 +198,23 @@ private:
 };
 
 //==================================================================================================
-/** EQ: response curve, spectrum analyser and draggable band handles above per-band controls. */
-class EqEditor final : public juce::Component, private juce::Timer
+/**
+    EQ: response curve, spectrum analyser and draggable band handles above per-band controls.
+
+    Other tracks' spectra can lie over this one's (OVERLAY: up to four, each in its track's colour,
+    their sound from the engine's taps), and so can the sidechain's (the source picked in the
+    device's header). MASK shades the frequencies where one of them is about as loud as this track
+    or louder, and names the stretch masked most.
+*/
+class EqEditor final : public juce::Component, private juce::Timer, private juce::ValueTree::Listener
 {
 public:
-    explicit EqEditor(devices::Equaliser& eq)
+    static constexpr int kMaxOverlays = 4;
+
+    EqEditor(devices::Equaliser& eq, const DeviceEditorContext& context)
         : eq_(eq)
-        , fft_(11)
+        , context_(context)
+        , frequencies_(spectrum::logFrequencies(kMinFrequency, kMaxFrequency, 240))
     {
         for (int b = 0; b < devices::Equaliser::kNumBands; ++b)
         {
@@ -221,13 +232,76 @@ public:
         }
         output_ = std::make_unique<ParameterControl>(eq_.getOutputGain(), "Output");
         addAndMakeVisible(*output_);
+
+        overlay_.setButtonText("OVERLAY");
+        overlay_.setTooltip("Show other tracks' spectra over this one's, to see where they mask each other");
+        overlay_.setWantsKeyboardFocus(false);
+        overlay_.onClick = [this] { showOverlayMenu(); };
+        addAndMakeVisible(overlay_);
+        mask_.setButtonText("MASK");
+        mask_.setTooltip("Shade where an overlaid track (or the sidechain) is about as loud as this one, or louder");
+        mask_.setClickingTogglesState(true);
+        mask_.setWantsKeyboardFocus(false);
+        mask_.setColour(juce::TextButton::buttonOnColourId, theme::colour::meterClip.withAlpha(0.7f));
+        mask_.setToggleState(isMasking(), juce::dontSendNotification);
+        mask_.onClick = [this] { context_.device.setProperty(kMaskingId, mask_.getToggleState(), nullptr); };
+        addAndMakeVisible(mask_);
+
+        syncWatches();
+        context_.device.addListener(this);
         startTimerHz(30);
     }
+
+    ~EqEditor() override
+    {
+        context_.device.removeListener(this);
+        if (context_.taps != nullptr)
+            for (const auto id : watched_)
+                context_.taps->unwatch(id);
+    }
+
+    // --- What it overlays (kept on the device) ----------------------------------------------------
+    [[nodiscard]] std::vector<std::uint32_t> getOverlays() const
+    {
+        std::vector<std::uint32_t> overlays;
+        for (const auto& token : juce::StringArray::fromTokens(context_.device.getProperty(kOverlaysId).toString(), ",", ""))
+            if (const auto id = static_cast<std::uint32_t>(token.getLargeIntValue());
+                id != 0 && context_.project.getSession().findTrack(id).isValid() && overlays.size() < kMaxOverlays)
+                overlays.push_back(id);
+        return overlays;
+    }
+
+    void setOverlays(const std::vector<std::uint32_t>& overlays)
+    {
+        juce::StringArray tokens;
+        for (const auto id : overlays)
+            tokens.add(juce::String(id));
+        context_.device.setProperty(kOverlaysId, tokens.joinIntoString(","), nullptr);
+        syncWatches();
+    }
+
+    [[nodiscard]] bool isMasking() const { return static_cast<bool>(context_.device.getProperty(kMaskingId, true)); }
+
+    /** What it shows: each overlaid spectrum's name, and the stretch masked most (tests). */
+    [[nodiscard]] juce::StringArray getSourceNames() const
+    {
+        juce::StringArray names;
+        for (const auto& source : sources_)
+            names.add(source.name);
+        return names;
+    }
+    [[nodiscard]] juce::String getMaskingReadout() const { return readout_; }
+    /** Takes the newest sound and updates the spectra (the timer does this 30 times a second). */
+    void update() { analyse(); }
 
     void resized() override
     {
         auto area = getLocalBounds();
         graph_ = area.removeFromTop(std::max(80, area.getHeight() - 112)).reduced(2);
+        auto buttons = graph_.withHeight(20).translated(0, 4).withTrimmedRight(4);
+        mask_.setBounds(buttons.removeFromRight(46));
+        buttons.removeFromRight(4);
+        overlay_.setBounds(buttons.removeFromRight(68));
         area.removeFromTop(2);
         const int bandWidth = (area.getWidth() - 60) / devices::Equaliser::kNumBands;
         for (int b = 0; b < devices::Equaliser::kNumBands; ++b)
@@ -262,12 +336,31 @@ public:
             g.drawText(text, juce::Rectangle<float>(frequencyToX(f) + 2.0f, area.getBottom() - 12.0f, 30.0f, 11.0f),
                        juce::Justification::centredLeft, false);
 
-        // Analyser.
-        if (!spectrum_.isEmpty())
+        // Masking: red where another track covers this one, under this track's spectrum.
+        if (isMasking() && !masking_.empty() && !own_.empty())
+            for (std::size_t i = 0; i + 1 < frequencies_.size(); ++i)
+                if (const float amount = masking_[i]; amount > 0.05f)
+                {
+                    const float x0 = frequencyToX(frequencies_[i]), x1 = frequencyToX(frequencies_[i + 1]);
+                    const float top = levelToY(own_[i]);
+                    g.setColour(colour::meterClip.withAlpha(0.1f + 0.4f * amount));
+                    g.fillRect(juce::Rectangle<float>(x0, top, std::max(1.0f, x1 - x0 + 0.5f), area.getBottom() - top));
+                }
+
+        // This track's spectrum, then the overlaid ones in their colours.
+        if (!own_.empty())
         {
             g.setColour(colour::textMuted.withAlpha(0.35f));
-            g.fillPath(spectrum_);
+            g.fillPath(spectrumPath(own_, true));
         }
+        for (const auto& source : sources_)
+            if (!source.levels.empty())
+            {
+                g.setColour(source.colour.withAlpha(0.08f));
+                g.fillPath(spectrumPath(source.levels, true));
+                g.setColour(source.colour.withAlpha(0.9f));
+                g.strokePath(spectrumPath(source.levels, false), juce::PathStrokeType(source.sidechain ? 1.6f : 1.3f));
+            }
 
         // Response curve.
         juce::Path curve;
@@ -293,6 +386,31 @@ public:
             g.setColour(textOn(kBandColours[static_cast<std::size_t>(b)]));
             g.setFont(sansBold(9.0f));
             g.drawText(juce::String(b + 1), juce::Rectangle<float>(12.0f, 12.0f).withCentre(centre), juce::Justification::centred, false);
+        }
+
+        // The legend (what each spectrum is) and where the masking is worst.
+        if (!sources_.empty())
+        {
+            auto legend = area.reduced(6.0f, 5.0f).withHeight(12.0f);
+            g.setFont(label(8.0f));
+            const auto entry = [&](juce::Colour colour, const juce::String& name)
+            {
+                const float width = std::min(110.0f, juce::GlyphArrangement::getStringWidth(label(8.0f), name) + 16.0f);
+                auto cell = legend.removeFromLeft(width);
+                g.setColour(colour);
+                g.fillRoundedRectangle(cell.removeFromLeft(10.0f).withSizeKeepingCentre(8.0f, 3.0f), 1.0f);
+                g.setColour(colour::textSecondary);
+                g.drawText(name, cell.withTrimmedLeft(3.0f), juce::Justification::centredLeft, true);
+            };
+            entry(colour::textMuted, "THIS TRACK");
+            for (const auto& source : sources_)
+                entry(source.colour, source.name);
+        }
+        if (isMasking() && readout_.isNotEmpty())
+        {
+            g.setColour(colour::meterClip);
+            g.setFont(label(8.5f));
+            g.drawText(readout_, area.reduced(6.0f, 0.0f).withTrimmedTop(26.0f).withHeight(12.0f), juce::Justification::centredRight, true);
         }
     }
 
@@ -352,6 +470,162 @@ public:
     }
 
 private:
+    struct Source
+    {
+        std::uint32_t trackId = 0;
+        bool sidechain = false;
+        juce::String name;
+        juce::Colour colour;
+        std::vector<float> levels;
+    };
+
+    inline static const juce::Identifier kOverlaysId{"overlays"};
+    inline static const juce::Identifier kMaskingId{"masking"};
+
+    void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property) override
+    {
+        if (tree == context_.device && property == kOverlaysId) // (also from undo, presets or elsewhere)
+            syncWatches();
+    }
+
+    /** Watches the overlaid tracks' sound (and lets go of the rest). */
+    void syncWatches()
+    {
+        const auto wanted = getOverlays();
+        if (context_.taps != nullptr)
+        {
+            for (const auto id : watched_)
+                if (std::find(wanted.begin(), wanted.end(), id) == wanted.end())
+                    context_.taps->unwatch(id);
+            std::vector<std::uint32_t> now;
+            for (const auto id : wanted)
+                if (std::find(watched_.begin(), watched_.end(), id) != watched_.end() || context_.taps->watch(id))
+                    now.push_back(id);
+            watched_ = std::move(now);
+        }
+        repaint();
+    }
+
+    void showOverlayMenu()
+    {
+        auto& session = context_.project.getSession();
+        const auto own = session::Session::getDeviceOwner(context_.device);
+        const auto chosen = getOverlays();
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Show other tracks' spectra here");
+        for (const auto& t : session.getAllTracks())
+        {
+            const auto kind = session::track::getKind(t);
+            if (t == own || kind == session::TrackKind::vca || kind == session::TrackKind::midi || kind == session::TrackKind::video)
+                continue;
+            const auto id = session::track::getId(t);
+            const bool ticked = std::find(chosen.begin(), chosen.end(), id) != chosen.end();
+            juce::Component::SafePointer<EqEditor> safe(this);
+            menu.addItem(session::track::getName(t), ticked || chosen.size() < kMaxOverlays, ticked,
+                         [safe, id, ticked]
+                         {
+                             if (safe == nullptr)
+                                 return;
+                             auto overlays = safe->getOverlays();
+                             if (ticked)
+                                 overlays.erase(std::remove(overlays.begin(), overlays.end(), id), overlays.end());
+                             else
+                                 overlays.push_back(id);
+                             safe->setOverlays(overlays);
+                         });
+        }
+        menu.addSeparator();
+        juce::Component::SafePointer<EqEditor> safe(this);
+        menu.addItem("None", !chosen.empty(), false, [safe] { if (safe != nullptr) safe->setOverlays({}); });
+        menu.addItem("(The sidechain, picked in the device's header, shows too)", false, false, [] {});
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&overlay_));
+    }
+
+    void analyse()
+    {
+        const double sampleRate = eq_.getSampleRate() > 0.0 ? eq_.getSampleRate() : 48000.0;
+        std::vector<float> samples(static_cast<std::size_t>(analyser_.size()));
+        eq_.copyAnalyserSamples(samples.data(), analyser_.size());
+        analyser_.analyse(samples.data(), sampleRate, frequencies_, own_);
+
+        // What lies over it: the sidechain, then the overlaid tracks (keeping their smoothing).
+        auto& session = context_.project.getSession();
+        std::vector<Source> sources;
+        const auto take = [&](std::uint32_t id, bool sidechain) -> Source&
+        {
+            Source source;
+            source.trackId = id;
+            source.sidechain = sidechain;
+            for (auto& old : sources_)
+                if (old.trackId == id && old.sidechain == sidechain)
+                    source.levels = std::move(old.levels);
+            const auto t = session.findTrack(id);
+            source.name = (sidechain ? "SC " : "") + session::track::getName(t).toUpperCase();
+            source.colour = session::track::getColour(t);
+            sources.push_back(std::move(source));
+            return sources.back();
+        };
+        if (const auto sidechain = session::device::getSidechain(context_.device); sidechain != 0 && session.findTrack(sidechain).isValid())
+        {
+            auto& source = take(sidechain, true);
+            eq_.copySidechainSamples(samples.data(), analyser_.size());
+            analyser_.analyse(samples.data(), sampleRate, frequencies_, source.levels);
+        }
+        if (context_.taps != nullptr)
+            for (const auto id : watched_)
+            {
+                auto& source = take(id, false);
+                if (context_.taps->copy(id, samples.data(), analyser_.size()))
+                    analyser_.analyse(samples.data(), sampleRate, frequencies_, source.levels);
+            }
+        sources_ = std::move(sources);
+
+        // Where they cover this track, and the stretch they cover most.
+        masking_.assign(frequencies_.size(), 0.0f);
+        spectrum::Range best;
+        juce::String bestName;
+        for (const auto& source : sources_)
+        {
+            if (source.levels.empty())
+                continue;
+            const auto amount = spectrum::masking(own_, source.levels);
+            for (std::size_t i = 0; i < amount.size(); ++i)
+                masking_[i] = std::max(masking_[i], amount[i]);
+            if (const auto ranges = spectrum::maskedRanges(frequencies_, amount); !ranges.empty() && ranges.front().amount > best.amount)
+            {
+                best = ranges.front();
+                bestName = source.name;
+            }
+        }
+        const auto hz = [](double f) { return f >= 1000.0 ? juce::String(f / 1000.0, 1) + "K" : juce::String(juce::roundToInt(f)); };
+        readout_ = best.amount > 0.0f ? "MASKED " + hz(best.low) + " - " + hz(best.high) + " HZ BY " + bestName : juce::String();
+    }
+
+    [[nodiscard]] juce::Path spectrumPath(const std::vector<float>& levels, bool closed) const
+    {
+        const auto area = graph_.toFloat();
+        juce::Path path;
+        for (std::size_t i = 0; i < std::min(levels.size(), frequencies_.size()); ++i)
+        {
+            const juce::Point<float> point(frequencyToX(frequencies_[i]), levelToY(levels[i]));
+            if (i == 0)
+                closed ? path.startNewSubPath(point.x, area.getBottom()), path.lineTo(point) : path.startNewSubPath(point);
+            else
+                path.lineTo(point);
+        }
+        if (closed)
+        {
+            path.lineTo(area.getRight(), area.getBottom());
+            path.closeSubPath();
+        }
+        return path;
+    }
+
+    [[nodiscard]] float levelToY(float db) const
+    {
+        const auto area = graph_.toFloat();
+        return juce::jmap(juce::jlimit(-90.0f, 0.0f, db), -90.0f, 0.0f, area.getBottom(), area.getY());
+    }
     [[nodiscard]] float frequencyToX(double f) const
     {
         const double proportion = std::log(f / kMinFrequency) / std::log(kMaxFrequency / kMinFrequency);
@@ -381,39 +655,23 @@ private:
 
     void timerCallback() override
     {
-        // Analyser: Hann-windowed FFT of the newest post-EQ samples.
-        constexpr int size = 2048;
-        std::array<float, size * 2> data{};
-        eq_.copyAnalyserSamples(data.data(), size);
-        for (int i = 0; i < size; ++i)
-            data[static_cast<std::size_t>(i)] *= 0.5f - 0.5f * std::cos(2.0f * juce::MathConstants<float>::pi * static_cast<float>(i) / (size - 1));
-        fft_.performFrequencyOnlyForwardTransform(data.data());
-
-        const double sampleRate = eq_.getSampleRate() > 0.0 ? eq_.getSampleRate() : 48000.0;
-        const auto area = graph_.toFloat();
-        juce::Path path;
-        path.startNewSubPath(area.getX(), area.getBottom());
-        for (float x = area.getX(); x <= area.getRight(); x += 3.0f)
-        {
-            const double f = xToFrequency(x);
-            const auto bin = static_cast<std::size_t>(juce::jlimit(1, size / 2 - 1, juce::roundToInt(f / sampleRate * size)));
-            const float magnitude = data[bin] / (size * 0.25f);
-            const float db = juce::Decibels::gainToDecibels(magnitude, -90.0f);
-            const float y = juce::jmap(db, -90.0f, 0.0f, area.getBottom(), area.getY());
-            path.lineTo(x, y);
-        }
-        path.lineTo(area.getRight(), area.getBottom());
-        path.closeSubPath();
-        spectrum_ = path;
+        analyse();
+        mask_.setToggleState(isMasking(), juce::dontSendNotification);
         repaint(graph_);
     }
 
     devices::Equaliser& eq_;
-    juce::dsp::FFT fft_;
+    DeviceEditorContext context_;
+    spectrum::Analyser analyser_{12};
+    std::vector<double> frequencies_;
+    std::vector<float> own_, masking_;
+    std::vector<Source> sources_;
+    std::vector<std::uint32_t> watched_;
+    juce::String readout_;
     std::vector<std::unique_ptr<ParameterControl>> controls_;
     std::unique_ptr<ParameterControl> output_;
+    juce::TextButton overlay_, mask_;
     juce::Rectangle<int> graph_;
-    juce::Path spectrum_;
     int dragBand_ = -1;
 };
 
@@ -1634,6 +1892,25 @@ std::vector<PagedEditor::Page> echoPages()
 
 } // namespace
 
+namespace eqEditor
+{
+void setOverlays(juce::Component& editor, const std::vector<std::uint32_t>& tracks)
+{
+    if (auto* eq = dynamic_cast<EqEditor*>(&editor))
+        eq->setOverlays(tracks);
+}
+
+std::pair<juce::StringArray, juce::String> inspect(juce::Component& editor)
+{
+    if (auto* eq = dynamic_cast<EqEditor*>(&editor))
+    {
+        eq->update();
+        return {eq->getSourceNames(), eq->getMaskingReadout()};
+    }
+    return {};
+}
+} // namespace eqEditor
+
 std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node, const DeviceEditorContext& context, int& preferredWidth)
 {
     auto& processor = node.getProcessor();
@@ -1643,7 +1920,7 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
     if (auto* eq = dynamic_cast<devices::Equaliser*>(&processor))
     {
         preferredWidth = 560;
-        return std::make_unique<EqEditor>(*eq);
+        return std::make_unique<EqEditor>(*eq, context);
     }
     if (auto* compressor = dynamic_cast<devices::Compressor*>(&processor))
     {

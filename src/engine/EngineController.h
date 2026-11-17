@@ -4,6 +4,7 @@
 #include "engine/EngineCommands.h"
 #include "engine/EngineTelemetry.h"
 #include "engine/RealtimeHandoff.h"
+#include "engine/TrackTaps.h"
 #include "engine/io/AudioDeviceHost.h"
 
 #include <juce_events/juce_events.h>
@@ -83,6 +84,8 @@ public:
     [[nodiscard]] AudioDeviceHost& getDeviceHost() noexcept { return deviceHost_; }
 
     [[nodiscard]] AudioEngine& getEngine() noexcept { return engine_; }
+    /** Watch tracks' sound for spectrum displays (lock-free; see TrackTaps). */
+    [[nodiscard]] TrackTaps& getTrackTaps() noexcept;
 
     /** Deferred destruction for objects the audio thread may still be reading. */
     [[nodiscard]] ReleasePool& getReleasePool() noexcept { return releasePool_; }

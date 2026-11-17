@@ -159,6 +159,10 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Native devices** (64-bit, real-time safe, with dedicated editors; drag a knob, or double-click the value under it to type an exact one: "120 Hz", "2.5k", "-6 dB", or a word the knob shows, such as "Off", "Full" or "-inf")
 - **EQ**: 4 bands (low/high cut, shelves, peaks) with a live spectrum analyser and draggable band handles.
+  - **Spectrum overlay**: **OVERLAY** lists the project's other tracks; tick up to four and their spectra are drawn over the EQ's own, each in its track's colour and named in the legend (they are post-fader, so they show what you hear). It is for seeing where parts fight over the same frequencies, such as a kick and a bass.
+  - **Sidechain visualizer**: the EQ has a sidechain input. Pick a track in the device's header and its spectrum shows as "SC <track>", whether or not that track is also an overlay.
+  - **MASK** (on by default) shades the frequencies where another track is about as loud as this one or louder, darker the more it masks it: none 6 dB under it, half level with it, full 6 dB over it, ignoring anything under -60 dB. The readout names the worst stretch and the track doing it, e.g. "MASKED 60 - 110 HZ BY KICK".
+  - The chosen overlays and the MASK switch are saved with the project. A track is only tapped while an EQ shows it (up to 16 tracks at a time, any number of EQs), and costs nothing otherwise.
 - **Compressor** with soft knee, makeup, mix and an **external sidechain** (pick any track).
 - **Limiter** (lookahead brickwall):
   - **Maximize**: Threshold replaces Input Gain. Material at the threshold comes out at the ceiling, so lowering the threshold reduces the dynamic range and makes the track louder.

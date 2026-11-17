@@ -17,6 +17,8 @@ add_library(dojo_engine STATIC
     RealtimeHandoff.cpp
     RealtimeHandoff.h
     RenderGraph.h
+    TrackTaps.cpp
+    TrackTaps.h
     WorkerPool.cpp
     WorkerPool.h
     dsp/ClipRenderer.cpp

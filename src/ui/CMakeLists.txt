@@ -74,6 +74,8 @@ add_library(dojo_ui STATIC
     devices/MoreDeviceEditors.cpp
     devices/MoreDeviceEditors.h
     devices/PagedEditor.h
+    devices/SpectrumAnalysis.cpp
+    devices/SpectrumAnalysis.h
     devices/StudioDeviceEditors.cpp
     devices/StudioDeviceEditors.h
     devices/TapeDeck.cpp
