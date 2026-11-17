@@ -90,7 +90,9 @@ bool ClipStretcher::render(const RenderClip& clip, double blockStartSeconds, dou
 
     const double stretch = clip.stretch > 0.0 ? clip.stretch : 1.0;
     const double sourceRate = clip.sourceSampleRate;
-    const double inputPerOutput = secondsPerSample / stretch * sourceRate;
+    // Where the source is at a time in the clip: through its warp markers, or at its stretch.
+    const auto sourceSecondsAt = [&](double clipTime)
+    { return warp::sourceAt(clip.warp.data(), clip.warp.size(), clip.sourceOffsetSeconds, stretch, clipTime); };
     const int inputLatency = s.stretch.inputLatency();
     const int outputLatency = s.stretch.outputLatency();
 
@@ -98,7 +100,11 @@ bool ClipStretcher::render(const RenderClip& clip, double blockStartSeconds, dou
     s.stretch.setTransposeFactor(static_cast<float>(sourceRate * secondsPerSample * std::pow(2.0, clip.pitchSemitones / 12.0)));
 
     const double timeInClip = blockStartSeconds + first * secondsPerSample - clip.startSeconds;
-    const auto sourceFrameAt = [&](double clipTime) { return (clip.sourceOffsetSeconds + clipTime / stretch) * sourceRate; };
+    const auto sourceFrameAt = [&](double clipTime) { return sourceSecondsAt(clipTime) * sourceRate; };
+    // Source frames per output sample where it plays now (the warp map's local rate).
+    const double inputPerOutput =
+        warp::rateAt(clip.warp.data(), clip.warp.size(), clip.sourceOffsetSeconds, stretch, timeInClip + outputLatency * secondsPerSample)
+        * secondsPerSample * sourceRate;
 
     // Processing time runs outputLatency output samples ahead of what we hear now.
     if (std::abs(timeInClip - s.expectedTimeInClip) > secondsPerSample * 0.5)

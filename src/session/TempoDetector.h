@@ -40,6 +40,11 @@ struct Estimate
 [[nodiscard]] Estimate estimate(const float* samples, int numSamples, double sampleRate, double minBpm = 70.0,
                                 double maxBpm = 180.0);
 
+/** Hitpoints: the attacks in mono audio (seconds from its start, in order), each placed to the
+    sample on its energy envelope (the 30 % point of its rise, as the tempo detection does). Hits
+    closer than 30 ms count as one. `sensitivity` 0..1: higher finds softer hits. */
+[[nodiscard]] std::vector<double> detectHitpoints(const float* samples, int numSamples, double sampleRate, double sensitivity = 0.5);
+
 /** What analysing a track needs from the session, taken on the message thread. */
 struct ClipRegion
 {

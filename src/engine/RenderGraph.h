@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/HardwareIo.h"
+#include "core/WarpMap.h"
 #include "core/Types.h"
 #include "engine/Automation.h"
 #include "engine/ChannelLayout.h"
@@ -75,6 +76,7 @@ struct RenderClip
     double loopLength = 0.0;     ///< looped: the first loopLength seconds repeat to the end (0 = not looped)
 
     double stretch = 1.0;        ///< timeline seconds per source second (2 = half speed)
+    std::vector<WarpPoint> warp; ///< warp markers (clip time, source time): the source played through them
     double pitchSemitones = 0.0; ///< independent of stretch
     ClipStretcher* stretcher = nullptr; ///< set when stretch != 1 or pitch != 0
 

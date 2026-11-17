@@ -1,6 +1,7 @@
 #include "ui/EditActions.h"
 
 #include "session/Project.h"
+#include "session/TempoDetector.h"
 #include "video/VideoSource.h"
 
 #include <algorithm>
@@ -861,6 +862,150 @@ bool selectedClipsGainBypassed(const session::Session& session, const EditorStat
     return any;
 }
 
+namespace
+{
+/** The selected audio clips that can be warped (editable, not looped). */
+std::vector<juce::ValueTree> warpableClips(const session::Session& session, const EditorState& editor)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (c.hasType(session::ids::clip) && session::clip::canEdit(c) && !session::clip::isLooped(c))
+            clips.push_back(c);
+    return clips;
+}
+
+/** A clip's markers, or (with none) markers at its hitpoints, where they play now. */
+std::vector<WarpPoint> markersOrHitpoints(const juce::ValueTree& c, bool addHitpoints)
+{
+    auto markers = session::clip::getWarpMarkers(c);
+    if (!markers.empty() && !addHitpoints)
+        return markers;
+    const double length = session::clip::getLength(c);
+    for (const double h : session::clip::getHitpoints(c))
+        if (const double t = session::clip::clipTimeOf(c, h); t > 0.002 && t < length - 0.002)
+            markers.push_back({t, h});
+    return markers;
+}
+} // namespace
+
+int detectSelectedClipsHitpoints(session::Session& session, EditorState& editor, double sensitivity, juce::String& error)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (c.hasType(session::ids::clip))
+            clips.push_back(c);
+    if (clips.empty())
+    {
+        error = "Select audio clips.";
+        return 0;
+    }
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    int analysed = 0;
+    auto* um = &session.getUndoManager();
+    session.beginTransaction("Detect Hitpoints");
+    for (auto c : clips)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(session::clip::getFile(c)));
+        if (reader == nullptr)
+        {
+            error = "Could not read " + session::clip::getFile(c).getFileName();
+            continue;
+        }
+        // The part of the file the clip plays, and a little before it (an attack right at its start).
+        const double rate = reader->sampleRate;
+        const double offset = session::clip::getOffset(c);
+        const double from = std::max(0.0, offset - 0.05);
+        const double to = session::clip::sourceAt(c, session::clip::getLoopLength(c));
+        const auto first = static_cast<juce::int64>(std::floor(from * rate));
+        const auto count = static_cast<int>(std::min<juce::int64>(reader->lengthInSamples - first, static_cast<juce::int64>(std::ceil((to - from) * rate)) + 1));
+        if (count <= 0)
+            continue;
+        const int channels = static_cast<int>(reader->numChannels);
+        juce::AudioBuffer<float> audio(channels, count);
+        reader->read(&audio, 0, count, first, true, true);
+        std::vector<float> mono(static_cast<std::size_t>(count), 0.0f);
+        const int chosen = session::clip::getSourceChannel(c);
+        for (int ch = 0; ch < channels; ++ch)
+            if (chosen < 0 || ch == std::min(chosen, channels - 1))
+                juce::FloatVectorOperations::addWithMultiply(mono.data(), audio.getReadPointer(ch), chosen < 0 ? 1.0f / static_cast<float>(channels) : 1.0f, count);
+        std::vector<double> points;
+        for (const double t : session::tempo::detectHitpoints(mono.data(), count, rate, sensitivity))
+            if (const double source = from + t; source >= offset - 0.005 && source <= to)
+                points.push_back(source);
+        session::clip::setHitpoints(c, points, um);
+        ++analysed;
+    }
+    return analysed;
+}
+
+bool warpSelectedClipsAtHitpoints(session::Session& session, EditorState& editor)
+{
+    bool changed = false;
+    session.beginTransaction("Warp Markers at Hitpoints");
+    for (auto c : warpableClips(session, editor))
+        if (!session::clip::getHitpoints(c).empty())
+        {
+            session::clip::setWarpMarkers(c, markersOrHitpoints(c, true), &session.getUndoManager());
+            changed = true;
+        }
+    return changed;
+}
+
+bool quantizeSelectedClipsWarp(session::Session& session, EditorState& editor, double gridSeconds, double strength)
+{
+    if (gridSeconds <= 0.0)
+        return false;
+    strength = std::clamp(strength, 0.0, 1.0);
+    bool changed = false;
+    session.beginTransaction("Quantize Warp Markers");
+    for (auto c : warpableClips(session, editor))
+    {
+        auto markers = markersOrHitpoints(c, false);
+        if (markers.empty())
+            continue;
+        const double start = session::clip::getStart(c);
+        for (auto& marker : markers)
+        {
+            const double at = start + marker.clipTime;
+            marker.clipTime += (std::round(at / gridSeconds) * gridSeconds - at) * strength;
+        }
+        session::clip::setWarpMarkers(c, markers, &session.getUndoManager());
+        changed = true;
+    }
+    return changed;
+}
+
+bool clearSelectedClipsWarp(session::Session& session, EditorState& editor)
+{
+    bool changed = false;
+    session.beginTransaction("Clear Warp Markers");
+    for (auto c : warpableClips(session, editor))
+        if (session::clip::isWarped(c))
+        {
+            session::clip::setWarpMarkers(c, {}, &session.getUndoManager());
+            changed = true;
+        }
+    return changed;
+}
+
+bool selectionHasHitpoints(const session::Session& session, const EditorState& editor)
+{
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (c.hasType(session::ids::clip) && c.hasProperty(session::ids::hitpoints))
+            return true;
+    return false;
+}
+
+bool selectionHasWarpMarkers(const session::Session& session, const EditorState& editor)
+{
+    for (const auto& c : getSelectedClipsWithGroups(session, editor))
+        if (c.hasType(session::ids::clip) && session::clip::isWarped(c))
+            return true;
+    return false;
+}
+
 int renderSelectedClipsGain(session::Project& project, EditorState& editor, juce::String& error)
 {
     auto& session = project.getSession();
@@ -899,12 +1044,11 @@ int renderSelectedClipsGain(session::Project& project, EditorState& editor, juce
             continue;
         }
 
-        // The part of the file the clip plays (one iteration of a looped clip).
-        const double stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
+        // The part of the file the clip plays (one iteration of a looped clip; through its warp markers).
         const double rate = reader->sampleRate;
         const auto first = static_cast<juce::int64>(std::floor(session::clip::getOffset(c) * rate));
-        const auto count = static_cast<int>(std::min<juce::int64>(reader->lengthInSamples - first,
-                                                                  static_cast<juce::int64>(std::ceil(session::clip::getLoopLength(c) / stretch * rate)) + 1));
+        const double playedSeconds = session::clip::sourceAt(c, session::clip::getLoopLength(c)) - session::clip::getOffset(c);
+        const auto count = static_cast<int>(std::min<juce::int64>(reader->lengthInSamples - first, static_cast<juce::int64>(std::ceil(playedSeconds * rate)) + 1));
         if (count <= 0)
             continue;
         const int channels = static_cast<int>(reader->numChannels);
@@ -932,6 +1076,17 @@ int renderSelectedClipsGain(session::Project& project, EditorState& editor, juce
         session.addWholeFileClip(target, static_cast<double>(count) / rate, false, session.getOriginalTimeStamp(c));
         c.setProperty(session::ids::timeStamp, session.getOriginalTimeStamp(c), um);
         c.setProperty(session::ids::file, target.getFullPathName(), um);
+        // Its warp markers and hitpoints point into the new file, which starts where the clip did.
+        const double shift = static_cast<double>(first) / rate;
+        auto markers = session::clip::getWarpMarkers(c);
+        for (auto& marker : markers)
+            marker.source -= shift;
+        auto hitpoints = session::clip::getHitpoints(c);
+        for (auto& h : hitpoints)
+            h -= shift;
+        session::clip::setOffset(c, session::clip::getOffset(c) - shift, um);
+        session::clip::setWarpMarkers(c, markers, um);
+        session::clip::setHitpoints(c, hitpoints, um);
         session::clip::setOffset(c, 0.0, um);
         session::clip::setGainDb(c, 0.0, um);
         ++rendered;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/WarpMap.h"
 #include "engine/RenderGraph.h"
 
 #include <juce_data_structures/juce_data_structures.h>
@@ -116,6 +117,8 @@ inline const juce::Identifier looped {"looped"};
 inline const juce::Identifier loopLength {"loopLength"};
 inline const juce::Identifier syncPoint {"syncPoint"};
 inline const juce::Identifier gainBypassed {"gainBypassed"};
+inline const juce::Identifier warpMarkers {"warp"};
+inline const juce::Identifier hitpoints {"hitpoints"};
 inline const juce::Identifier userNamed {"userNamed"};
 inline const juce::Identifier clipGroupList {"CLIPGROUPS"};
 inline const juce::Identifier clipGroup {"CLIPGROUP"};
@@ -353,6 +356,20 @@ std::optional<double> getSyncPoint(const juce::ValueTree& c);
 void setSyncPoint(juce::ValueTree c, std::optional<double> secondsFromStart, juce::UndoManager* um);
 /** Where the clip lines up: its sync point, or its start. */
 double getReferenceTime(const juce::ValueTree& c);
+
+/** Warp markers (audio clips): moments of the source pinned to times in the clip, the audio between
+    them stretched to fit (see dojo::WarpPoint; clip times from the clip's start, both increasing).
+    None: the clip plays at its stretch. */
+std::vector<WarpPoint> getWarpMarkers(const juce::ValueTree& c);
+/** Sets them: sorted, and kept only where both times keep increasing (from the clip's start). */
+void setWarpMarkers(juce::ValueTree c, std::vector<WarpPoint> markers, juce::UndoManager* um);
+[[nodiscard]] inline bool isWarped(const juce::ValueTree& c) { return c.hasProperty(ids::warpMarkers); }
+/** The source time (seconds into the file) that plays `clipTime` seconds into the clip, and back. */
+double sourceAt(const juce::ValueTree& c, double clipTime);
+double clipTimeOf(const juce::ValueTree& c, double source);
+/** Hitpoints (audio clips): the attacks found in the source (seconds into the file). */
+std::vector<double> getHitpoints(const juce::ValueTree& c);
+void setHitpoints(juce::ValueTree c, const std::vector<double>& sourceSeconds, juce::UndoManager* um);
 
 /** Bypassed clip gain: the clip plays at 0 dB, the setting is kept. */
 bool isGainBypassed(const juce::ValueTree& c);

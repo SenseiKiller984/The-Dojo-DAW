@@ -191,8 +191,9 @@ double coarseTempo(const OnsetStrength& onsets, double& strength)
     return best;
 }
 
-/** Onset candidates: local maxima of the onset strength above an adaptive threshold (frames). */
-std::vector<int> pickPeaks(const std::vector<double>& odf)
+/** Onset candidates: local maxima of the onset strength above an adaptive threshold (`deviations`
+    standard deviations over its mean), in frames. */
+std::vector<int> pickPeaks(const std::vector<double>& odf, double deviations = 0.5)
 {
     if (odf.empty())
         return {};
@@ -201,7 +202,7 @@ std::vector<int> pickPeaks(const std::vector<double>& odf)
     for (const double v : odf)
         variance += (v - mean) * (v - mean);
     const double deviation = std::sqrt(variance / static_cast<double>(odf.size()));
-    const double threshold = mean + 0.5 * deviation;
+    const double threshold = mean + deviations * deviation;
     const int radius = std::max(1, static_cast<int>(0.03 / secondsPerHop())); // 30 ms
 
     std::vector<int> peaks;
@@ -371,6 +372,24 @@ double fold(double bpm, double minBpm, double maxBpm)
     return bpm;
 }
 } // namespace
+
+std::vector<double> detectHitpoints(const float* samples, int numSamples, double sampleRate, double sensitivity)
+{
+    // A window of silence first: an attack in the very first frame has nothing before it to rise from.
+    auto x = toAnalysisRate(samples, numSamples, sampleRate);
+    if (x.empty())
+        return {};
+    x.insert(x.begin(), static_cast<std::size_t>(kFftSize), 0.0f);
+    const double lead = kFftSize / kAnalysisRate;
+    // More sensitive: a lower threshold over the onset strength's mean (1.5 deviations .. -0.1).
+    const double deviations = 1.5 - 1.6 * std::clamp(sensitivity, 0.0, 1.0);
+    const auto strength = onsetStrength(x).full;
+    std::vector<double> seconds;
+    for (const auto& onset : refineOnsets(x, strength, pickPeaks(strength, deviations)))
+        if (onset.seconds >= lead - 0.001)
+            seconds.push_back(std::max(0.0, onset.seconds - lead));
+    return seconds;
+}
 
 Estimate estimate(const float* samples, int numSamples, double sampleRate, double minBpm, double maxBpm)
 {

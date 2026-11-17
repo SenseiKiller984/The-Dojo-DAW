@@ -183,6 +183,7 @@ private:
         reorderTrack,
         automationPoint,
         marquee,
+        warpMarker,
     };
 
     enum class ClipZone
@@ -192,6 +193,7 @@ private:
         rightEdge,
         fadeInHandle,
         fadeOutHandle,
+        warpMarker, ///< a warp marker's handle (ClipHit::warpIndex)
     };
 
     struct ClipHit
@@ -199,6 +201,7 @@ private:
         juce::ValueTree clip;
         int row = -1;
         ClipZone zone = ClipZone::body;
+        int warpIndex = -1;
     };
 
     struct ClipSnapshot
@@ -211,6 +214,7 @@ private:
         double fadeIn = 0.0;
         double fadeOut = 0.0;
         double stretch = 1.0;
+        std::vector<WarpPoint> warp; ///< its warp markers
         bool midi = false;
         bool looped = false;
         std::optional<double> sync; ///< sync point, seconds from the start
@@ -357,6 +361,7 @@ private:
     juce::Point<float> dragStart_;
     std::uint32_t dragAnchorId_ = 0;
     std::vector<ClipSnapshot> dragOriginals_;
+    int dragWarpIndex_ = -1; ///< the warp marker being dragged
     double dragSourceLength_ = 0.0;
     juce::ValueTree reorderTrack_;
     int reorderTargetRow_ = -1;

@@ -86,6 +86,10 @@ enum : juce::CommandID
     renderClipGain,
     showClipList,
     toggleFullScreen,
+    detectHitpoints,
+    warpAtHitpoints,
+    quantizeWarpMarkers,
+    clearWarpMarkers,
 };
 
 namespace categories

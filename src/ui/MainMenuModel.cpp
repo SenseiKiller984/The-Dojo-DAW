@@ -93,6 +93,12 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, identifySyncPoint);
         menu.addCommandItem(cm, removeSyncPoint);
         menu.addCommandItem(cm, quantizeClipsToGrid);
+        juce::PopupMenu warp;
+        warp.addCommandItem(cm, detectHitpoints);
+        warp.addCommandItem(cm, warpAtHitpoints);
+        warp.addCommandItem(cm, quantizeWarpMarkers);
+        warp.addCommandItem(cm, clearWarpMarkers);
+        menu.addSubMenu("Warp", warp);
         menu.addSeparator();
         juce::PopupMenu gain;
         gain.addCommandItem(cm, bypassClipGain);

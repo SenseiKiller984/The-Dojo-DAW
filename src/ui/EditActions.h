@@ -180,6 +180,22 @@ bool removeSyncPoints(session::Session& session, EditorState& editor);
     nearest line of a `gridSeconds` grid. Time- and edit-locked clips stay. */
 bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor, double gridSeconds);
 
+/** Clip > Warp > Detect Hitpoints: finds the attacks in the part of the file each selected audio
+    clip plays (reading the files) and keeps them on the clips. `sensitivity` 0..1: higher finds
+    softer hits. Returns how many clips were analysed. */
+int detectSelectedClipsHitpoints(session::Session& session, EditorState& editor, double sensitivity, juce::String& error);
+/** Clip > Warp > Warp Markers at Hitpoints: a warp marker at every hitpoint inside the selected clips,
+    where it plays now (nothing moves until the markers do). */
+bool warpSelectedClipsAtHitpoints(session::Session& session, EditorState& editor);
+/** Clip > Warp > Quantize Warp Markers: the selected clips' warp markers move `strength` (0..1) of the
+    way to the nearest line of a `gridSeconds` grid, the audio between them stretched to fit. A clip
+    with hitpoints but no markers gets them at its hitpoints first: its attacks land on the grid. */
+bool quantizeSelectedClipsWarp(session::Session& session, EditorState& editor, double gridSeconds, double strength = 1.0);
+/** Clip > Warp > Clear Warp Markers: the selected clips play straight again. */
+bool clearSelectedClipsWarp(session::Session& session, EditorState& editor);
+[[nodiscard]] bool selectionHasHitpoints(const session::Session& session, const EditorState& editor);
+[[nodiscard]] bool selectionHasWarpMarkers(const session::Session& session, const EditorState& editor);
+
 /** Clip > Clip Gain > Bypass Clip Gain: toggles the selected audio clips (all on if any is off). */
 bool toggleSelectedClipsGainBypass(session::Session& session, EditorState& editor);
 [[nodiscard]] bool selectedClipsGainBypassed(const session::Session& session, const EditorState& editor);

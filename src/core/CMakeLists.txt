@@ -15,7 +15,8 @@ add_library(dojo_core STATIC
     rt/RealtimeGuard.cpp
     rt/RealtimeGuard.h
     rt/SpscQueue.h
-    rt/ThreadOwnershipChecker.h)
+    rt/ThreadOwnershipChecker.h
+    WarpMap.h)
 add_library(dojo::core ALIAS dojo_core)
 
 target_include_directories(dojo_core PUBLIC ${PROJECT_SOURCE_DIR}/src "${_dojo_generated_dir}")

@@ -29,6 +29,8 @@ constexpr float kEdgeGrabWidth = 6.0f;
 constexpr float kClipTitleHeight = 16.0f;
 constexpr double kSmpteFrameRate = 30.0; ///< the timecode rate of sync point locations
 constexpr float kFadeHandleSize = 8.0f;
+constexpr float kWarpGrab = 4.0f; ///< (pixels either side of a warp marker or a hitpoint)
+constexpr float kHitpointTickHeight = 7.0f;
 constexpr float kPointRadius = 4.5f;
 constexpr double kMinPixelsPerSecond = 2.0;
 constexpr double kMaxPixelsPerSecond = 2000.0;
@@ -610,6 +612,19 @@ ArrangerView::ClipHit ArrangerView::hitTestClip(juce::Point<float> position) con
         const float fadeOutX = bounds.getRight() - static_cast<float>(session::clip::getFadeOut(c) * pixelsPerSecond_);
         const float handleY = bounds.getY() + kClipTitleHeight;
         const bool nearHandleRow = std::abs(position.y - handleY) <= kFadeHandleSize;
+
+        // Warp markers: a few pixels either side of their line, below the title.
+        if (audio && position.y > bounds.getY() + kClipTitleHeight)
+        {
+            const auto markers = session::clip::getWarpMarkers(c);
+            for (std::size_t m = 0; m < markers.size(); ++m)
+                if (std::abs(position.x - timeToX(session::clip::getStart(c) + markers[m].clipTime)) <= kWarpGrab)
+                {
+                    hit.zone = ClipZone::warpMarker;
+                    hit.warpIndex = static_cast<int>(m);
+                    return hit;
+                }
+        }
 
         if (audio && nearHandleRow && std::abs(position.x - fadeInX) <= kFadeHandleSize)
             hit.zone = ClipZone::fadeInHandle;
@@ -1723,6 +1738,36 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
         }
     }
 
+    // Hitpoints (on a selected clip): short ticks along its bottom, where each attack plays.
+    if (!session::clip::isMidi(c))
+    {
+        const double clipStart = session::clip::getStart(c);
+        const double clipLength = session::clip::getLength(c);
+        if (selected)
+        {
+            g.setColour(colour::textPrimary.withAlpha(0.55f));
+            for (const double h : session::clip::getHitpoints(c))
+                if (const double t = session::clip::clipTimeOf(c, h); t >= 0.0 && t <= clipLength)
+                {
+                    const float x = timeToX(clipStart + t);
+                    g.drawLine(x, bounds.getBottom() - kHitpointTickHeight, x, bounds.getBottom() - 1.0f, 1.0f);
+                }
+        }
+        // Warp markers: a gold line through the clip with a handle under its title.
+        for (const auto& marker : session::clip::getWarpMarkers(c))
+        {
+            if (marker.clipTime > clipLength)
+                continue;
+            const float x = timeToX(clipStart + marker.clipTime);
+            g.setColour(colour::gold.withAlpha(0.75f));
+            g.drawLine(x, body.getY(), x, bounds.getBottom() - 1.0f, 1.0f);
+            juce::Path handle;
+            handle.addTriangle(x - 4.0f, body.getY(), x + 4.0f, body.getY(), x, body.getY() + 6.0f);
+            g.setColour(colour::gold);
+            g.fillPath(handle);
+        }
+    }
+
     // The sync point: a light grey line and a small down arrow at the bottom of the clip.
     if (const auto sync = session::clip::getSyncPoint(c))
     {
@@ -1763,6 +1808,8 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
     const double start = session::clip::getStart(c);
     const double offset = session::clip::getOffset(c);
     const double stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
+    const auto markers = session::clip::getWarpMarkers(c);
+    const auto sourceAt = [&](double clipTime) { return warp::sourceAt(markers.data(), markers.size(), offset, stretch, clipTime); };
     const double bucketsPerSecond = asset->sampleRate / session::WaveformPeaks::kFramesPerBucket;
     // A looped clip shows its first loop-length again in every iteration.
     const bool looped = session::clip::isLooped(c);
@@ -1783,8 +1830,8 @@ void ArrangerView::paintWaveform(juce::Graphics& g, const juce::ValueTree& c, ju
                             {
                                 const int channel = chosen >= 0 ? std::min(chosen, peaks.numChannels - 1) : lane;
                                 const double t0 = inClip(static_cast<float>(x));
-                                const double sourceT0 = offset + t0 / stretch;
-                                const double sourceT1 = offset + std::max(t0, inClip(static_cast<float>(x + 1))) / stretch;
+                                const double sourceT0 = sourceAt(t0);
+                                const double sourceT1 = sourceAt(std::max(t0, inClip(static_cast<float>(x + 1))));
                                 const int b0 = juce::jlimit(0, numBuckets - 1, static_cast<int>(std::floor(sourceT0 * bucketsPerSecond)));
                                 const int b1 = juce::jlimit(b0 + 1, numBuckets, static_cast<int>(std::ceil(sourceT1 * bucketsPerSecond)));
                                 const auto& minimum = peaks.minimum[static_cast<std::size_t>(channel)];
@@ -2167,7 +2214,9 @@ void ArrangerView::beginClipDrag(const ClipHit& hit)
     case ClipZone::rightEdge:     dragMode_ = DragMode::trimEnd; break;
     case ClipZone::fadeInHandle:  dragMode_ = DragMode::fadeIn; break;
     case ClipZone::fadeOutHandle: dragMode_ = DragMode::fadeOut; break;
+    case ClipZone::warpMarker:    dragMode_ = DragMode::warpMarker; break;
     }
+    dragWarpIndex_ = hit.warpIndex;
 
     dragAnchorId_ = session::clip::getId(hit.clip);
     dragOriginals_.clear();
@@ -2185,6 +2234,7 @@ void ArrangerView::beginClipDrag(const ClipHit& hit)
         s.fadeIn = session::clip::getFadeIn(c);
         s.fadeOut = session::clip::getFadeOut(c);
         s.stretch = std::max(session::kMinStretch, session::clip::getStretch(c));
+        s.warp = session::clip::getWarpMarkers(c);
         s.midi = session::clip::isMidi(c);
         s.looped = session::clip::isLooped(c);
         s.sync = session::clip::getSyncPoint(c);
@@ -2268,6 +2318,7 @@ void ArrangerView::mouseDrag(const juce::MouseEvent& e)
     case DragMode::trimEnd:
     case DragMode::fadeIn:
     case DragMode::fadeOut:
+    case DragMode::warpMarker:
         dragClips(e);
         return;
     }
@@ -2317,6 +2368,7 @@ void ArrangerView::dragLoop(const juce::MouseEvent& e)
     case DragMode::reorderTrack:
     case DragMode::marquee:
     case DragMode::automationPoint:
+    case DragMode::warpMarker:
         break;
     }
 
@@ -2343,6 +2395,7 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
         case DragMode::fadeIn:
         case DragMode::fadeOut: name = "Change Fade"; break;
         case DragMode::moveClips: name = dragOriginals_.size() > 1 ? "Move Clips" : "Move Clip"; break;
+        case DragMode::warpMarker: name = "Move Warp Marker"; break;
         case DragMode::none:
         case DragMode::locate:
         case DragMode::loopCreate:
@@ -2410,7 +2463,20 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
             session::clip::setOffset(anchorClip, anchor.offset + (newStart - anchor.start) * beatsPerSecond, um);
         else
         {
-            session::clip::setOffset(anchorClip, anchor.offset + (newStart - anchor.start) / anchor.stretch, um);
+            // The audio stays where it is: the offset follows the (warped) map, and the warp markers
+            // keep their places (the old start becomes one when the clip grows to the left).
+            const double delta = newStart - anchor.start;
+            session::clip::setOffset(anchorClip, warp::sourceAt(anchor.warp.data(), anchor.warp.size(), anchor.offset, anchor.stretch, delta), um);
+            if (!anchor.warp.empty())
+            {
+                std::vector<WarpPoint> markers;
+                if (delta < 0.0)
+                    markers.push_back({-delta, anchor.offset});
+                for (const auto& marker : anchor.warp)
+                    if (marker.clipTime > delta)
+                        markers.push_back({marker.clipTime - delta, marker.source});
+                session::clip::setWarpMarkers(anchorClip, markers, um);
+            }
             session::clip::setFadeIn(anchorClip, juce::jmin(anchor.fadeIn, end - newStart), um);
         }
         if (anchor.sync.has_value()) // the sync point stays with the material
@@ -2426,7 +2492,8 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
         // (a looped clip repeats for as long as it is drawn out)
         const double latest = anchor.midi || anchor.looped
                                   ? 1.0e9
-                                  : anchor.start + juce::jmax(session::kMinClipLength, (dragSourceLength_ - anchor.offset) * anchor.stretch);
+                                  : anchor.start + juce::jmax(session::kMinClipLength, warp::clipTimeOf(anchor.warp.data(), anchor.warp.size(), anchor.offset,
+                                                                                                         anchor.stretch, dragSourceLength_));
         const double newEnd = juce::jlimit(anchor.start + session::kMinClipLength, latest, snap(anchor.start + anchor.length + deltaSeconds, e.mods));
         session::clip::setLength(anchorClip, newEnd - anchor.start, um);
         if (anchor.sync.has_value())
@@ -2443,6 +2510,32 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     case DragMode::fadeOut:
         session::clip::setFadeOut(anchorClip, anchor.start + anchor.length - xToTime(e.position.x), um);
         break;
+
+    case DragMode::warpMarker:
+    {
+        // A warp marker moves its moment of the source to another time in the clip; the audio on
+        // either side stretches to fit (never faster than warp::kMaxRate, never past its neighbours).
+        if (dragWarpIndex_ < 0 || dragWarpIndex_ >= static_cast<int>(anchor.warp.size()))
+            break;
+        auto markers = anchor.warp;
+        const auto index = static_cast<std::size_t>(dragWarpIndex_);
+        const auto& marker = markers[index];
+        const double previousTime = index > 0 ? markers[index - 1].clipTime : 0.0;
+        const double previousSource = index > 0 ? markers[index - 1].source : anchor.offset;
+        double lowest = std::max(previousTime + 0.002, previousTime + (marker.source - previousSource) / warp::kMaxRate + 0.0005);
+        double highest = anchor.length - 0.002;
+        if (index + 1 < markers.size())
+        {
+            const auto& next = markers[index + 1];
+            highest = std::min(next.clipTime - 0.002, next.clipTime - (next.source - marker.source) / warp::kMaxRate - 0.0005);
+        }
+        if (highest < lowest)
+            break;
+        const double wanted = snap(anchor.start + marker.clipTime + deltaSeconds, e.mods) - anchor.start;
+        markers[index].clipTime = juce::jlimit(lowest, highest, wanted);
+        session::clip::setWarpMarkers(anchorClip, markers, um);
+        break;
+    }
 
     case DragMode::none:
     case DragMode::locate:
@@ -2552,7 +2645,8 @@ void ArrangerView::mouseMove(const juce::MouseEvent& e)
         case ClipZone::leftEdge: newCursor = juce::MouseCursor::LeftEdgeResizeCursor; break;
         case ClipZone::rightEdge: newCursor = juce::MouseCursor::RightEdgeResizeCursor; break;
         case ClipZone::fadeInHandle:
-        case ClipZone::fadeOutHandle: newCursor = juce::MouseCursor::LeftRightResizeCursor; break;
+        case ClipZone::fadeOutHandle:
+        case ClipZone::warpMarker: newCursor = juce::MouseCursor::LeftRightResizeCursor; break;
         case ClipZone::body:
             newCursor = session::clip::isEditLocked(hit.clip)   ? juce::MouseCursor::NormalCursor
                         : session::clip::isTimeLocked(hit.clip) ? juce::MouseCursor::UpDownResizeCursor
@@ -2598,6 +2692,36 @@ void ArrangerView::mouseDoubleClick(const juce::MouseEvent& e)
 
     if (const auto hit = hitTestClip(e.position); hit.clip.isValid())
     {
+        auto c = hit.clip;
+        const bool audio = !session::clip::isMidi(c);
+        // On a warp marker: it goes. On a hitpoint (or anywhere with Shift): a warp marker there.
+        if (hit.zone == ClipZone::warpMarker && session::clip::canEdit(c))
+        {
+            auto markers = session::clip::getWarpMarkers(c);
+            markers.erase(markers.begin() + hit.warpIndex);
+            session_.beginTransaction("Delete Warp Marker");
+            session::clip::setWarpMarkers(c, markers, &session_.getUndoManager());
+            return;
+        }
+        if (audio && session::clip::canEdit(c) && !session::clip::isLooped(c))
+        {
+            const double start = session::clip::getStart(c);
+            std::optional<double> at;
+            if (const auto bounds = getClipBounds(c, hit.row); e.position.y > bounds.getBottom() - kHitpointTickHeight - 4.0f)
+                for (const double h : session::clip::getHitpoints(c))
+                    if (const double t = session::clip::clipTimeOf(c, h); std::abs(e.position.x - timeToX(start + t)) <= kWarpGrab)
+                        at = t;
+            if (!at.has_value() && e.mods.isShiftDown())
+                at = xToTime(e.position.x) - start;
+            if (at.has_value() && *at > 0.0 && *at < session::clip::getLength(c))
+            {
+                auto markers = session::clip::getWarpMarkers(c);
+                markers.push_back({*at, session::clip::sourceAt(c, *at)});
+                session_.beginTransaction("Add Warp Marker");
+                session::clip::setWarpMarkers(c, markers, &session_.getUndoManager());
+                return;
+            }
+        }
         if (onOpenClip)
             onOpenClip(session::clip::getId(hit.clip));
         return;

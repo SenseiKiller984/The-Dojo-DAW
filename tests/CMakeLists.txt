@@ -52,6 +52,7 @@ add_executable(dojo_tests
     SpectrumOverlayTests.cpp
     HardwareInsertTests.cpp
     ControlSurfaceTests.cpp
+    WarpTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleLookTests.cpp

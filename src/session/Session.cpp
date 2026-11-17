@@ -484,6 +484,70 @@ void setSyncPoint(juce::ValueTree c, std::optional<double> secondsFromStart, juc
 }
 double getReferenceTime(const juce::ValueTree& c) { return getStart(c) + getSyncPoint(c).value_or(0.0); }
 
+std::vector<WarpPoint> getWarpMarkers(const juce::ValueTree& c)
+{
+    std::vector<WarpPoint> markers;
+    for (const auto& item : juce::StringArray::fromTokens(c.getProperty(ids::warpMarkers).toString(), ";", {}))
+        if (item.containsChar(':'))
+            markers.push_back({item.upToFirstOccurrenceOf(":", false, false).getDoubleValue(),
+                               item.fromFirstOccurrenceOf(":", false, false).getDoubleValue()});
+    return markers;
+}
+
+void setWarpMarkers(juce::ValueTree c, std::vector<WarpPoint> markers, juce::UndoManager* um)
+{
+    std::sort(markers.begin(), markers.end(), [](const WarpPoint& a, const WarpPoint& b) { return a.clipTime < b.clipTime; });
+    // Both times must keep increasing from the clip's start (a millisecond apart at least), and no
+    // stretch between them may play the source faster than warp::kMaxRate.
+    constexpr double kGap = 0.001;
+    double lastTime = 0.0, lastSource = getOffset(c);
+    juce::StringArray items;
+    for (const auto& marker : markers)
+    {
+        if (marker.clipTime < lastTime + kGap || marker.source < lastSource + kGap * 0.01
+            || marker.source - lastSource > warp::kMaxRate * (marker.clipTime - lastTime))
+            continue;
+        items.add(juce::String(marker.clipTime, 9) + ":" + juce::String(marker.source, 9));
+        lastTime = marker.clipTime;
+        lastSource = marker.source;
+    }
+    if (items.isEmpty())
+        c.removeProperty(ids::warpMarkers, um);
+    else
+        c.setProperty(ids::warpMarkers, items.joinIntoString(";"), um);
+}
+
+double sourceAt(const juce::ValueTree& c, double clipTime)
+{
+    const auto markers = getWarpMarkers(c);
+    return warp::sourceAt(markers.data(), markers.size(), getOffset(c), std::max(kMinStretch, getStretch(c)), clipTime);
+}
+
+double clipTimeOf(const juce::ValueTree& c, double source)
+{
+    const auto markers = getWarpMarkers(c);
+    return warp::clipTimeOf(markers.data(), markers.size(), getOffset(c), std::max(kMinStretch, getStretch(c)), source);
+}
+
+std::vector<double> getHitpoints(const juce::ValueTree& c)
+{
+    std::vector<double> points;
+    for (const auto& item : juce::StringArray::fromTokens(c.getProperty(ids::hitpoints).toString(), ";", {}))
+        points.push_back(item.getDoubleValue());
+    return points;
+}
+
+void setHitpoints(juce::ValueTree c, const std::vector<double>& sourceSeconds, juce::UndoManager* um)
+{
+    juce::StringArray items;
+    for (const double seconds : sourceSeconds)
+        items.add(juce::String(seconds, 6));
+    if (items.isEmpty())
+        c.removeProperty(ids::hitpoints, um);
+    else
+        c.setProperty(ids::hitpoints, items.joinIntoString(";"), um);
+}
+
 bool isGainBypassed(const juce::ValueTree& c) { return c.getProperty(ids::gainBypassed, false); }
 void setGainBypassed(juce::ValueTree c, bool bypassed, juce::UndoManager* um)
 {
@@ -1482,9 +1546,27 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
     }
     else
     {
-        right.setProperty(ids::offset, clip::getOffset(c) + leftLength / std::max(kMinStretch, clip::getStretch(c)), nullptr);
+        right.setProperty(ids::offset, clip::sourceAt(c, leftLength), nullptr);
         right.setProperty(ids::fadeIn, 0.0, nullptr);
         right.setProperty(ids::fadeOut, std::min(clip::getFadeOut(c), end - atSeconds), nullptr);
+
+        // Warp markers: each part keeps the map as it was. The right part takes those after the
+        // split (from its start); the left part those before it, and one at the split, so its last
+        // stretch is the one it had.
+        if (const auto markers = clip::getWarpMarkers(c); !markers.empty())
+        {
+            std::vector<WarpPoint> leftMarkers, rightMarkers;
+            for (const auto& marker : markers)
+            {
+                if (marker.clipTime < leftLength)
+                    leftMarkers.push_back(marker);
+                else if (marker.clipTime > leftLength)
+                    rightMarkers.push_back({marker.clipTime - leftLength, marker.source});
+            }
+            leftMarkers.push_back({leftLength, clip::sourceAt(c, leftLength)});
+            clip::setWarpMarkers(right, rightMarkers, nullptr);
+            clip::setWarpMarkers(c, leftMarkers, &undo_);
+        }
     }
 
     c.setProperty(ids::length, leftLength, &undo_);
@@ -2013,7 +2095,7 @@ double Session::getEndInParent(const juce::ValueTree& c) const
 {
     const double length = clip::isLooped(c) ? clip::getLoopLength(c) : clip::getLength(c);
     if (c.hasType(ids::clip))
-        return getStartInParent(c) + length / std::max(kMinStretch, clip::getStretch(c));
+        return clip::sourceAt(c, length);
     return getStartInParent(c) + length;
 }
 

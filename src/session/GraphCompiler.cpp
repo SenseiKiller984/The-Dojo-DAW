@@ -638,6 +638,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 rc.gain = clip::isGainBypassed(c) ? 1.0 : dbToGain(clip::getGainDb(c)); // (bypassed: the setting is kept)
                 rc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
                 rc.stretch = std::max(kMinStretch, clip::getStretch(c)) / trackSpeed;
+                for (const auto& marker : clip::getWarpMarkers(c)) // (the track's speed scales the clip's times)
+                    rc.warp.push_back({marker.clipTime / trackSpeed, marker.source});
                 rc.pitchSemitones = clip::getPitch(c) + trackPitch + globalTranspose + speedCompensation;
                 rc.numChannels = asset->numChannels;
                 rc.sourceChannel = clip::getSourceChannel(c);
@@ -653,7 +655,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
                 // Time-stretch (duration without pitch) and pitch-shift go through a persistent
                 // stretcher. Varispeed alone is plain resampling in the clip renderer.
-                if (std::abs(rc.pitchSemitones) > 1.0e-6 || std::abs(rc.stretch - 1.0) > 1.0e-9)
+                if (std::abs(rc.pitchSemitones) > 1.0e-6 || std::abs(rc.stretch - 1.0) > 1.0e-9 || !rc.warp.empty())
                 {
                     auto stretcher = getStretcher(clip::getId(c), rc.sourceChannel >= 0 ? 1 : rc.numChannels);
                     rc.stretcher = stretcher.get();

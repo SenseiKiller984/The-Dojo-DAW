@@ -384,7 +384,11 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    bypassClipGain,
                                    renderClipGain,
                                    showClipList,
-                                   toggleFullScreen};
+                                   toggleFullScreen,
+                                   detectHitpoints,
+                                   warpAtHitpoints,
+                                   quantizeWarpMarkers,
+                                   clearWarpMarkers};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -635,6 +639,26 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
                      categories::clip, 0);
         info.setActive(hasClipSelection);
         info.addDefaultKeypress('q', cmd | alt);
+        break;
+    case detectHitpoints:
+        info.setInfo("Detect Hitpoints", "Find the attacks (hitpoints) in the selected audio clips", categories::clip, 0);
+        info.setActive(hasClipSelection);
+        info.addDefaultKeypress('h', cmd | alt);
+        break;
+    case warpAtHitpoints:
+        info.setInfo("Warp Markers at Hitpoints", "Put a warp marker at every hitpoint of the selected clips, to drag them in time",
+                     categories::clip, 0);
+        info.setActive(actions::selectionHasHitpoints(session, editor_));
+        break;
+    case quantizeWarpMarkers:
+        info.setInfo("Quantize Warp Markers", "Move the selected clips' warp markers (or hitpoints) onto the grid, stretching the audio between them",
+                     categories::clip, 0);
+        info.setActive(actions::selectionHasWarpMarkers(session, editor_) || actions::selectionHasHitpoints(session, editor_));
+        info.addDefaultKeypress('w', cmd | alt);
+        break;
+    case clearWarpMarkers:
+        info.setInfo("Clear Warp Markers", "Remove the selected clips' warp markers: they play straight again", categories::clip, 0);
+        info.setActive(actions::selectionHasWarpMarkers(session, editor_));
         break;
     case bypassClipGain:
         info.setInfo("Bypass Clip Gain", "Play the selected clips without their clip gain (the setting is kept)", categories::clip, 0);
@@ -920,6 +944,22 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case quantizeClipsToGrid:
         actions::quantizeSelectedClipsToGrid(session, editor_, editor_.getGridBeats() * 60.0 / session.getTempo());
+        break;
+    case detectHitpoints:
+    {
+        juce::String error;
+        if (actions::detectSelectedClipsHitpoints(session, editor_, 0.5, error) == 0 && error.isNotEmpty())
+            showMessage("Detect Hitpoints", error);
+        break;
+    }
+    case warpAtHitpoints:
+        actions::warpSelectedClipsAtHitpoints(session, editor_);
+        break;
+    case quantizeWarpMarkers:
+        actions::quantizeSelectedClipsWarp(session, editor_, editor_.getGridBeats() * 60.0 / session.getTempo());
+        break;
+    case clearWarpMarkers:
+        actions::clearSelectedClipsWarp(session, editor_);
         break;
     case bypassClipGain:
         actions::toggleSelectedClipsGainBypass(session, editor_);
