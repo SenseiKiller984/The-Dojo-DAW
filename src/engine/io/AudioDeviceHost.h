@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace dojo::engine
@@ -79,6 +80,12 @@ public:
     [[nodiscard]] juce::StringArray getActiveInputChannelNames() const;
     /** Names of the active output channels, in engine output order (for HW Insert sends). */
     [[nodiscard]] juce::StringArray getActiveOutputChannelNames() const;
+
+    /** Sends a MIDI input's messages (all of them, SysEx too) to `handler` instead of the
+        instruments: a control surface's input. The handler runs on a MIDI thread. An empty handler
+        gives the input back (and returns once no call to the old one is running). False if there
+        is no such input. */
+    bool routeMidiInput(const juce::String& identifier, std::function<void(const juce::MidiMessage&)> handler);
 
     /** Names of the enabled MIDI inputs. */
     [[nodiscard]] juce::StringArray getMidiInputNames() const;

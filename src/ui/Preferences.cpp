@@ -10,6 +10,7 @@ namespace
 {
 constexpr const char* kReturnViewKey = "prefReturnViewToStart";
 constexpr const char* kStopAtEndKey = "prefStopAtEnd";
+constexpr const char* kControlSurfacesKey = "prefControlSurfaces";
 constexpr const char* kThemeKey = "prefTheme";
 constexpr const char* kKeyMappingsKey = "prefKeyMappings";
 constexpr const char* kSurroundModeKey = "prefSurroundMode";
@@ -112,6 +113,19 @@ void Preferences::setKeyMappings(const juce::XmlElement& mappings)
 {
     settings_.setValue(kKeyMappingsKey, &mappings);
     settings_.saveIfNeeded();
+}
+
+juce::String Preferences::getControlSurfaces() const
+{
+    return settings_.getValue(kControlSurfacesKey, {});
+}
+
+void Preferences::setControlSurfaces(const juce::String& surfaces)
+{
+    if (surfaces == getControlSurfaces())
+        return;
+    settings_.setValue(kControlSurfacesKey, surfaces);
+    changed();
 }
 
 void Preferences::changed()

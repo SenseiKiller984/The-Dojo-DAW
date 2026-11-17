@@ -51,6 +51,7 @@ add_executable(dojo_tests
     RealtimeGuardTests.cpp
     SpectrumOverlayTests.cpp
     HardwareInsertTests.cpp
+    ControlSurfaceTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleLookTests.cpp

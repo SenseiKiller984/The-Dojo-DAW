@@ -23,6 +23,7 @@ public:
         audio,
         surround,
         keyboard,
+        controlSurfaces,
     };
 
     /** How a surround master (3.1, 5.1, 7.1, Dolby Digital, DTS) plays (the Surround tab). */
@@ -62,6 +63,10 @@ public:
     /** Customised keyboard shortcuts (differences from the defaults), or null. */
     [[nodiscard]] std::unique_ptr<juce::XmlElement> getKeyMappings() const;
     void setKeyMappings(const juce::XmlElement& mappings);
+
+    /** The control surfaces (models and MIDI ports), as surfaces::toString() writes them. */
+    [[nodiscard]] juce::String getControlSurfaces() const;
+    void setControlSurfaces(const juce::String& surfaces);
 
     [[nodiscard]] juce::PropertiesFile& getSettings() noexcept { return settings_; }
 

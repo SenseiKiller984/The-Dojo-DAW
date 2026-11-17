@@ -49,6 +49,7 @@ src/
             devices panel + device editors (hardware replicas draw their machine with
             HardwarePainting: meters, lamps, wood, leather, faders; consoles set a
             ConsoleLookAndFeel on their editor; SpectrumAnalysis: the EQ's spectra and masking),
+            surfaces/ (Mackie Control and HUI protocols, ControlSurfaces, DevicePorts),
             clip editor (piano roll, step sequencer, inspector),
             browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
@@ -143,6 +144,8 @@ Continuous status (peak levels, DSP load, playhead, transport state) is publishe
 Peak values are "max since last read". The audio thread raises them with a CAS max and the UI collects and resets them with `exchange(0)` once per frame, so a one-sample transient can't fall between two UI frames.
 
 The UI **pulls** telemetry from a `juce::VBlankAttachment` callback once per display refresh. The audio thread never calls into the UI.
+
+**Control surfaces.** `ui::surfaces` keeps the protocols apart from the session. `SurfaceProtocol` holds pure encoders and decoders for Mackie Control (stateless: pitch-bend faders, note keys, relative CCs, SysEx LCD and handshake) and HUI (a stateful decoder: a zone, then its port; a fader's high bits, then its low ones). `ControlSurfaces` (owned by the main window, so it outlives theme rebuilds of the main component) maps their events onto the session, the selection and the application's commands through a `Host` of callbacks. Thirty times a second it sends each unit only what changed since the last update (faders, LEDs, rings, LCD lines, meters, displays); a touched fader is never driven. MIDI reaches it through `Ports`. In the application, `AudioDeviceHost::routeMidiInput` diverts a surface's input, SysEx included, from the engine's live MIDI to a handler that queues it under a mutex. That is on a MIDI thread, never the audio thread, and the timer drains the queue on the message thread. Removing a route takes the same mutex, so no call is still running once it returns. Meters read `EngineTelemetry::surfacePeaks`, a second max-since-read accumulator per track, so the surfaces never steal the mixer's peaks.
 
 **Track taps.** Displays that need a track's sound rather than a number (the EQ's spectrum overlays) watch it in `engine::TrackTaps`: 16 taps, each a track id and a ring of 8192 atomic floats with a write index. `watch()` and `unwatch()` are counted, so several EQs can follow one track; they run on the message thread, and claiming a tap publishes its id last with release order. The audio thread writes each watched track's post-fader output, summed to mono, after its fader and phase (`AudioEngine::processTrack`). When no tap is in use that is one atomic load per track; otherwise it is a compare per tap. The UI copies the newest samples at its own pace and runs the FFT itself (`ui::spectrum::Analyser`). Nothing is allocated or locked on the audio thread. The EQ's sidechain input is the other way to get a track's sound: the compiler routes the picked track to the device's second input bus, and the EQ keeps that bus's mono sum in its own analyser ring.
 

@@ -117,6 +117,8 @@ public:
     /** Every channel's peak of a slot (multichannel meters); also resets channels 0 and 1. */
     [[nodiscard]] ChannelPeaks collectTrackPeaks(int slot) noexcept;
     [[nodiscard]] float collectInputPeak(int channel) noexcept;
+    /** A track's peak (all channels) since control surfaces last asked (their meters' own reading). */
+    [[nodiscard]] float collectSurfacePeak(int slot) noexcept;
     /** A track's fader gain (linear) and pan (-1..1) while a modulator or automation moves them;
         NaN when they are the track's own settings. */
     [[nodiscard]] float getMovingVolume(int slot) const noexcept

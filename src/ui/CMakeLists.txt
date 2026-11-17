@@ -67,6 +67,11 @@ add_library(dojo_ui STATIC
     devices/ConsoleLookAndFeel.h
     devices/HardwarePainting.cpp
     devices/HardwarePainting.h
+    surfaces/ControlSurfaces.cpp
+    surfaces/ControlSurfaces.h
+    surfaces/DevicePorts.h
+    surfaces/SurfaceProtocol.cpp
+    surfaces/SurfaceProtocol.h
     devices/HardwareInsertEditor.cpp
     devices/HardwareInsertEditor.h
     devices/HarrisonEditors.cpp

@@ -1,5 +1,6 @@
 #include "ui/PreferencesWindow.h"
 
+#include "ui/surfaces/ControlSurfaces.h"
 #include "ui/theme/DojoTheme.h"
 #include "ui/theme/Themes.h"
 
@@ -576,14 +577,226 @@ private:
     juce::TextButton tips_;
     std::function<void()> showTips_;
 };
+
+//==================================================================================================
+/**
+    Control surfaces: Mackie Control units (and extenders) and HUI, each on a pair of MIDI ports.
+    The order of the rows is the order of the units on the desk (left to right).
+*/
+class ControlSurfacesPage final : public juce::Component, private juce::ChangeListener, private juce::Timer
+{
+public:
+    ControlSurfacesPage(Preferences& preferences, std::function<juce::String(int)> status)
+        : preferences_(preferences)
+        , status_(std::move(status))
+    {
+        intro_.setText("Hardware controllers speaking Mackie Control or HUI over MIDI: motor faders, V-Pots, mute, solo, "
+                       "record and select keys, the transport, the jog wheel, the displays and the meters. Put the unit in "
+                       "its Mackie Control (or HUI) mode, add it here and pick its MIDI ports. Add extenders in the order "
+                       "they stand on the desk: each one shows the next eight tracks.",
+                       juce::dontSendNotification);
+        eucon_.setText("EuCon (Avid's network protocol for its consoles) is not supported: Avid licenses it only with its "
+                       "own software and SDK.",
+                       juce::dontSendNotification);
+        for (auto* label : {&intro_, &eucon_})
+            addAndMakeVisible(styleDescription(*label));
+        add_.setComponentID("addSurface");
+        add_.onClick = [this]
+        {
+            auto setups = surfaces::setupsFromString(preferences_.getControlSurfaces());
+            surfaces::Setup setup;
+            setup.model = setups.empty() ? surfaces::Model::mackieControl : surfaces::Model::mackieExtender;
+            const auto inputs = juce::MidiInput::getAvailableDevices();
+            const auto outputs = juce::MidiOutput::getAvailableDevices();
+            if (!inputs.isEmpty())
+                setup.input = inputs[0].identifier;
+            if (!outputs.isEmpty())
+                setup.output = outputs[0].identifier;
+            setups.push_back(setup);
+            preferences_.setControlSurfaces(surfaces::toString(setups));
+        };
+        addAndMakeVisible(add_);
+        preferences_.addChangeListener(this);
+        rebuild();
+        startTimerHz(2);
+    }
+
+    ~ControlSurfacesPage() override { preferences_.removeChangeListener(this); }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(theme::colour::panel);
+        g.setColour(theme::colour::textSecondary);
+        g.setFont(theme::label(11.0f));
+        g.drawText("CONTROL SURFACES", getLocalBounds().reduced(24, 0).removeFromTop(48), juce::Justification::bottomLeft, false);
+        if (rows_.empty())
+        {
+            g.setColour(theme::colour::textMuted);
+            g.setFont(theme::sans(12.5f));
+            g.drawText("No surfaces yet.", listArea_, juce::Justification::topLeft, false);
+        }
+        else
+        {
+            g.setFont(theme::label(9.5f));
+            g.setColour(theme::colour::textMuted);
+            auto header = listArea_.removeFromTop(16);
+            header.removeFromLeft(24);
+            for (const auto& [text, width] : {std::pair{"MODEL", 180}, std::pair{"MIDI IN", 160}, std::pair{"MIDI OUT", 160}, std::pair{"STATUS", 0}})
+                g.drawText(text, width > 0 ? header.removeFromLeft(width + 8) : header, juce::Justification::bottomLeft, false);
+        }
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(24, 0).withTrimmedTop(58);
+        intro_.setBounds(area.removeFromTop(64));
+        area.removeFromTop(8);
+        listArea_ = area.removeFromTop(16 + 34 * static_cast<int>(std::max<std::size_t>(rows_.size(), 1)));
+        auto rowsArea = listArea_.withTrimmedTop(18);
+        for (auto& row : rows_)
+        {
+            auto r = rowsArea.removeFromTop(34).withTrimmedBottom(6);
+            row->number.setBounds(r.removeFromLeft(24));
+            row->model.setBounds(r.removeFromLeft(180));
+            r.removeFromLeft(8);
+            row->input.setBounds(r.removeFromLeft(160));
+            r.removeFromLeft(8);
+            row->output.setBounds(r.removeFromLeft(160));
+            r.removeFromLeft(8);
+            row->remove.setBounds(r.removeFromRight(74));
+            r.removeFromRight(6);
+            row->status.setBounds(r);
+        }
+        area.removeFromTop(6);
+        add_.setBounds(area.removeFromTop(28).removeFromLeft(130));
+        area.removeFromTop(20);
+        eucon_.setBounds(area.removeFromTop(40));
+    }
+
+private:
+    struct Row
+    {
+        juce::Label number, status;
+        juce::ComboBox model, input, output;
+        juce::TextButton remove{"Remove"};
+    };
+
+    void changeListenerCallback(juce::ChangeBroadcaster*) override
+    {
+        if (preferences_.getControlSurfaces() != shown_)
+            rebuild();
+    }
+
+    void timerCallback() override
+    {
+        for (std::size_t i = 0; i < rows_.size(); ++i)
+            rows_[i]->status.setText(status_ ? status_(static_cast<int>(i)) : juce::String(), juce::dontSendNotification);
+    }
+
+    /** Fills a port menu: the devices there now, and the chosen one if it is not. */
+    static void fillPorts(juce::ComboBox& combo, const juce::Array<juce::MidiDeviceInfo>& devices, const juce::String& chosen)
+    {
+        combo.addItem("None", 1);
+        int selected = 1;
+        for (int i = 0; i < devices.size(); ++i)
+        {
+            combo.addItem(devices[i].name, i + 2);
+            if (devices[i].identifier == chosen)
+                selected = i + 2;
+        }
+        if (chosen.isNotEmpty() && selected == 1)
+        {
+            combo.addItem(chosen + " (not connected)", devices.size() + 2);
+            selected = devices.size() + 2;
+        }
+        combo.setSelectedId(selected, juce::dontSendNotification);
+    }
+
+    void rebuild()
+    {
+        shown_ = preferences_.getControlSurfaces();
+        const auto setups = surfaces::setupsFromString(shown_);
+        const auto inputs = juce::MidiInput::getAvailableDevices();
+        const auto outputs = juce::MidiOutput::getAvailableDevices();
+        rows_.clear();
+        for (std::size_t i = 0; i < setups.size(); ++i)
+        {
+            auto row = std::make_unique<Row>();
+            const auto index = static_cast<int>(i);
+            row->number.setText(juce::String(index + 1), juce::dontSendNotification);
+            row->number.setFont(theme::mono(12.0f));
+            row->number.setColour(juce::Label::textColourId, theme::colour::textMuted);
+            for (const auto model : {surfaces::Model::mackieControl, surfaces::Model::mackieExtender, surfaces::Model::hui})
+                row->model.addItem(surfaces::modelName(model), static_cast<int>(model) + 1);
+            row->model.setSelectedId(static_cast<int>(setups[i].model) + 1, juce::dontSendNotification);
+            fillPorts(row->input, inputs, setups[i].input);
+            fillPorts(row->output, outputs, setups[i].output);
+            row->model.setComponentID("surfaceModel" + juce::String(index));
+            row->input.setComponentID("surfaceInput" + juce::String(index));
+            row->output.setComponentID("surfaceOutput" + juce::String(index));
+            row->status.setComponentID("surfaceStatus" + juce::String(index));
+            row->remove.setComponentID("surfaceRemove" + juce::String(index));
+            row->status.setFont(theme::sans(11.5f));
+            row->status.setColour(juce::Label::textColourId, theme::colour::textSecondary);
+            const auto change = [this, index, inputs, outputs]
+            {
+                auto all = surfaces::setupsFromString(preferences_.getControlSurfaces());
+                if (index >= static_cast<int>(all.size()))
+                    return;
+                auto& current = *rows_[static_cast<std::size_t>(index)];
+                auto& setup = all[static_cast<std::size_t>(index)];
+                setup.model = static_cast<surfaces::Model>(std::max(0, current.model.getSelectedId() - 1));
+                const auto portOf = [](const juce::ComboBox& combo, const juce::Array<juce::MidiDeviceInfo>& devices, const juce::String& previous)
+                {
+                    const int id = combo.getSelectedId();
+                    if (id >= 2 && id - 2 < devices.size())
+                        return devices[id - 2].identifier;
+                    return id == 1 ? juce::String() : previous;
+                };
+                setup.input = portOf(current.input, inputs, setup.input);
+                setup.output = portOf(current.output, outputs, setup.output);
+                preferences_.setControlSurfaces(surfaces::toString(all));
+            };
+            row->model.onChange = change;
+            row->input.onChange = change;
+            row->output.onChange = change;
+            row->remove.onClick = [this, index]
+            {
+                auto all = surfaces::setupsFromString(preferences_.getControlSurfaces());
+                if (index < static_cast<int>(all.size()))
+                    all.erase(all.begin() + index);
+                preferences_.setControlSurfaces(surfaces::toString(all));
+            };
+            for (auto* c : std::initializer_list<juce::Component*>{&row->number, &row->model, &row->input, &row->output, &row->status, &row->remove})
+                addAndMakeVisible(c);
+            rows_.push_back(std::move(row));
+        }
+        timerCallback();
+        resized();
+        repaint();
+    }
+
+    Preferences& preferences_;
+    std::function<juce::String(int)> status_;
+    juce::Label intro_, eucon_;
+    juce::TextButton add_{"Add Surface"};
+    std::vector<std::unique_ptr<Row>> rows_;
+    juce::Rectangle<int> listArea_;
+    juce::String shown_;
+};
 } // namespace
+
+std::unique_ptr<juce::Component> createControlSurfacesPage(Preferences& preferences, std::function<juce::String(int)> status)
+{
+    return std::make_unique<ControlSurfacesPage>(preferences, std::move(status));
+}
 
 //==================================================================================================
 class PreferencesWindow::Content final : public juce::Component
 {
 public:
     Content(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
-            std::function<void()> showTips, std::function<int()> surroundRendering)
+            std::function<void()> showTips, std::function<int()> surroundRendering, std::function<juce::String(int)> surfaceStatus)
     {
         using namespace theme;
         tabs_.setTabBarDepth(34);
@@ -600,6 +813,7 @@ public:
         tabs_.addTab("Audio", colour::panelHeader, new AudioPage(devices), true);
         tabs_.addTab("Surround", colour::panelHeader, new SurroundPage(preferences, devices, std::move(surroundRendering)), true);
         tabs_.addTab("Keyboard", colour::panelHeader, new KeyboardPage(commands, std::move(showTips)), true);
+        tabs_.addTab("Control Surfaces", colour::panelHeader, new ControlSurfacesPage(preferences, std::move(surfaceStatus)), true);
         addAndMakeVisible(tabs_);
         setSize(kWidth, kHeight);
     }
@@ -611,13 +825,15 @@ public:
 };
 
 PreferencesWindow::PreferencesWindow(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
-                                     std::function<void()> showEditingTips, std::function<int()> surroundRendering)
+                                     std::function<void()> showEditingTips, std::function<int()> surroundRendering,
+                                     std::function<juce::String(int)> surfaceStatus)
     : juce::DocumentWindow("Preferences", theme::colour::panel, juce::DocumentWindow::closeButton)
     , preferences_(preferences)
     , devices_(devices)
     , commands_(commands)
     , showEditingTips_(std::move(showEditingTips))
     , surroundRendering_(std::move(surroundRendering))
+    , surfaceStatus_(std::move(surfaceStatus))
 {
     setUsingNativeTitleBar(false);
     setTitleBarHeight(30);
@@ -646,7 +862,7 @@ void PreferencesWindow::refreshTheme()
 {
     const auto tab = getCurrentTab();
     setBackgroundColour(theme::colour::panel);
-    auto content = std::make_unique<Content>(preferences_, devices_, commands_, showEditingTips_, surroundRendering_);
+    auto content = std::make_unique<Content>(preferences_, devices_, commands_, showEditingTips_, surroundRendering_, surfaceStatus_);
     content_ = content.get();
     setContentOwned(content.release(), false);
     content_->tabs_.setCurrentTabIndex(static_cast<int>(tab));

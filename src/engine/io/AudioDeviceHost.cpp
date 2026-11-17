@@ -2,6 +2,9 @@
 
 #include "engine/AudioEngine.h"
 
+#include <map>
+#include <mutex>
+
 namespace dojo::engine
 {
 
@@ -64,8 +67,18 @@ public:
     {
     }
 
-    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& message) override
+    void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override
     {
+        // A control surface's input goes to the surface (SysEx and all), never to the instruments.
+        if (source != nullptr)
+        {
+            const std::lock_guard lock(routesMutex_);
+            if (const auto route = routes_.find(source->getIdentifier()); route != routes_.end())
+            {
+                route->second(message);
+                return;
+            }
+        }
         if (message.isActiveSense() || message.isMidiClock() || message.isSysEx())
             return;
         (void)engine_.getLiveMidiQueue().push(message);
@@ -74,9 +87,22 @@ public:
 
     [[nodiscard]] std::uint64_t getCount() const noexcept { return count_.load(std::memory_order_relaxed); }
 
+    /** (Message thread.) Waits for a message being handled to finish, so a removed handler is
+        never called again once this returns. */
+    void route(const juce::String& identifier, std::function<void(const juce::MidiMessage&)> handler)
+    {
+        const std::lock_guard lock(routesMutex_);
+        if (handler)
+            routes_[identifier] = std::move(handler);
+        else
+            routes_.erase(identifier);
+    }
+
 private:
     AudioEngine& engine_;
     std::atomic<std::uint64_t> count_{0};
+    std::mutex routesMutex_; ///< (a MIDI thread, not the audio thread, takes it)
+    std::map<juce::String, std::function<void(const juce::MidiMessage&)>> routes_;
 };
 
 //==================================================================================================
@@ -127,6 +153,25 @@ juce::StringArray AudioDeviceHost::getActiveInputChannelNames() const
                 names.add(all[i]);
     }
     return names;
+}
+
+bool AudioDeviceHost::routeMidiInput(const juce::String& identifier, std::function<void(const juce::MidiMessage&)> handler)
+{
+    if (!handler)
+    {
+        midiCallback_->route(identifier, {});
+        return true;
+    }
+    bool available = false;
+    for (const auto& input : juce::MidiInput::getAvailableDevices())
+        available = available || input.identifier == identifier;
+    if (!available)
+        return false;
+    midiCallback_->route(identifier, std::move(handler));
+    if (!knownMidiInputs_.contains(identifier))
+        knownMidiInputs_.add(identifier);
+    deviceManager_.setMidiInputDeviceEnabled(identifier, true);
+    return true;
 }
 
 juce::StringArray AudioDeviceHost::getActiveOutputChannelNames() const

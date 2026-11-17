@@ -1,5 +1,7 @@
 #include "app/MainWindow.h"
 
+#include "engine/AudioEngine.h"
+
 #include "app/WindowManager.h"
 
 #include <optional>
@@ -25,6 +27,7 @@ MainWindow::MainWindow(ui::AppServices& services)
     , services_(services)
     , project_(services.project)
     , menuModel_(services.commands)
+    , surfacePorts_(services.controller.getDeviceHost())
 {
     setUsingNativeTitleBar(false);
     setTitleBarHeight(30);
@@ -51,6 +54,22 @@ MainWindow::MainWindow(ui::AppServices& services)
     services.toggleFullScreen = [this] { setFullScreenMode(!fullScreenMode_); };
     services.isFullScreen = [this] { return fullScreenMode_; };
 
+    // Control surfaces (Mackie Control, HUI): they work the transport, the commands, the selection
+    // and the mixer, and show the meters.
+    ui::surfaces::Host host;
+    host.invoke = [this](juce::CommandID command) { services_.commands.invokeDirectly(command, true); };
+    host.editor = [this] { return mainComponent_ != nullptr ? &mainComponent_->getEditorState() : nullptr; };
+    host.playing = [this] { return services_.controller.getLastTelemetry().playing; };
+    host.recording = [this] { return services_.recorder.isRecording(); };
+    host.playhead = [this] { return services_.controller.getLastTelemetry().playheadSeconds; };
+    host.play = [this] { services_.controller.play(); };
+    host.stop = [this] { services_.controller.stop(); };
+    host.locate = [this](double seconds) { services_.controller.locateSeconds(seconds); };
+    host.peak = [this](int slot) { return services_.controller.getEngine().collectSurfacePeak(slot); };
+    host.movingVolume = [this](int slot) { return services_.controller.getEngine().getMovingVolume(slot); };
+    surfaces_ = std::make_unique<ui::surfaces::ControlSurfaces>(project_, std::move(host), &surfacePorts_);
+    applyControlSurfaces();
+
     // Fit the default size onto the current display (minus a margin for task bars / docks).
     const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
     const auto userArea = display != nullptr ? display->userBounds.toNearestInt()
@@ -72,6 +91,7 @@ MainWindow::MainWindow(ui::AppServices& services)
 
 MainWindow::~MainWindow()
 {
+    surfaces_.reset();
     services_.showPreferences = nullptr;
     services_.toggleFullScreen = nullptr;
     services_.isFullScreen = nullptr;
@@ -270,7 +290,8 @@ void MainWindow::showPreferences(ui::Preferences::Tab tab)
                 if (mainComponent_ != nullptr)
                     mainComponent_->showShortcutHelp();
             },
-            [this] { return static_cast<int>(services_.controller.getLastTelemetry().surroundRendering); });
+            [this] { return static_cast<int>(services_.controller.getLastTelemetry().surroundRendering); },
+            [this](int index) { return surfaces_ != nullptr ? surfaces_->describeStatus(index) : juce::String(); });
     preferencesWindow_->showTab(tab);
 }
 
@@ -322,8 +343,19 @@ void MainWindow::changeListenerCallback(juce::ChangeBroadcaster* source)
         return;
     }
 
+    if (source == &services_.preferences)
+        applyControlSurfaces();
     if (source == &services_.preferences && services_.preferences.getThemeName() != ui::theme::getActiveThemeName())
         applyTheme();
+}
+
+void MainWindow::applyControlSurfaces()
+{
+    if (surfaces_ == nullptr)
+        return;
+    auto setups = ui::surfaces::setupsFromString(services_.preferences.getControlSurfaces());
+    if (setups != surfaces_->getSetups())
+        surfaces_->setSetups(std::move(setups));
 }
 
 void MainWindow::closeButtonPressed()

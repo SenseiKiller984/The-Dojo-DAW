@@ -4,6 +4,8 @@
 #include "ui/MainComponent.h"
 #include "ui/MainMenuModel.h"
 #include "ui/PreferencesWindow.h"
+#include "ui/surfaces/ControlSurfaces.h"
+#include "ui/surfaces/DevicePorts.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -67,12 +69,16 @@ private:
     /** Back to an ordinary window: the window manager lets go, then the restore bounds apply. */
     void leaveWindowManagerZoom();
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    /** The control surfaces as the preferences set them up. */
+    void applyControlSurfaces();
 
     ui::AppServices& services_;
     session::Project& project_;
     ui::MainMenuModel menuModel_;
     ui::MainComponent* mainComponent_ = nullptr; // owned by the DocumentWindow (setContentOwned)
     std::unique_ptr<ui::PreferencesWindow> preferencesWindow_;
+    ui::surfaces::DevicePorts surfacePorts_;       // (before the surfaces, which use them)
+    std::unique_ptr<ui::surfaces::ControlSurfaces> surfaces_;
 
     bool maximised_ = false;
     bool fullScreenMode_ = false;

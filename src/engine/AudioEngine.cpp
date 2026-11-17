@@ -198,6 +198,11 @@ ChannelPeaks AudioEngine::collectTrackPeaks(int slot) noexcept
     return peaks;
 }
 
+float AudioEngine::collectSurfacePeak(int slot) noexcept
+{
+    return slot >= 0 && slot < kMaxTracks ? telemetry_.surfacePeaks[static_cast<std::size_t>(slot)].exchange(0.0f, std::memory_order_acq_rel) : 0.0f;
+}
+
 float AudioEngine::collectInputPeak(int channel) noexcept
 {
     if (channel < 0 || channel >= kMaxInputChannels)
@@ -1226,6 +1231,7 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
     const auto meterIndex = static_cast<std::size_t>(track.slot) * kMaxChannels;
     rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex], static_cast<float>(peakLeft));
     rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + 1], static_cast<float>(peakRight));
+    rt::atomicStoreMax(telemetry_.surfacePeaks[static_cast<std::size_t>(track.slot)], static_cast<float>(std::max(peakLeft, peakRight)));
 }
 
 void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan) noexcept
@@ -1308,6 +1314,7 @@ void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, doub
         const auto range = juce::FloatVectorOperations::findMinAndMax(slot.out.getReadPointer(o), numSamples);
         const double peak = std::max(std::abs(range.getStart()), std::abs(range.getEnd()));
         rt::atomicStoreMax(telemetry_.trackPeaks[meterIndex + static_cast<std::size_t>(o)], static_cast<float>(peak));
+        rt::atomicStoreMax(telemetry_.surfacePeaks[static_cast<std::size_t>(track.slot)], static_cast<float>(peak));
     }
     for (int ch = numOut; ch < slot.main.getNumChannels(); ++ch)
         slot.main.clear(ch, 0, numSamples);

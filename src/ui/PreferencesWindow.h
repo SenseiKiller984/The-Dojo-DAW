@@ -11,7 +11,7 @@ namespace dojo::ui
 {
 
 /**
-    The Preferences window (Options > Preferences, Ctrl+,), with five tabs:
+    The Preferences window (Options > Preferences, Ctrl+,), with six tabs:
 
     General   playback options: return the view to the start with the playhead; stop at the end of
               the arrangement
@@ -20,6 +20,7 @@ namespace dojo::ui
     Surround  how a surround master plays: Standard, Classic Fold-Down, the Advanced Surround
               Virtualizer (headphones or speakers, room) or the device's own 3D virtualizer
     Keyboard  every command's shortcuts, editable (Options > Keyboard Shortcuts opens this tab)
+    Control Surfaces  Mackie Control units, extenders and HUI: their MIDI ports, in desk order
 
     Owned by the main window and kept while the application runs (closing only hides it).
 */
@@ -29,7 +30,8 @@ public:
     /** `surroundRendering` reports what the engine does with a surround master now (an
         engine::SurroundRendering), for the Surround tab. */
     PreferencesWindow(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
-                      std::function<void()> showEditingTips, std::function<int()> surroundRendering = {});
+                      std::function<void()> showEditingTips, std::function<int()> surroundRendering = {},
+                      std::function<juce::String(int)> surfaceStatus = {});
     ~PreferencesWindow() override;
 
     /** Shows the window (to front) on `tab`. */
@@ -49,7 +51,12 @@ private:
     juce::ApplicationCommandManager& commands_;
     std::function<void()> showEditingTips_;
     std::function<int()> surroundRendering_;
+    std::function<juce::String(int)> surfaceStatus_; ///< (a control surface's, by its row)
     Content* content_ = nullptr; // owned by the window
 };
+
+/** The Control Surfaces tab on its own (tests): the setups kept in `preferences`, each row's status
+    from `status`. */
+[[nodiscard]] std::unique_ptr<juce::Component> createControlSurfacesPage(Preferences& preferences, std::function<juce::String(int)> status);
 
 } // namespace dojo::ui

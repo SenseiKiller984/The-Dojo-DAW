@@ -377,6 +377,20 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop); Sour, inspired by an album cover's pastel pop-punk look (Sour Lavender: lavender, sticker pink, smiley yellow and lime; Sour Midnight: the same after dark, with a baby-blue playhead). Applied instantly, remembered.
 - **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
 - **Surround**: surround monitoring: Standard, Classic Fold-Down, the Advanced Surround Virtualizer (headphones or speakers, room) or the Device 3D Virtualizer (see *Surround monitoring* above).
+- **Control Surfaces**: hardware controllers (see *Control surfaces* below). **Add Surface**, then pick its model and its MIDI in and out. The status shows whether it answers.
+
+**Control surfaces**: Mackie Control Universal (and its XT extenders) and HUI over MIDI, or any controller in one of those modes. Each unit has eight strips; extenders show the next eight tracks, in the order they are added.
+- **Faders** are the tracks' volumes, on the mixer's own fader law; the Mackie Control's master fader is the master's. The motor faders follow everything that moves the volume elsewhere: the mouse, undo, and automation as it plays. A fader you are touching is yours: it ignores changes from The Dojo until you let go, and a touch is one undo step.
+- **V-Pots** turn the pan (**PAN**), or a send's level (**SEND**; press it again for the next send), with their LED rings. Pressing a V-Pot resets it (centre, 0 dB). **FLIP** swaps the faders and the V-Pots.
+- **REC**, **SOLO**, **MUTE** and **SELECT** on every strip, lit as the tracks are (**Shift**+SELECT adds to the selection; the RUDE SOLO lamp is lit while anything is soloed, and its key clears every solo).
+- **Displays**: each strip shows its track's name and its pan, send level or volume (**NAME/VALUE**). HUI shows four-character names and its main display. The time display shows bars and beats, or the time (**SMPTE/BEATS**). The two-digit display shows PN, S1, S2... or FL.
+- **Meters**: every strip's post-fader level, from the engine's own peak readings for the surfaces (they don't take the mixer's).
+- **Banks**: **BANK** < > move by all the strips, **CHANNEL** < > and the cursor keys by one. The up and down keys move the selection, and the strips follow it.
+- **Transport**: PLAY, STOP (stopped, back to the start), RECORD, CYCLE (the loop), DROP and REPLACE (punch in and out), REWIND and FAST FWD (a bar per press, repeating while held), and the jog wheel (a beat per tick, a sixteenth with SCRUB). HUI adds RETURN TO ZERO and END.
+- **Commands**: SAVE, UNDO (Shift: redo), and F1-F8 (Mixer, Devices, Editor, Snap, Zoom In, Zoom Out, Zoom to Fit, Add Track).
+- A Mackie Control's host handshake is answered. HUI is pinged once a second and counts as online while it answers.
+- A surface's MIDI input is taken away from the instruments, so its keys never play notes.
+- **EuCon** (Avid's network protocol for its consoles) is not supported: Avid licenses it only with its own software (EuControl) and SDK.
 
 **Presets** (`.dojopreset` files): every device, native or plug-in, can save its settings as a preset and load one back.
 - A preset keeps **all** of a device's settings at the moment it is saved (for a native device every parameter by name and value, readable as XML like a `.dojo` session; for a plug-in its own state).
