@@ -84,6 +84,10 @@ void disconnectDeviceOutput(session::Session& session, const juce::ValueTree& de
 /** The bus a device's outputs are connected to (invalid if none). */
 [[nodiscard]] juce::ValueTree connectedBus(const session::Session& session, const juce::ValueTree& device, int left, int right);
 
+/** Whether the project plays through outboard gear (an active HW Insert on an active track or the
+    master): such a project can only be bounced in real time, through the sound card. */
+[[nodiscard]] bool usesHardwareInserts(const session::Session& session);
+
 /** What an Add Device menu offers. */
 struct MenuScope
 {

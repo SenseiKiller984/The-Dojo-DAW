@@ -50,6 +50,7 @@ add_executable(dojo_tests
     SessionTests.cpp
     RealtimeGuardTests.cpp
     SpectrumOverlayTests.cpp
+    HardwareInsertTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleLookTests.cpp

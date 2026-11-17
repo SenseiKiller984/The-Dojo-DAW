@@ -4,6 +4,7 @@
 #include "devices/Dynamics.h"
 #include "devices/Echo.h"
 #include "devices/Equaliser.h"
+#include "devices/HardwareInsert.h"
 #include "devices/Impulse.h"
 #include "devices/Instruments.h"
 #include "devices/Operator.h"
@@ -12,6 +13,7 @@
 #include "session/Presets.h"
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
+#include "ui/devices/HardwareInsertEditor.h"
 #include "ui/devices/MoreDeviceEditors.h"
 #include "ui/devices/PagedEditor.h"
 #include "ui/devices/ParameterControl.h"
@@ -1917,6 +1919,8 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
     if (auto more = createMoreDeviceEditor(processor, context, preferredWidth))
         return more;
 
+    if (auto* insert = dynamic_cast<devices::HardwareInsert*>(&processor))
+        return createHardwareInsertEditor(*insert, context, preferredWidth);
     if (auto* eq = dynamic_cast<devices::Equaliser*>(&processor))
     {
         preferredWidth = 560;

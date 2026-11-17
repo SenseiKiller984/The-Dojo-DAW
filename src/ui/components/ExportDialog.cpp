@@ -1,6 +1,7 @@
 #include "ui/components/ExportDialog.h"
 
 #include "engine/io/LameMp3Format.h"
+#include "ui/DeviceActions.h"
 #include "ui/theme/DojoTheme.h"
 
 namespace dojo::ui
@@ -45,6 +46,13 @@ ExportDialog::ExportDialog(session::Project& project, session::Exporter& exporte
     mode_.addItem("Offline (faster than real time)", 1);
     mode_.addItem("Real time (through the audio device)", 2);
     mode_.setSelectedId(1, juce::dontSendNotification);
+    if (deviceActions::usesHardwareInserts(project_.getSession()))
+    {
+        // Outboard gear is only there in real time.
+        mode_.setSelectedId(2, juce::dontSendNotification);
+        mode_.setItemEnabled(1, false);
+        mode_.setTooltip("The project plays through a HW Insert: it can only be bounced in real time, through the sound card");
+    }
 
     tail_.setSliderStyle(juce::Slider::LinearHorizontal);
     tail_.setRange(0.0, 20.0, 0.1);

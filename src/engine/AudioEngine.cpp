@@ -457,6 +457,20 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
 
     if (graph_ != nullptr)
     {
+        // HW Inserts: the sound card's inputs for this sub-block (none in an offline render).
+        if (!graph_->hardwareIo.empty())
+        {
+            HardwarePorts ports;
+            ports.live = !offlineActive_.load(std::memory_order_relaxed);
+            ports.inputs = ports.live ? inputBus_.getArrayOfReadPointers() : nullptr;
+            ports.numInputs = ports.live ? numInputs_ : 0;
+            ports.numOutputs = ports.live ? numOutputs : 0;
+            ports.bufferSize = maxBlockSize_;
+            ports.reportedLatency = deviceLatency_.load(std::memory_order_relaxed);
+            for (auto* io : graph_->hardwareIo)
+                io->setHardwarePorts(ports);
+        }
+
         for (const auto& level : graph_->levels)
         {
             currentLevel_ = &level;
@@ -521,6 +535,10 @@ void AudioEngine::renderSubBlock(int /*inputOffset*/, float* const* outputs, int
     }
 
     writeOutputsAndMeter(outputs, numOutputs, offset, numSamples);
+    // What HW Inserts sent out to their hardware, on top of the mix (never into an offline render).
+    if (graph_ != nullptr && !offlineActive_.load(std::memory_order_relaxed))
+        for (auto* io : graph_->hardwareIo)
+            io->addSends(outputs, numOutputs, offset, numSamples);
     liveBlockPending_ = false;
 
     if (playing_)

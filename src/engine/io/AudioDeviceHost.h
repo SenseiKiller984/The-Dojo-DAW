@@ -77,6 +77,8 @@ public:
 
     /** Names of the active input channels, in engine input order (for track input selectors). */
     [[nodiscard]] juce::StringArray getActiveInputChannelNames() const;
+    /** Names of the active output channels, in engine output order (for HW Insert sends). */
+    [[nodiscard]] juce::StringArray getActiveOutputChannelNames() const;
 
     /** Names of the enabled MIDI inputs. */
     [[nodiscard]] juce::StringArray getMidiInputNames() const;

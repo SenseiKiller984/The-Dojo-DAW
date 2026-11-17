@@ -27,6 +27,19 @@ int chainLatency(const std::vector<engine::RenderDevice>& devices)
     return latency;
 }
 
+/** The devices of a chain (and of their insert loops) that use the sound card's channels
+    themselves (HW Inserts), each once. */
+void collectHardwareIo(const std::vector<engine::RenderDevice>& chain, std::vector<HardwareIoDevice*>& found)
+{
+    for (const auto& device : chain)
+    {
+        if (device.node != nullptr)
+            if (auto* io = device.node->getHardwareIo(); io != nullptr && std::find(found.begin(), found.end(), io) == found.end())
+                found.push_back(io);
+        collectHardwareIo(device.loop, found);
+    }
+}
+
 /** A device and its node. */
 using DeviceNode = std::pair<juce::ValueTree, std::shared_ptr<engine::ProcessorNode>>;
 
@@ -1154,6 +1167,16 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         (void) findLatency(lane.parameter, graph->masterDevices, masterInput, lane.latency);
     for (auto& lane : graph->masterFaderParameterLanes)
         (void) findLatency(lane.parameter, graph->masterFaderDevices, graph->masterVolumeLatency, lane.latency);
+
+    // Devices that send to the sound card and return from it (their companions on surround tracks
+    // never do: only a chain's own instance is listed).
+    for (const auto& track : graph->tracks)
+    {
+        collectHardwareIo(track.devices, graph->hardwareIo);
+        collectHardwareIo(track.postDevices, graph->hardwareIo);
+    }
+    collectHardwareIo(graph->masterDevices, graph->hardwareIo);
+    collectHardwareIo(graph->masterFaderDevices, graph->hardwareIo);
 
     graph->masterInputLatency = masterInput;
     graph->totalLatency = graph->masterVolumeLatency + chainLatency(graph->masterFaderDevices);

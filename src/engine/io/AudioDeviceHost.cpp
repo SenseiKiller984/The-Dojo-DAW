@@ -21,6 +21,7 @@ public:
     {
         jassert(device != nullptr);
         errorReported_.store(false, std::memory_order_relaxed);
+        engine_.setDeviceLatency(device->getInputLatencyInSamples(), device->getOutputLatencyInSamples());
         engine_.prepare(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
                         device->getActiveOutputChannels().countNumberOfSetBits(),
                         device->getActiveInputChannels().countNumberOfSetBits());
@@ -121,6 +122,20 @@ juce::StringArray AudioDeviceHost::getActiveInputChannelNames() const
     {
         const auto all = device->getInputChannelNames();
         const auto active = device->getActiveInputChannels();
+        for (int i = 0; i < all.size(); ++i)
+            if (active[i])
+                names.add(all[i]);
+    }
+    return names;
+}
+
+juce::StringArray AudioDeviceHost::getActiveOutputChannelNames() const
+{
+    juce::StringArray names;
+    if (auto* device = deviceManager_.getCurrentAudioDevice(); device != nullptr && device->isOpen())
+    {
+        const auto all = device->getOutputChannelNames();
+        const auto active = device->getActiveOutputChannels();
         for (int i = 0; i < all.size(); ++i)
             if (active[i])
                 names.add(all[i]);

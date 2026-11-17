@@ -27,6 +27,8 @@ add_library(dojo_devices STATIC
     Equaliser.h
     Gate.cpp
     Gate.h
+    HardwareInsert.cpp
+    HardwareInsert.h
     Impulse.cpp
     Impulse.h
     Instruments.cpp

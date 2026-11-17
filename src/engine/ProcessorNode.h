@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/HardwareIo.h"
 #include "core/InsertLoop.h"
 #include "core/Types.h"
 
@@ -55,6 +56,8 @@ public:
     [[nodiscard]] bool isLoopEngaged() const noexcept { return insertLoop_ != nullptr && insertLoop_->isLoopEngaged(); }
     /** The processor's insert loop (its name and return, for display); null when it has none. */
     [[nodiscard]] const InsertLoopHost* getInsertLoop() const noexcept { return insertLoop_; }
+    /** A device that talks to the sound card's channels itself (a HW Insert); null for the rest. */
+    [[nodiscard]] HardwareIoDevice* getHardwareIo() const noexcept { return hardwareIo_; }
     /** The processor's extra (aux) output channels, after its main output. */
     [[nodiscard]] int getNumAuxOutputs() const noexcept { return auxOutputs_; }
     /** The two halves of an insert-loop device (stereo, in place); the engine runs the loop's devices
@@ -91,6 +94,7 @@ private:
 
     std::unique_ptr<juce::AudioProcessor> processor_;
     InsertLoopHost* insertLoop_ = nullptr; ///< (the processor, when it has an insert loop)
+    HardwareIoDevice* hardwareIo_ = nullptr; ///< (the processor, when it uses the sound card's channels)
     bool doublePrecision_ = false;
     bool prepared_ = false;
 

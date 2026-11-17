@@ -98,6 +98,9 @@ public:
     /** Where editors can watch other tracks' sound (the EQ's spectrum overlay). */
     void setTrackTaps(engine::TrackTaps* taps) noexcept { taps_ = taps; }
     [[nodiscard]] engine::TrackTaps* getTrackTaps() const noexcept { return taps_; }
+    /** Where device editors find the sound card's channel names (outputs or inputs: the HW Insert). */
+    void setChannelNames(std::function<juce::StringArray(bool)> names) { channelNames_ = std::move(names); }
+    [[nodiscard]] const std::function<juce::StringArray(bool)>& getChannelNames() const noexcept { return channelNames_; }
 
 private:
     class PluginWindow;
@@ -127,6 +130,7 @@ private:
     session::Project& project_;
     plugins::PluginManager& plugins_;
     engine::TrackTaps* taps_ = nullptr;
+    std::function<juce::StringArray(bool)> channelNames_;
     EditorState& editor_;
 
     juce::Viewport viewport_;

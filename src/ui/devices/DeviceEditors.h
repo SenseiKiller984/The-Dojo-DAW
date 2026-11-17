@@ -7,6 +7,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -22,6 +23,8 @@ struct DeviceEditorContext
     juce::ValueTree device; ///< the DEVICE tree
     juce::ValueTree owner;  ///< its track (or the MASTER node)
     engine::TrackTaps* taps = nullptr; ///< other tracks' sound for spectrum displays (none in tests)
+    /** The sound card's active channel names (outputs or inputs), for the HW Insert; may be empty. */
+    std::function<juce::StringArray(bool outputs)> channelNames = {};
 };
 
 /**

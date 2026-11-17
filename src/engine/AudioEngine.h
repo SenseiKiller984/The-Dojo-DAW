@@ -79,6 +79,13 @@ public:
         then calls onPrepare (to prepare every processor at the same rate/size). */
     void prepare(double sampleRate, int maximumBlockSize, int numOutputChannels, int numInputChannels = 0);
 
+    /** The audio device's own input and output latency (samples, as its driver reports them; 0 if
+        unknown), which HW Inserts take as their round trip until they have measured it. */
+    void setDeviceLatency(int inputSamples, int outputSamples) noexcept
+    {
+        deviceLatency_.store(std::max(0, inputSamples) + std::max(0, outputSamples), std::memory_order_relaxed);
+    }
+
     /** Marks the engine unprepared; process() outputs silence until the next prepare(). */
     void release() noexcept;
 
@@ -300,6 +307,7 @@ private:
     rt::SpscQueue<RenderGraph*> retiredGraphs_{64};
     EngineTelemetry telemetry_;
     TrackTaps taps_;
+    std::atomic<int> deviceLatency_{0}; ///< the driver's input + output latency (setDeviceLatency)
     rt::ThreadOwnershipChecker commandProducer_;
     LiveMidiQueue liveMidi_;
     WorkerPool workers_;

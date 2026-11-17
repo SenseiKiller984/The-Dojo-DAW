@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/HardwareIo.h"
 #include "core/Types.h"
 #include "engine/Automation.h"
 #include "engine/ChannelLayout.h"
@@ -353,6 +354,10 @@ struct RenderGraph
     /** LFO devices and their targets: applied once per block, before any track renders. */
     std::vector<RenderModulator> modulators;
     std::vector<int> masterSources;       ///< graph indices feeding the master bus
+    /** Devices in the graph that send to the sound card's outputs and return from its inputs (HW
+        Inserts): before each sub-block the engine gives them the sound card's inputs, after it adds
+        their sends to the outputs. */
+    std::vector<HardwareIoDevice*> hardwareIo;
 
     int totalLatency = 0; ///< latency of the whole graph at the master output (for offline renders)
     int masterInputLatency = 0;  ///< where every path meets at the master's input

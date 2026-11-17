@@ -5,6 +5,7 @@
 #include "devices/AutoFilter.h"
 #include "devices/ChannelEq.h"
 #include "devices/ConsoleTG12345.h"
+#include "devices/HardwareInsert.h"
 #include "devices/Harrison4032.h"
 #include "devices/DriftSynth.h"
 #include "devices/Drive.h"
@@ -81,6 +82,8 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {ConsoleTG12345::kTypeId, "EMI TG12345", "Console", false,
          "console channel strip desk mixer preamp transformer compressor limiter eq abbey road cassette echo monitor talkback"},
         {Click::kTypeId, "Click", "Utility", false},
+        {HardwareInsert::kTypeId, "HW Insert", "Utility", false,
+         "hardware external outboard insert analog send return loop io ping latency sound card"},
     };
     return devices;
 }
@@ -160,6 +163,8 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<Utility>();
     if (type == Click::kTypeId)
         return std::make_unique<Click>();
+    if (type == HardwareInsert::kTypeId)
+        return std::make_unique<HardwareInsert>();
     if (type == Roar::kTypeId)
         return std::make_unique<Roar>();
     if (type == Pedal::kTypeId)

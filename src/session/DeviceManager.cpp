@@ -251,6 +251,16 @@ void DeviceManager::valueTreePropertyChanged(juce::ValueTree& tree, const juce::
 
 void DeviceManager::timerCallback()
 {
+    // Housekeeping for devices that use the sound card themselves (a HW Insert analysing its latency
+    // measurement). Under the lock: never while prepareAll() re-prepares them.
+    {
+        const std::lock_guard lock(mutex_);
+        for (auto& [id, entry] : entries_)
+            if (entry.node != nullptr)
+                if (auto* io = entry.node->getHardwareIo())
+                    io->service();
+    }
+
     if (parameterChanged_.exchange(false) && onParameterChanged)
         onParameterChanged();
     if (latencyChanged_.exchange(false) && onLatencyChanged)

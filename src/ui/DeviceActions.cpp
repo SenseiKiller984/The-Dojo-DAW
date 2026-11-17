@@ -1,6 +1,7 @@
 #include "ui/DeviceActions.h"
 
 #include "devices/DeviceRegistry.h"
+#include "devices/HardwareInsert.h"
 #include "ui/EditActions.h"
 
 #include <algorithm>
@@ -287,6 +288,21 @@ void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, 
         menu.addItem("No plug-ins found - scan in the browser's Plug-ins tab", false, false, [] {});
     for (auto& [vendor, sub] : pluginsByVendor)
         menu.addSubMenu(vendor, sub);
+}
+
+bool usesHardwareInserts(const session::Session& session)
+{
+    const auto uses = [](const juce::ValueTree& owner)
+    {
+        for (const auto& device : session::Session::getAllDevices(owner))
+            if (session::device::getType(device) == devices::HardwareInsert::kTypeId && !session::device::isBypassed(device))
+                return true;
+        return false;
+    };
+    for (const auto& track : session.getAllTracks())
+        if (session::track::isActive(track) && uses(track))
+            return true;
+    return uses(session.getMaster());
 }
 
 } // namespace dojo::ui::deviceActions

@@ -423,7 +423,8 @@ public:
 
         if (node_ != nullptr)
         {
-            editorComponent_ = createDeviceEditor(*node_, DeviceEditorContext{project_, editor, device_, owner_, panel_.getTrackTaps()}, preferredWidth_);
+            editorComponent_ = createDeviceEditor(*node_, DeviceEditorContext{project_, editor, device_, owner_, panel_.getTrackTaps(), panel_.getChannelNames()},
+                                                  preferredWidth_);
             addAndMakeVisible(*editorComponent_);
         }
         else

@@ -10,6 +10,7 @@ ProcessorNode::ProcessorNode(std::unique_ptr<juce::AudioProcessor> processor)
 {
     jassert(processor_ != nullptr);
     insertLoop_ = dynamic_cast<InsertLoopHost*>(processor_.get());
+    hardwareIo_ = dynamic_cast<HardwareIoDevice*>(processor_.get());
     negotiateLayout();
 }
 

@@ -84,6 +84,8 @@ MainComponent::MainComponent(AppServices& services)
     addAndMakeVisible(mixer_);
     addChildComponent(devicePanel_);
     devicePanel_.setTrackTaps(&services.controller.getTrackTaps());
+    devicePanel_.setChannelNames([&host = services.controller.getDeviceHost()](bool outputs)
+                                 { return outputs ? host.getActiveOutputChannelNames() : host.getActiveInputChannelNames(); });
     addChildComponent(clipEditor_);
     addChildComponent(clipList_);
     addAndMakeVisible(statusBar_);
