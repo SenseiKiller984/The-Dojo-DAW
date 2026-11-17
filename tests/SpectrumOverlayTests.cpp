@@ -85,6 +85,10 @@ TEST_CASE("Track taps: watched tracks' sound, counted watches, nothing written f
     taps.unwatch(3);
     CHECK(taps.watch(99));
     CHECK_FALSE(taps.watch(0));
+
+    // The rings live on the heap: the engine still fits on a thread's stack (1 MB on Windows).
+    CHECK(sizeof(engine::TrackTaps) < 256);
+    CHECK(sizeof(engine::AudioEngine) < 128 * 1024);
 }
 
 TEST_CASE("Track taps: the engine writes a watched track's post-fader sound", "[engine][spectrum]")

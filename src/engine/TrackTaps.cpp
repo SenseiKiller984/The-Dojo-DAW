@@ -5,11 +5,18 @@
 namespace dojo::engine
 {
 
+TrackTaps::TrackTaps()
+    : taps_(std::make_unique<std::array<Tap, kTaps>>())
+{
+}
+
+TrackTaps::~TrackTaps() = default;
+
 const TrackTaps::Tap* TrackTaps::find(std::uint32_t trackId) const noexcept
 {
     if (trackId == 0)
         return nullptr;
-    for (const auto& tap : taps_)
+    for (const auto& tap : *taps_)
         if (tap.trackId.load(std::memory_order_acquire) == trackId)
             return &tap;
     return nullptr;
@@ -29,7 +36,7 @@ bool TrackTaps::watch(std::uint32_t trackId) noexcept
         ++tap->watchers;
         return true;
     }
-    for (auto& tap : taps_)
+    for (auto& tap : *taps_)
         if (tap.trackId.load(std::memory_order_relaxed) == 0)
         {
             for (auto& sample : tap.ring)
@@ -77,7 +84,7 @@ void TrackTaps::write(std::uint32_t trackId, const Sample* const* channels, int 
 {
     if (inUse_.load(std::memory_order_acquire) == 0 || trackId == 0 || numChannels <= 0)
         return;
-    for (auto& tap : taps_)
+    for (auto& tap : *taps_)
     {
         if (tap.trackId.load(std::memory_order_acquire) != trackId)
             continue;

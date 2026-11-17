@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 namespace dojo::engine
 {
@@ -28,7 +29,8 @@ public:
     static constexpr int kTaps = 16;
     static constexpr int kSize = 8192; ///< samples kept per tap (a power of two)
 
-    TrackTaps() = default;
+    TrackTaps();
+    ~TrackTaps();
     TrackTaps(const TrackTaps&) = delete;
     TrackTaps& operator=(const TrackTaps&) = delete;
 
@@ -55,7 +57,9 @@ private:
     [[nodiscard]] const Tap* find(std::uint32_t trackId) const noexcept;
     [[nodiscard]] Tap* find(std::uint32_t trackId) noexcept;
 
-    std::array<Tap, kTaps> taps_;
+    /** The taps' rings (half a megabyte) live on the heap, allocated once with the engine, so the
+        engine stays small wherever it is constructed (a thread's stack is 1 MB on Windows). */
+    std::unique_ptr<std::array<Tap, kTaps>> taps_;
     std::atomic<int> inUse_{0};
 };
 
