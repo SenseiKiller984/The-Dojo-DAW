@@ -148,7 +148,7 @@ public:
     {
         juce::Component::SafePointer<LoopEnd> safe(this);
         juce::PopupMenu menu;
-        deviceActions::buildAddDeviceMenu(menu, plugins_, false,
+        deviceActions::buildAddDeviceMenu(menu, plugins_, deviceActions::MenuScope{},
                                           [safe](const deviceActions::DeviceChoice& choice)
                                           {
                                               if (safe != nullptr)
@@ -348,26 +348,19 @@ public:
             addAndMakeVisible(b);
         }
 
-        left_.onClick = [this, &session]
+        // (moves keep the chain's order: MIDI effects, the instrument, then the audio effects)
+        const auto move = [this, &session](int step)
         {
             const auto devices = session::Session::getDevices(owner_);
             const int index = static_cast<int>(std::find(devices.begin(), devices.end(), device_) - devices.begin());
-            if (index > 0)
+            if (deviceActions::canMoveDevice(devices, index, index + step))
             {
                 session.beginTransaction("Move Device");
-                session.moveDevice(device_, index - 1);
+                session.moveDevice(device_, index + step);
             }
         };
-        right_.onClick = [this, &session]
-        {
-            const auto devices = session::Session::getDevices(owner_);
-            const int index = static_cast<int>(std::find(devices.begin(), devices.end(), device_) - devices.begin());
-            if (index + 1 < static_cast<int>(devices.size()))
-            {
-                session.beginTransaction("Move Device");
-                session.moveDevice(device_, index + 1);
-            }
-        };
+        left_.onClick = [move] { move(-1); };
+        right_.onClick = [move] { move(1); };
         remove_.onClick = [this, &session]
         {
             auto deviceTree = device_;
@@ -1032,7 +1025,7 @@ bool DevicePanel::ownerTakesDevices(const juce::ValueTree& owner)
     if (!owner.hasType(session::ids::track))
         return owner.isValid(); // the master
     const auto kind = session::track::getKind(owner);
-    return kind != session::TrackKind::vca && kind != session::TrackKind::midi;
+    return kind != session::TrackKind::vca; // (a MIDI track: its MIDI effects)
 }
 
 void DevicePanel::showAddMenu()
@@ -1041,10 +1034,15 @@ void DevicePanel::showAddMenu()
     if (!owner.isValid() || !ownerTakesDevices(owner))
         return;
 
-    const bool instrumentsAllowed = owner.hasType(session::ids::track) && session::track::getKind(owner) == session::TrackKind::instrument;
+    // Instrument tracks take everything; MIDI tracks their MIDI effects (and an instrument, which
+    // gets an instrument track this one plays); other tracks and the master audio effects.
+    const auto kind = owner.hasType(session::ids::track) ? session::track::getKind(owner) : session::TrackKind::audio;
+    deviceActions::MenuScope scope;
+    scope.instruments = scope.midiEffects = kind == session::TrackKind::instrument || kind == session::TrackKind::midi;
+    scope.audioEffects = kind != session::TrackKind::midi;
     juce::Component::SafePointer<DevicePanel> safe(this);
     juce::PopupMenu menu;
-    deviceActions::buildAddDeviceMenu(menu, plugins_, instrumentsAllowed,
+    deviceActions::buildAddDeviceMenu(menu, plugins_, scope,
                                       [safe](const deviceActions::DeviceChoice& choice)
                                       {
                                           if (safe != nullptr)
@@ -1319,10 +1317,8 @@ void DevicePanel::paint(juce::Graphics& g)
     {
         g.setColour(colour::textMuted);
         g.setFont(sans(12.5f));
-        g.drawText(session::track::getKind(owner) == session::TrackKind::vca
-                       ? "A VCA Master has no devices: it controls the faders of its member tracks."
-                       : "A MIDI track has no devices: its MIDI plays the instrument track chosen in its menu (MIDI Output).",
-                   getLocalBounds().withTrimmedTop(kHeaderHeight), juce::Justification::centred, false);
+        g.drawText("A VCA Master has no devices: it controls the faders of its member tracks.", getLocalBounds().withTrimmedTop(kHeaderHeight),
+                   juce::Justification::centred, false);
     }
 }
 

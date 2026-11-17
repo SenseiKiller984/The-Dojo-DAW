@@ -15,6 +15,7 @@
 #include "ui/devices/ConsoleEditors.h"
 #include "ui/devices/HarrisonEditors.h"
 #include "ui/devices/KeysEditors.h"
+#include "ui/devices/MidiEffectEditors.h"
 #include "ui/devices/PagedEditor.h"
 #include "ui/devices/StudioDeviceEditors.h"
 #include "ui/theme/DojoTheme.h"
@@ -1146,6 +1147,8 @@ std::unique_ptr<juce::Component> createMoreDeviceEditor(juce::AudioProcessor& pr
         return paged(processor, gatePages(*gate), preferredWidth);
     if (auto studio = createStudioDeviceEditor(processor, context, preferredWidth))
         return studio;
+    if (auto midi = createMidiEffectEditor(processor, preferredWidth))
+        return midi;
     if (auto keys = createKeysDeviceEditor(processor, context, preferredWidth))
         return keys;
     if (auto console = createConsoleDeviceEditor(processor, preferredWidth))

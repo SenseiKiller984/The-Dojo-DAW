@@ -1059,9 +1059,9 @@ void AudioEngine::sumBusSources(const RenderTrack& track, SlotState& slot) noexc
     if (track.auxSourceIndex >= 0)
     {
         const auto& source = graph_->tracks[static_cast<std::size_t>(track.auxSourceIndex)];
-        if (!source.devices.empty())
+        if (source.instrumentIndex >= 0 && source.instrumentIndex < static_cast<int>(source.devices.size()))
         {
-            const auto* node = source.devices.front().node;
+            const auto* node = source.devices[static_cast<std::size_t>(source.instrumentIndex)].node;
             std::array<const Sample*, 2> outputs{node->getAuxOutput(track.auxChannel), node->getAuxOutput(track.auxChannel + 1)};
             if (track.auxDelay > 0 && track.auxDelayLine != nullptr && outputs[0] != nullptr && outputs[1] != nullptr)
             {

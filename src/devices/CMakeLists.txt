@@ -35,6 +35,8 @@ add_library(dojo_devices STATIC
     LfoDevice.h
     Meld.cpp
     Meld.h
+    MidiEffects.cpp
+    MidiEffects.h
     Modulators.cpp
     Modulators.h
     MultibandDynamics.cpp

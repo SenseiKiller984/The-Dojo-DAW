@@ -23,6 +23,7 @@ struct DeviceChoice
     juce::String descriptionXml; ///< plug-ins: the PluginDescription
     juce::String identifier;     ///< plug-ins: PluginDescription::createIdentifierString()
     juce::String keywords = {};  ///< more words the search finds it by
+    bool midiEffect = false;     ///< plays on the MIDI, before the instrument
 };
 
 /** Every native device. */
@@ -35,19 +36,35 @@ juce::String toDragDescription(const DeviceChoice& choice);
 /** The choice a drag description refers to (plug-ins are looked up in the known list). */
 std::optional<DeviceChoice> fromDragDescription(const juce::String& description, plugins::PluginManager& plugins);
 
-/** True for instruments (native or hosted), which lead a track's chain. */
+/** True for instruments (native or hosted). */
 [[nodiscard]] bool isInstrumentDevice(const juce::ValueTree& device);
+/** True for MIDI effects (Arpeggiator, Chord Generator, Scale, MIDI Filter). */
+[[nodiscard]] bool isMidiEffectDevice(const juce::ValueTree& device);
+/** A track's instrument (the first instrument in its chain), or an invalid tree. */
+[[nodiscard]] juce::ValueTree findInstrument(const juce::ValueTree& owner);
+/**
+    A chain's order: its MIDI effects first (they change the MIDI the instrument plays), then the
+    instrument, then the audio effects. Whether moving device `from` to position `to` keeps it.
+*/
+[[nodiscard]] bool canMoveDevice(const std::vector<juce::ValueTree>& devices, int from, int to);
+/** Where a new device of this kind goes in `owner`'s chain to keep that order (-1: at the end). */
+[[nodiscard]] int insertionIndex(const juce::ValueTree& owner, const DeviceChoice& choice);
 
 /**
     Adds a device to `owner` (a track or the MASTER node) as one undo step and returns the DEVICE.
-    Instruments go first in the chain and replace the track's current instrument; an instrument
-    dropped onto a track that is not an instrument track (or onto nothing) gets a new instrument
-    track. An effect dropped onto nothing gets a new audio track. The (new) track is selected.
+    - Instruments go after the track's MIDI effects and replace its current instrument; an
+      instrument dropped onto a track that is not an instrument track (or onto nothing) gets a new
+      instrument track.
+    - MIDI effects go after the track's other MIDI effects, before its instrument; on anything but
+      an instrument or MIDI track they get a new MIDI track.
+    - An effect dropped onto nothing gets a new audio track.
+    The (new) track is selected.
 */
 juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice);
 
-/** Whether a choice can go into a device's insert loop (an accessory / effects loop): effects only
-    (no instruments, and no modulators such as the LFO, which move other devices' controls). */
+/** Whether a choice can go into a device's insert loop (an accessory / effects loop): audio effects
+    only (no instruments or MIDI effects, and no modulators such as the LFO, which move other
+    devices' controls). */
 [[nodiscard]] bool fitsInLoop(const DeviceChoice& choice);
 /** Adds an effect at the end of `host`'s insert loop as one undo step and returns the DEVICE (or
     nothing when it does not fit in a loop). */
@@ -67,8 +84,15 @@ void disconnectDeviceOutput(session::Session& session, const juce::ValueTree& de
 /** The bus a device's outputs are connected to (invalid if none). */
 [[nodiscard]] juce::ValueTree connectedBus(const session::Session& session, const juce::ValueTree& device, int left, int right);
 
-/** Fills `menu` with native devices and plug-ins (instruments only if `includeInstruments`). */
-void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, bool includeInstruments,
+/** What an Add Device menu offers. */
+struct MenuScope
+{
+    bool instruments = false;
+    bool midiEffects = false;
+    bool audioEffects = true;
+};
+/** Fills `menu` with the native devices and plug-ins `scope` allows. */
+void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, MenuScope scope,
                         std::function<void(const DeviceChoice&)> onChosen);
 
 } // namespace dojo::ui::deviceActions

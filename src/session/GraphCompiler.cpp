@@ -555,6 +555,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                     graph->keepAlive.push_back(loopNodes[i][d][k].second);
                 }
             device.loopLatency = chainLatency(device.loop);
+            if (rt.instrumentIndex < 0 && device.node != nullptr && device.node->isInstrument())
+                rt.instrumentIndex = static_cast<int>(rt.devices.size()); // (after any MIDI effects)
             rt.devices.push_back(device);
             graph->keepAlive.push_back(chainNodes[i][d].second);
         }
@@ -1000,12 +1002,16 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     std::vector<int> input(count, 0);
     std::vector<int> faderTime(count, 0);
     std::vector<int> arrival(count, 0);
+    // An instrument's aux outputs leave its track where the instrument is: after its MIDI effects
+    // (and their latency, if any) and its own.
     const auto instrumentLatency = [&](int source)
     {
-        const auto& chain = graph->tracks[static_cast<std::size_t>(source)].devices;
-        return chain.empty() || chain.front().node == nullptr || chain.front().node->isBypassed()
-                   ? 0
-                   : std::max(0, chain.front().node->getLatencySamples());
+        const auto& track = graph->tracks[static_cast<std::size_t>(source)];
+        int latency = 0;
+        for (int d = 0; d <= track.instrumentIndex && d < static_cast<int>(track.devices.size()); ++d)
+            if (const auto* node = track.devices[static_cast<std::size_t>(d)].node; node != nullptr && !node->isBypassed())
+                latency += std::max(0, node->getLatencySamples());
+        return latency;
     };
     // A device send leaves its track where its device does: after the devices before it.
     const auto deviceTap = [&](int source, int deviceIndex)

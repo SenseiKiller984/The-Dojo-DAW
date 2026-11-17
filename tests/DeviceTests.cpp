@@ -26,7 +26,7 @@ TEST_CASE("Every native device can be created by type and saves its state", "[de
     {
         auto processor = createBuiltinDevice(info.type);
         REQUIRE(processor != nullptr);
-        CHECK(processor->acceptsMidi() == info.isInstrument);
+        CHECK(processor->acceptsMidi() == (info.isInstrument || info.isMidiEffect));
 
         juce::MemoryBlock state;
         processor->getStateInformation(state);

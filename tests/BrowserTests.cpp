@@ -142,6 +142,9 @@ TEST_CASE("Browser device search filters devices and plug-ins", "[browser]")
     browser->setDeviceSearch("sibilance"); // more words each device is known by
     CHECK(browser->getListedDeviceNames() == juce::StringArray{"De-Esser"});
 
+    browser->setDeviceSearch("midi effect"); // (the MIDI effects, a group of their own)
+    CHECK(browser->getListedDeviceNames() == juce::StringArray{"Arpeggiator", "Chord Generator", "Scale", "MIDI Filter"});
+
     browser->setDeviceSearch("dynamics"); // categories count
     CHECK(browser->getListedDeviceNames().contains("Limiter"));
 

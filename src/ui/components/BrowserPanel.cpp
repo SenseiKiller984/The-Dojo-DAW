@@ -423,12 +423,14 @@ private:
     {
         rows_.clear();
         const auto terms = termsOf(query_);
-        const auto addGroup = [&](const juce::String& heading, bool plugin, bool instrument)
+        // kind: 0 instruments, 1 MIDI effects, 2 audio effects
+        const auto addGroup = [&](const juce::String& heading, bool plugin, int kind)
         {
             bool first = true;
             for (const auto& choice : all_)
             {
-                if ((choice.type == plugins::PluginManager::kDeviceType) != plugin || choice.instrument != instrument)
+                const int choiceKind = choice.instrument ? 0 : choice.midiEffect ? 1 : 2;
+                if ((choice.type == plugins::PluginManager::kDeviceType) != plugin || choiceKind != kind)
                     continue;
                 if (!matchesAll(choice.name + " " + choice.category + " " + choice.keywords, terms))
                     continue;
@@ -438,8 +440,9 @@ private:
                 rows_.push_back({{}, &choice, nullptr});
             }
         };
-        addGroup("INSTRUMENTS", false, true);
-        addGroup("AUDIO EFFECTS", false, false);
+        addGroup("INSTRUMENTS", false, 0);
+        addGroup("MIDI EFFECTS", false, 1);
+        addGroup("AUDIO EFFECTS", false, 2);
         const auto addPresets = [&](const juce::String& heading, bool chains)
         {
             bool first = true;
@@ -465,8 +468,8 @@ private:
         };
         addPresets("PRESET CHAINS", true);
         addPresets("PRESETS", false);
-        addGroup("PLUG-IN INSTRUMENTS", true, true);
-        addGroup("PLUG-IN EFFECTS", true, false);
+        addGroup("PLUG-IN INSTRUMENTS", true, 0);
+        addGroup("PLUG-IN EFFECTS", true, 2);
         list_.deselectAllRows();
         list_.updateContent();
         list_.repaint();
@@ -526,7 +529,7 @@ private:
 
         if (selected)
             g.fillAll(colour::accent.withAlpha(0.28f));
-        g.setColour(r.choice->instrument ? colour::gold : colour::play);
+        g.setColour(r.choice->instrument ? colour::gold : r.choice->midiEffect ? juce::Colour(0xff6f8fe8) : colour::play);
         g.fillEllipse(12.0f, static_cast<float>(height) * 0.5f - 3.0f, 6.0f, 6.0f);
         g.setColour(colour::textPrimary);
         g.setFont(sans(12.5f));
@@ -577,7 +580,8 @@ private:
         const auto* choice = choiceAt(row);
         if (choice == nullptr)
             return {};
-        return choice->name + (choice->instrument ? " (instrument)" : " (effect)") + " - drag onto a track, or double-click to add";
+        return choice->name + (choice->instrument ? " (instrument)" : choice->midiEffect ? " (MIDI effect: plays before the instrument)" : " (effect)") +
+               " - drag onto a track, or double-click to add";
     }
 
     BrowserPanel& browser_;

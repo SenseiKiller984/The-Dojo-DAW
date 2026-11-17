@@ -319,6 +319,40 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **The power base**: two 40 W amplifiers into 4 ohms on unregulated +-32 V rails (under 0.5 % THD at the rated 40 W, rounding off about 3 dB above, the rails sagging on long loud passages) into four 10-inch speakers (a pair per side) or two 12-inch ones (darker), about 30 Hz - 15 kHz; or **Line Out**: the umbilical's 0 dBu signals, as when recording it direct. **Master** trims the output.
   - The display shows the keyboard with the sounding keys, the LED and the loop's state.
 
+**MIDI effects** (a group of their own in the browser): they change the MIDI on its way to the instrument.
+- **Where they go**:
+  - On an **instrument track** they sit before the instrument, in the order added. The chain always reads MIDI effects, then the instrument, then the audio effects. The Devices panel's arrows keep that order, a new instrument replaces the old one after the MIDI effects, and preset chains keep it too.
+  - On a **MIDI track** they change the MIDI it plays to its instrument track (MIDI Output).
+  - Dropped anywhere else, a MIDI effect gets a MIDI track of its own. They don't go into insert loops.
+  - They pass audio through untouched and add no delay. An instrument's multi-out busses and their delay compensation find the instrument behind them.
+- **Arpeggiator**: plays the held notes one after another.
+  - **Style**: Up, Down, Up/Down, Down/Up, Converge, Diverge, As Played, Random or Chord (all at once).
+  - **Rate**: 1/1 to 1/32, straight, dotted or triplet, synced to the song. While it plays, steps land on its grid, after a locate or a loop too. Without the transport the clock runs at the tempo, starting with the first note. **Free Rate** sets the rate in Hz instead.
+  - **Gate** (5 - 200 % of a step: legato above 100 %), **Octaves** (1 - 4) and **Swing** (every second step later; 100 % is three quarters of the pair).
+  - **Repeats** (each step 1 - 8 times), **Velocity** as played or fixed, **Hold** (the notes play on after the keys are let go, until a new chord) and **Retrigger** (every new note restarts the pattern).
+  - Stopping the transport ends what plays. The display shows the pattern and the step playing.
+- **Chord Generator**: every note plays a chord.
+  - **Shape**: Major, Minor, Dim, Aug, Sus2, Sus4, 6, m6, 7, Maj7, m7, m7b5, Dim7, 9, Maj9, m9, Add9, Power or Octave. Or **Custom**: up to six shifts of -24 to +24 semitones.
+  - **Diatonic** mode builds the chord from the key's own notes (Triad, Seventh, Ninth, Sus2, Sus4 or Power on each scale degree), so a whole progression stays in key.
+  - **Inversion**, **Voicing** (close, drop 2, spread) and the **velocity** of the added notes.
+  - **Strum** (0 - 100 ms between the notes, up or down). Letting go before the strum ends cancels the notes not yet played.
+  - Releasing a key releases exactly its chord. A note two chords share sounds until both let it go.
+- **Scale**: keeps notes in a key.
+  - **Root** and **Scale**: major, minor (natural, harmonic, melodic), the modes, major and minor pentatonic, blues, whole tone, diminished, Phrygian dominant, Hungarian minor, Hirajoshi, In Sen and chromatic.
+  - **Mode**:
+    - **Nearest**: a note off the scale goes to the closer scale note; a tie goes down.
+    - **Up** or **Down**.
+    - **Remove**: notes off the scale are dropped.
+    - **White Keys**: the white keys play the scale's degrees in order from middle C (the root), and the black keys are silent.
+  - **Transpose** (semitones, before the mapping, so the result stays in key), **Shift** (scale degrees) and **Octave**.
+  - A note's release and aftertouch follow wherever the note went.
+- **MIDI Filter**: lets through only what you want.
+  - A note range (or everything outside it) and a velocity range; velocities scaled and offset.
+  - One input channel (or all); everything out on one channel (or its own).
+  - Notes, controllers, pitch bend, aftertouch, program changes and system messages each on or off.
+  - A note let through is always released, whatever changes while it is held. All-notes-off always passes.
+  - The display shows the ranges and a lamp per kind of message: green when one gets through, red when one is held back.
+
 **Automation and export**
 - **Spline automation lanes** for volume, pan, sends and every device or plug-in parameter (A on the track header, or right-click > Add Automation Lane).
 - **Export** (Ctrl+R): offline (faster than real time) or real-time bounce, **WAV** (16/24/32-bit float), **FLAC**, **MP3** (LAME, 128–320 kbps), the mix and/or **stems** (one file per track). An offline export switches devices to their offline settings first (e.g. The Glue's and the Soft Clipper's 8x oversampling) and re-aligns the delay compensation for their new latency.
@@ -501,7 +535,8 @@ src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue,
               Gate, Expander, De-Esser, Soft Clipper, Multiband Dynamics, reverb, Plate Reverb,
               delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux, Studer A800 tape,
               EMI TG12345 and Harrison 4032 consoles, pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
-              Operator, Meld, Analog, Drift, Rhodes Suitcase 73 Mk II, Sampler, Drum Rack, Impulse
+              Operator, Meld, Analog, Drift, Rhodes Suitcase 73 Mk II, Sampler, Drum Rack, Impulse; MIDI effects:
+              Arpeggiator, Chord Generator, Scale, MIDI Filter
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),

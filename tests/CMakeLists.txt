@@ -34,6 +34,7 @@ add_executable(dojo_tests
     LatencyDisplayTests.cpp
     LfoTests.cpp
     LimiterTests.cpp
+    MidiEffectTests.cpp
     PluginTests.cpp
     PreferencesTests.cpp
     PresetChainTests.cpp

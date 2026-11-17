@@ -18,6 +18,7 @@
 #include "devices/Instruments.h"
 #include "devices/LfoDevice.h"
 #include "devices/Meld.h"
+#include "devices/MidiEffects.h"
 #include "devices/Operator.h"
 #include "devices/PlateReverb.h"
 #include "devices/RhodesSuitcase.h"
@@ -44,6 +45,10 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {AnalogSynth::kTypeId, "Analog", "Synth", true},
         {DriftSynth::kTypeId, "Drift", "Synth", true},
         {RhodesSuitcase::kTypeId, "1980s Rhodes Suitcase 73 Mk II", "Keys", true, "rhodes electric piano ep suitcase mark tine keys"},
+        {Arpeggiator::kTypeId, "Arpeggiator", "MIDI", false, "arp arpeggio pattern sequence up down hold latch midi effect", true},
+        {ChordGenerator::kTypeId, "Chord Generator", "MIDI", false, "chords harmony strum diatonic triad midi effect", true},
+        {ScaleDevice::kTypeId, "Scale", "MIDI", false, "key remapper quantize snap mode pentatonic white keys midi effect", true},
+        {MidiFilter::kTypeId, "MIDI Filter", "MIDI", false, "note range velocity channel filter split midi effect", true},
         {Equaliser::kTypeId, "EQ", "EQ", false},
         {ChannelEq::kTypeId, "Channel EQ", "EQ", false},
         {AutoFilter::kTypeId, "Auto Filter", "Filter", false},
@@ -95,6 +100,14 @@ bool isBuiltinType(const juce::String& type)
 
 std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& type)
 {
+    if (type == Arpeggiator::kTypeId)
+        return std::make_unique<Arpeggiator>();
+    if (type == ChordGenerator::kTypeId)
+        return std::make_unique<ChordGenerator>();
+    if (type == ScaleDevice::kTypeId)
+        return std::make_unique<ScaleDevice>();
+    if (type == MidiFilter::kTypeId)
+        return std::make_unique<MidiFilter>();
     if (type == Equaliser::kTypeId)
         return std::make_unique<Equaliser>();
     if (type == ChannelEq::kTypeId)

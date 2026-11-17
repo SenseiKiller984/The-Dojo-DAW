@@ -2,6 +2,7 @@
 
 #include "devices/Impulse.h"
 #include "devices/Instruments.h"
+#include "ui/DeviceActions.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <cmath>
@@ -790,10 +791,10 @@ bool StepSequencer::usesDrumRack() const
 {
     if (!clip_.isValid())
         return false;
-    const auto devices = session::Session::getDevices(clip_.getParent());
-    if (devices.empty())
+    const auto instrument = deviceActions::findInstrument(clip_.getParent());
+    if (!instrument.isValid())
         return false;
-    const auto type = session::device::getType(devices.front());
+    const auto type = session::device::getType(instrument);
     return type == devices::DrumRack::kTypeId || type == devices::Impulse::kTypeId;
 }
 
@@ -808,8 +809,7 @@ juce::String StepSequencer::rowName(int row) const
     juce::String name = juce::MidiMessage::getMidiNoteName(pitch, true, true, 3);
     if (usesDrumRack())
     {
-        const auto devices = session::Session::getDevices(clip_.getParent());
-        if (auto node = project_.getDevices().findNode(session::device::getId(devices.front())))
+        if (auto node = project_.getDevices().findNode(session::device::getId(deviceActions::findInstrument(clip_.getParent()))))
         {
             if (auto* rack = dynamic_cast<devices::DrumRack*>(&node->getProcessor()))
                 if (const auto sample = rack->getPadSample(row))

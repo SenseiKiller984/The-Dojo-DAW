@@ -208,7 +208,7 @@ juce::ValueTree addChain(session::Project& project, plugins::PluginManager& plug
         }
         else
         {
-            device = session.addDevice(chainOwner, choice->type, choice->name);
+            device = session.addDevice(chainOwner, choice->type, choice->name, deviceActions::insertionIndex(chainOwner, *choice));
             if (choice->descriptionXml.isNotEmpty())
                 device.setProperty(session::ids::description, choice->descriptionXml, &session.getUndoManager());
         }

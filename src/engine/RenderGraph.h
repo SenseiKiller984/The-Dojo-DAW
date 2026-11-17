@@ -238,7 +238,8 @@ struct RenderTrack
     bool receivesLiveMidi = false;
 
     // Processing
-    std::vector<RenderDevice> devices; ///< instrument first on instrument tracks
+    std::vector<RenderDevice> devices; ///< on instrument tracks: its MIDI effects, the instrument, its audio effects
+    int instrumentIndex = -1;          ///< which device is the instrument (-1: none)
     bool needsPreFaderCopy = false;    ///< some bus pulls a pre-fader send from this track
     /** Some bus pulls a post-fader send from this track, and the track has a compensation delay: the
         send is taken before that delay (the bus delays it to its own input time). */

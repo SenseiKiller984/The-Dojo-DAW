@@ -16,6 +16,7 @@ struct BuiltinDeviceInfo
     juce::String category; ///< "Instrument", "Dynamics", "EQ", "Space", "Pitch"
     bool isInstrument = false;
     juce::String keywords = {}; ///< more words the browser's search finds it by
+    bool isMidiEffect = false;  ///< plays before the instrument, on its MIDI (see MidiEffect)
 };
 
 /** Every native device, in browser order. */

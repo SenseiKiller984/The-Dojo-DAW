@@ -3,6 +3,7 @@
 #include "devices/DeviceRegistry.h"
 #include "ui/EditActions.h"
 
+#include <algorithm>
 #include <map>
 
 namespace dojo::ui::deviceActions
@@ -17,7 +18,7 @@ std::vector<DeviceChoice> getNativeChoices()
 {
     std::vector<DeviceChoice> choices;
     for (const auto& info : devices::getBuiltinDevices())
-        choices.push_back({info.type, info.name, info.category, info.isInstrument, {}, {}, info.keywords});
+        choices.push_back({info.type, info.name, info.category, info.isInstrument, {}, {}, info.keywords, info.isMidiEffect});
     return choices;
 }
 
@@ -82,9 +83,77 @@ bool isInstrumentDevice(const juce::ValueTree& device)
     return false;
 }
 
+bool isMidiEffectDevice(const juce::ValueTree& device)
+{
+    const auto* info = devices::findBuiltinDevice(session::device::getType(device));
+    return info != nullptr && info->isMidiEffect;
+}
+
+juce::ValueTree findInstrument(const juce::ValueTree& owner)
+{
+    for (const auto& device : session::Session::getDevices(owner))
+        if (isInstrumentDevice(device))
+            return device;
+    return {};
+}
+
+namespace
+{
+/** Where a device goes in a chain's order: MIDI effects, the instrument, audio effects. */
+int rankOf(const juce::ValueTree& device)
+{
+    return isMidiEffectDevice(device) ? 0 : isInstrumentDevice(device) ? 1 : 2;
+}
+
+/** How many MIDI effects lead the chain (where an instrument or the next MIDI effect goes). */
+int leadingMidiEffects(const juce::ValueTree& owner)
+{
+    int count = 0;
+    for (const auto& device : session::Session::getDevices(owner))
+    {
+        if (!isMidiEffectDevice(device))
+            break;
+        ++count;
+    }
+    return count;
+}
+} // namespace
+
+int insertionIndex(const juce::ValueTree& owner, const DeviceChoice& choice)
+{
+    return choice.midiEffect || choice.instrument ? leadingMidiEffects(owner) : -1;
+}
+
+bool canMoveDevice(const std::vector<juce::ValueTree>& devices, int from, int to)
+{
+    const int count = static_cast<int>(devices.size());
+    if (from < 0 || from >= count || to < 0 || to >= count)
+        return false;
+    std::vector<int> ranks;
+    for (const auto& device : devices)
+        ranks.push_back(rankOf(device));
+    const int moved = ranks[static_cast<std::size_t>(from)];
+    ranks.erase(ranks.begin() + from);
+    ranks.insert(ranks.begin() + to, moved);
+    return std::is_sorted(ranks.begin(), ranks.end());
+}
+
 juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice)
 {
     const bool isMaster = owner.hasType(session::ids::master);
+
+    if (choice.midiEffect)
+    {
+        // MIDI effects work on a track's MIDI: an instrument track's or a MIDI track's. Anywhere
+        // else they get a MIDI track of their own (which plays the instrument track chosen for it).
+        const auto kind = owner.hasType(session::ids::track) ? session::track::getKind(owner) : session::TrackKind::audio;
+        if (!owner.hasType(session::ids::track) || (kind != session::TrackKind::instrument && kind != session::TrackKind::midi))
+            owner = actions::addTrack(session, editor, session::TrackKind::midi);
+        else
+            session.beginTransaction("Add " + choice.name);
+        editor.selectTrack(session::track::getId(owner));
+        return session.addDevice(owner, choice.type, choice.name, leadingMidiEffects(owner));
+    }
 
     if (!isMaster)
     {
@@ -114,19 +183,19 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
         session.beginTransaction("Add " + choice.name);
     }
 
-    // Instruments lead the chain; a new instrument replaces the track's instrument (as one undo step).
+    // Instruments go after the MIDI effects; a new instrument replaces the track's instrument (as one
+    // undo step).
     int index = -1;
     if (choice.instrument)
     {
-        index = 0;
-        const auto devices = session::Session::getDevices(owner);
-        if (!isMaster && !devices.empty() && isInstrumentDevice(devices.front()))
+        if (const auto old = findInstrument(owner); !isMaster && old.isValid())
         {
             // A track still named after its instrument follows the new one.
-            if (session::track::getName(owner) == session::device::getName(devices.front()))
+            if (session::track::getName(owner) == session::device::getName(old))
                 session::track::setName(owner, choice.name, &session.getUndoManager());
-            session.removeDevice(devices.front());
+            session.removeDevice(old);
         }
+        index = leadingMidiEffects(owner);
     }
 
     auto device = session.addDevice(owner, choice.type, choice.name, index);
@@ -137,7 +206,7 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
 
 bool fitsInLoop(const DeviceChoice& choice)
 {
-    return !choice.instrument && choice.type != "builtin:lfo";
+    return !choice.instrument && !choice.midiEffect && choice.type != "builtin:lfo";
 }
 
 juce::ValueTree findOrAddBus(session::Session& session, const juce::String& name)
@@ -188,13 +257,15 @@ juce::ValueTree addDeviceToLoop(session::Session& session, juce::ValueTree host,
     return device;
 }
 
-void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, bool includeInstruments,
+void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, MenuScope scope,
                         std::function<void(const DeviceChoice&)> onChosen)
 {
+    const auto wanted = [scope](const DeviceChoice& choice)
+    { return choice.instrument ? scope.instruments : choice.midiEffect ? scope.midiEffects : scope.audioEffects; };
     std::map<juce::String, juce::PopupMenu> nativeByCategory;
     for (const auto& choice : getNativeChoices())
     {
-        if (choice.instrument && !includeInstruments)
+        if (!wanted(choice))
             continue;
         nativeByCategory[choice.category].addItem(choice.name, [onChosen, choice] { onChosen(choice); });
     }
@@ -206,7 +277,7 @@ void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, 
     std::map<juce::String, juce::PopupMenu> pluginsByVendor;
     for (const auto& choice : getPluginChoices(plugins))
     {
-        if (choice.instrument && !includeInstruments)
+        if (!wanted(choice))
             continue;
         pluginsByVendor[choice.category].addItem(choice.name, [onChosen, choice] { onChosen(choice); });
     }

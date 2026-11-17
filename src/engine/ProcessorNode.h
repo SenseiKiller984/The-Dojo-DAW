@@ -69,7 +69,11 @@ public:
     [[nodiscard]] bool isBypassed() const noexcept { return bypassed_.load(std::memory_order_relaxed); }
 
     [[nodiscard]] int getLatencySamples() const noexcept { return processor_->getLatencySamples(); }
-    [[nodiscard]] bool isInstrument() const noexcept { return mainInputs_ == 0 && processor_->acceptsMidi(); }
+    /** An instrument: MIDI in, sound out and no audio in (a MIDI effect passes audio through). */
+    [[nodiscard]] bool isInstrument() const noexcept
+    {
+        return mainInputs_ == 0 && mainOutputs_ > 0 && processor_->acceptsMidi() && !processor_->isMidiEffect();
+    }
     [[nodiscard]] bool hasSidechainInput() const noexcept { return sidechainInputs_ > 0; }
     [[nodiscard]] int getNumAuxOutputChannels() const noexcept { return auxOutputs_; }
 

@@ -69,6 +69,8 @@ add_library(dojo_ui STATIC
     devices/HardwarePainting.h
     devices/HarrisonEditors.cpp
     devices/HarrisonEditors.h
+    devices/MidiEffectEditors.cpp
+    devices/MidiEffectEditors.h
     devices/MoreDeviceEditors.cpp
     devices/MoreDeviceEditors.h
     devices/PagedEditor.h
