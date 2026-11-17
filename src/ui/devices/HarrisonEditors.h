@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/devices/ConsoleLookAndFeel.h"
 #include "ui/devices/DeviceEditors.h"
 #include "ui/devices/PagedEditor.h"
 
@@ -35,16 +36,22 @@ struct Connection
 } // namespace harrison
 
 /**
-    The Harrison 4032's editor: the controls of the module and revision it is set to, in pages
-    (rebuilt when the module, the revision, the format or the pan mode changes). The display beside
-    them shows the revision's circuits, the EQ and filter curve, the lamps and the output meters; the
-    Routing page has the 32 bus switches, the Aux and Cue pages connect their sends to busses, and the
-    Master Section picks its monitor source.
+    The Harrison 4032's editor, looking like the desk: a black panel between walnut end cheeks, a
+    leather armrest along the front, grey knobs with coloured caps and illuminated switches (see
+    ConsoleLookAndFeel). The controls of the module and revision it is set to come in pages (rebuilt
+    when the module, the revision, the format or the pan mode changes). Beside them: the wooden meter
+    bridge with the outputs' cream VU meters and the revision's badge, the revision's circuits, the EQ
+    and filter curve, the lamps, and the long fader. The Routing page has the 32 bus switches, the Aux
+    and Cue pages connect their sends to busses, and the Master Section picks its monitor source.
 */
 class HarrisonEditor final : public juce::Component, private juce::Timer
 {
 public:
+    static constexpr int kCheekWidth = 10; ///< the walnut end cheeks
+    static constexpr int kArmrestHeight = 14;
+
     HarrisonEditor(devices::Harrison4032& console, const DeviceEditorContext& context);
+    ~HarrisonEditor() override;
 
     [[nodiscard]] static std::vector<PagedEditor::Page> pagesFor(devices::Harrison4032& console, const DeviceEditorContext& context,
                                                                  int module, int revision, bool mono, int panMode);
@@ -52,13 +59,17 @@ public:
 
     [[nodiscard]] PagedEditor& getPages() noexcept { return *pages_; }
     void resized() override;
+    void paint(juce::Graphics& g) override;
 
 private:
     void timerCallback() override;
     void rebuild();
+    /** The armrest's height: what the controls leave of the editor's height, up to kArmrestHeight. */
+    [[nodiscard]] int armrestHeight() const noexcept;
 
     devices::Harrison4032& console_;
     DeviceEditorContext context_;
+    ConsoleLookAndFeel look_{ConsoleLookAndFeel::Style::harrison};
     std::unique_ptr<PagedEditor> pages_;
     std::array<int, 4> shown_{-1, -1, -1, -1};
 };

@@ -305,11 +305,17 @@ void TapeA800::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) 
     double* channels[2] = {buffer.getWritePointer(0), buffer.getWritePointer(1)};
 
     // The transport (Auto Input switches the tape paths to Input while it is stopped).
-    bool rolling = false;
+    bool rolling = false, recording = false;
     if (auto* head = getPlayHead())
         if (const auto position = head->getPosition())
+        {
             rolling = position->getIsPlaying();
+            recording = rolling && position->getIsRecording();
+            if (const auto seconds = position->getTimeInSeconds())
+                tapeSeconds_.store(*seconds, std::memory_order_relaxed);
+        }
     rolling_.store(rolling, std::memory_order_relaxed);
+    recording_.store(recording, std::memory_order_relaxed);
     int target = path_->getIndex();
     if (autoInput_->get() && !rolling && (target == sync || target == repro))
         target = input;

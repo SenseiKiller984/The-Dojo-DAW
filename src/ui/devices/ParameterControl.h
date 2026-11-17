@@ -54,6 +54,14 @@ public:
     static constexpr int kWidth = 64;
     static constexpr int kHeight = 72;
 
+    /** Colours a look-and-feel can give the caption and the value (a hardware panel's printing);
+        otherwise the theme's. */
+    enum ColourIds
+    {
+        captionColourId = 0x2d0c0101,
+        valueColourId = 0x2d0c0102,
+    };
+
 private:
     enum class Style
     {

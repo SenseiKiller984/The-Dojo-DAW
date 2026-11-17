@@ -42,7 +42,9 @@ src/
   ui/       look-and-feel and themes (theme/: a palette the active theme writes; switching rebuilds
             the main component, keeping the view), Preferences + PreferencesWindow,
             MainComponent (commands, menus, document actions), arranger, mixer,
-            devices panel + device editors, clip editor (piano roll, step sequencer, inspector),
+            devices panel + device editors (hardware replicas draw their machine with
+            HardwarePainting: meters, lamps, wood, leather, faders; consoles set a
+            ConsoleLookAndFeel on their editor), clip editor (piano roll, step sequencer, inspector),
             browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
   app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
@@ -181,6 +183,7 @@ DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
 - **Undo.** Every UI gesture opens one transaction, so a fader drag, a clip move or a recording is one undo step. Removing a device stores its latest state in the detached tree, so undo restores it exactly.
 - **Change tracking.** Components observe the tree. Those listeners also drive graph compilation, the unsaved-changes flag and the window title.
 - **Devices.** `DeviceManager` owns the live processor behind every DEVICE (created on demand, restored from its saved state, prepared at the device's rate). Parameter changes made in device editors or plug-in windows mark the project as changed; states are written into the tree on save.
+- **Content length.** `Session::getContentEnd(owner)` says how far an owner's material runs: the whole arrangement for the master, a track's last clip end, or for a bus or folder the latest end of whatever feeds it (routing, membership, sends, MIDI, aux sources, recursively; inactive tracks feed nothing). The tape machine's deck sizes its reels with it. Devices read the transport's time from the play head on the audio thread and publish it in an atomic (`TapeA800::getTapeSeconds`); the deck reads that and never touches the play head itself.
 - **Files.** A session is saved as XML (`.dojo`, format version 2; version 1 files still load). Clip paths are stored both absolute and relative to the session file, and the relative path wins on load.
 - **Audio.** `AudioAssetCache` decodes files up to 10 minutes into memory and streams longer ones from disk, with a min/max peak overview for drawing either way.
 

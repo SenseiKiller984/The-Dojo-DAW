@@ -249,7 +249,9 @@ void ParameterControl::paint(juce::Graphics& g)
         return;
 
     auto area = getLocalBounds();
-    g.setColour(theme::colour::textSecondary);
+    auto& look = getLookAndFeel();
+    const auto colourOf = [&look](int id, juce::Colour fallback) { return look.isColourSpecified(id) ? look.findColour(id) : fallback; };
+    g.setColour(colourOf(captionColourId, theme::colour::textSecondary));
     g.setFont(theme::label(9.0f));
     g.drawText(caption_.toUpperCase(), area.removeFromTop(14), juce::Justification::centred, true);
 
@@ -260,7 +262,7 @@ void ParameterControl::paint(juce::Graphics& g)
         const auto unit = parameter_.getLabel().trim();
         if (unit.isNotEmpty() && !text.endsWith(unit))
             text << " " << unit;
-        g.setColour(theme::colour::textPrimary);
+        g.setColour(colourOf(valueColourId, theme::colour::textPrimary));
         g.setFont(theme::mono(10.0f));
         g.drawText(text, area.removeFromBottom(14), juce::Justification::centred, true);
     }

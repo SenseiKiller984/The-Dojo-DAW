@@ -3,7 +3,10 @@
 #include "devices/PlateReverb.h"
 #include "devices/StudioDynamics.h"
 #include "devices/TapeA800.h"
+#include "session/Project.h"
+#include "session/Session.h"
 #include "ui/devices/PagedEditor.h"
+#include "ui/devices/TapeDeck.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <array>
@@ -14,6 +17,8 @@ namespace dojo::ui
 {
 namespace
 {
+constexpr int kTapeDeckWidth = 440;
+
 using Page = PagedEditor::Page;
 using Parameters = std::vector<std::pair<juce::String, juce::String>>;
 
@@ -432,127 +437,6 @@ private:
 };
 
 //==================================================================================================
-/** The tape machine: its reels (turning while the transport rolls through tape), which path plays,
-    the tape settings, and a VU meter per channel. */
-class TapeDisplay final : public juce::Component, private juce::Timer
-{
-public:
-    explicit TapeDisplay(devices::TapeA800& tape)
-        : tape_(tape)
-    {
-        startTimerHz(30);
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        using namespace theme;
-        const auto area = getLocalBounds().toFloat();
-        paintPanel(g, area, "A800");
-        auto content = area.reduced(8.0f, 4.0f).withTrimmedTop(12.0f);
-
-        // Reels and the tape path over the heads.
-        const auto reels = content.removeFromTop(std::min(content.getHeight() * 0.5f, content.getWidth() * 0.42f));
-        const float radius = std::min(reels.getHeight() * 0.48f, reels.getWidth() * 0.22f);
-        const juce::Point<float> left(reels.getX() + reels.getWidth() * 0.26f, reels.getCentreY());
-        const juce::Point<float> right(reels.getRight() - reels.getWidth() * 0.26f, reels.getCentreY());
-        const juce::Point<float> heads(reels.getCentreX(), reels.getBottom() - 2.0f);
-        g.setColour(juce::Colour(0xff6b4a2b));
-        g.drawLine({left.translated(0.0f, radius * 0.62f), heads}, 1.6f);
-        g.drawLine({heads, right.translated(0.0f, radius * 0.62f)}, 1.6f);
-        g.setColour(colour::textMuted);
-        g.fillRoundedRectangle(juce::Rectangle<float>(18.0f, 6.0f).withCentre(heads), 1.5f);
-        for (int reel = 0; reel < 2; ++reel)
-        {
-            const auto centre = reel == 0 ? left : right;
-            const float pack = reel == 0 ? 0.78f : 0.6f; // (tape wound on each reel)
-            g.setColour(juce::Colour(0xff3a2a1c));
-            g.fillEllipse(juce::Rectangle<float>(radius * 2.0f * pack, radius * 2.0f * pack).withCentre(centre));
-            g.setColour(juce::Colour(0xffb9bcc2).withAlpha(0.85f));
-            g.drawEllipse(juce::Rectangle<float>(radius * 2.0f, radius * 2.0f).withCentre(centre), 1.4f);
-            for (int spoke = 0; spoke < 3; ++spoke)
-            {
-                const float a = angle_ + static_cast<float>(spoke) * 2.0943951f;
-                const juce::Point<float> tip(centre.x + radius * 0.92f * std::sin(a), centre.y - radius * 0.92f * std::cos(a));
-                g.drawLine({centre, tip}, 2.0f);
-            }
-            g.setColour(colour::textPrimary);
-            g.fillEllipse(juce::Rectangle<float>(6.0f, 6.0f).withCentre(centre));
-        }
-
-        // The settings, and which path plays.
-        content.removeFromTop(4.0f);
-        const int speed = tape_.speed_->getIndex();
-        const auto emphasis = devices::TapeA800::emphasisOf(speed, tape_.standard_->getIndex());
-        g.setColour(colour::textSecondary);
-        g.setFont(mono(9.0f));
-        g.drawText(juce::String(devices::TapeA800::inchesPerSecond(speed), speed == 0 ? 1 : 0) + " IPS  " + emphasis.name + "  " +
-                       juce::String(devices::TapeA800::formulaOf(tape_.formula_->getIndex()).name).toUpperCase() + "  " +
-                       tape_.calibration_->getCurrentChoiceName(),
-                   content.removeFromTop(13.0f), juce::Justification::centred, false);
-        auto lamps = content.removeFromTop(16.0f);
-        const int active = tape_.getActivePath();
-        const float lampWidth = lamps.getWidth() / 4.0f;
-        g.setFont(label(8.5f));
-        for (int p = 0; p < 4; ++p)
-        {
-            const auto lamp = lamps.removeFromLeft(lampWidth).reduced(2.0f, 1.0f);
-            g.setColour(p == active ? colour::accent : colour::control);
-            g.fillRoundedRectangle(lamp, 2.0f);
-            g.setColour(p == active ? colour::textPrimary : colour::textMuted);
-            g.drawText(juce::StringArray{"INPUT", "SYNC", "REPRO", "THRU"}[p], lamp, juce::Justification::centred, false);
-        }
-
-        // VU meters: -20 .. +3 VU.
-        content.removeFromTop(4.0f);
-        const float rowHeight = std::min(12.0f, content.getHeight() / 2.0f - 2.0f);
-        for (int ch = 0; ch < 2; ++ch)
-        {
-            auto row = content.removeFromTop(rowHeight + 2.0f).withHeight(rowHeight);
-            g.setColour(colour::textMuted);
-            g.setFont(label(8.0f));
-            g.drawText(ch == 0 ? "L" : "R", row.removeFromLeft(10.0f), juce::Justification::centredLeft, false);
-            const auto readout = row.removeFromRight(34.0f);
-            g.setColour(colour::control);
-            g.fillRect(row);
-            const auto xOf = [&](double vu) { return row.getX() + row.getWidth() * static_cast<float>((std::clamp(vu, -20.0, 3.0) + 20.0) / 23.0); };
-            const float zero = xOf(0.0);
-            const float level = xOf(vu_[static_cast<std::size_t>(ch)]);
-            g.setColour(colour::meterLow);
-            g.fillRect(juce::Rectangle<float>(row.getX(), row.getY(), std::min(level, zero) - row.getX(), row.getHeight()));
-            if (level > zero)
-            {
-                g.setColour(colour::meterClip);
-                g.fillRect(juce::Rectangle<float>(zero, row.getY(), level - zero, row.getHeight()));
-            }
-            g.setColour(colour::textPrimary.withAlpha(0.6f));
-            g.drawVerticalLine(juce::roundToInt(zero), row.getY(), row.getBottom());
-            g.setColour(colour::textSecondary);
-            g.setFont(mono(8.5f));
-            g.drawText(vu_[static_cast<std::size_t>(ch)] <= -40.0 ? juce::String("-inf") : juce::String(vu_[static_cast<std::size_t>(ch)], 1), readout,
-                       juce::Justification::centredRight, false);
-        }
-    }
-
-    /** The reels' angle (radians), for tests. */
-    [[nodiscard]] float getReelAngle() const noexcept { return angle_; }
-
-private:
-    void timerCallback() override
-    {
-        const int active = tape_.getActivePath();
-        if (tape_.isRolling() && (active == devices::TapeA800::sync || active == devices::TapeA800::repro))
-            angle_ = std::fmod(angle_ + 0.05f * static_cast<float>(devices::TapeA800::inchesPerSecond(tape_.speed_->getIndex())), 6.2831853f);
-        for (int ch = 0; ch < 2; ++ch)
-            vu_[static_cast<std::size_t>(ch)] = static_cast<double>(tape_.getVuDb(ch));
-        repaint();
-    }
-
-    devices::TapeA800& tape_;
-    float angle_ = 0.0f;
-    std::array<double, 2> vu_{-100.0, -100.0};
-};
-
-//==================================================================================================
 // Pages
 
 std::vector<Page> gluePages(devices::TheGlue& glue)
@@ -627,17 +511,29 @@ std::vector<Page> softClipperPages(devices::SoftClipper& clipper)
              180}};
 }
 
-std::vector<Page> tapePages(devices::TapeA800& tape)
+std::vector<Page> tapePages(devices::TapeA800& tape, const DeviceEditorContext& context)
 {
-    const auto display = [&tape] { return std::unique_ptr<juce::Component>(std::make_unique<TapeDisplay>(tape)); };
+    // The tape is as long as what the machine plays (the arrangement on the master, the track's
+    // material on a track), asked again as the session changes.
+    auto& session = context.project.getSession();
+    const auto device = context.device;
+    const auto owner = context.owner;
+    std::function<double()> length = [&session, &tape, device, owner]
+    {
+        auto on = session::Session::getDeviceOwner(device);
+        if (!on.isValid())
+            on = owner;
+        return tape::lengthFor(session, on, devices::TapeA800::inchesPerSecond(tape.speed_->getIndex()));
+    };
+    const auto display = [&tape, length] { return std::unique_ptr<juce::Component>(std::make_unique<TapeDeck>(tape, length)); };
     return {{"Tape",
              ids({"path|Path", "autoinput|Auto Input", "speed|Speed", "eq|EQ", "formula|Formula", "cal|Cal Level", "input|Input", "output|Output"}),
              display,
-             240},
+             kTapeDeckWidth},
             {"Alignment",
              ids({"bias|Bias", "hf|Repro HF", "lf|Repro LF", "noise|Noise", "group|Group", "osrealtime|Real-time", "osoffline|Offline"}),
              display,
-             240}};
+             kTapeDeckWidth}};
 }
 
 std::vector<Page> plateReverbPages(devices::PlateReverb& plate)
@@ -793,7 +689,7 @@ void GlueVuMeter::paint(juce::Graphics& g)
 
 //==================================================================================================
 
-std::unique_ptr<juce::Component> createStudioDeviceEditor(juce::AudioProcessor& processor, int& preferredWidth)
+std::unique_ptr<juce::Component> createStudioDeviceEditor(juce::AudioProcessor& processor, const DeviceEditorContext& context, int& preferredWidth)
 {
     if (auto* glue = dynamic_cast<devices::TheGlue*>(&processor))
         return paged(processor, gluePages(*glue), preferredWidth);
@@ -806,7 +702,7 @@ std::unique_ptr<juce::Component> createStudioDeviceEditor(juce::AudioProcessor& 
     if (auto* plate = dynamic_cast<devices::PlateReverb*>(&processor))
         return paged(processor, plateReverbPages(*plate), preferredWidth);
     if (auto* tape = dynamic_cast<devices::TapeA800*>(&processor))
-        return paged(processor, tapePages(*tape), preferredWidth);
+        return paged(processor, tapePages(*tape, context), preferredWidth);
     return nullptr;
 }
 

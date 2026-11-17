@@ -1,6 +1,7 @@
 #include "ui/devices/ConsoleEditors.h"
 
 #include "devices/ConsoleTG12345.h"
+#include "ui/devices/HardwarePainting.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <algorithm>
@@ -25,46 +26,166 @@ Parameters ids(std::initializer_list<const char*> idsAndCaptions)
     return result;
 }
 
+// The desk's colours.
+const juce::Colour kGrey{0xffa3a7a5};        // the metalwork
+const juce::Colour kMeterPanel{0xff8a8f8d};  // the meter panel
+const juce::Colour kInk{0xff1b1c1c};
+const juce::Colour kWhiteFace{0xfff8f6ef};
+const juce::Colour kCream{0xfff0e9d6};
+const juce::Colour kRed{0xffd23c2e};
+constexpr float kFaderWidth = 42.0f;
+
+/** A small white-faced meter in dBu: -20 .. +26, the +4 line-up and the drivers' +24 marked. */
+hardware::MeterFace dbuFace(const juce::String& caption)
+{
+    hardware::MeterFace face;
+    face.face = kWhiteFace;
+    face.backlit = false;
+    face.legend = "dBu";
+    face.caption = caption;
+    face.redFrom = (20.0 + 20.0) / 46.0;
+    for (const auto& [dbu, text] : std::initializer_list<std::pair<double, const char*>>{
+             {-20.0, "-20"}, {-10.0, "-10"}, {0.0, "0"}, {4.0, ""}, {10.0, "10"}, {20.0, "20"}, {24.0, ""}})
+        face.marks.push_back({(dbu + 20.0) / 46.0, text, dbu >= 20.0});
+    return face;
+}
+
+/** The compressor's gain reduction, resting on the right (0 dB) and swinging left. */
+hardware::MeterFace reductionFace()
+{
+    hardware::MeterFace face;
+    face.face = kWhiteFace;
+    face.backlit = false;
+    face.legend = "GR dB";
+    for (const auto& [db, text] : std::initializer_list<std::pair<double, const char*>>{
+             {20.0, "20"}, {15.0, ""}, {10.0, "10"}, {5.0, "5"}, {2.0, ""}, {0.0, "0"}})
+        face.marks.push_back({1.0 - db / 20.0, text, false});
+    return face;
+}
+
+/** The main outputs' correlation, -1 (out of phase, red) .. +1. */
+hardware::MeterFace correlationFace()
+{
+    hardware::MeterFace face;
+    face.face = kWhiteFace;
+    face.backlit = false;
+    face.legend = "CORR";
+    for (const auto& [value, text] : std::initializer_list<std::pair<double, const char*>>{
+             {-1.0, "-1"}, {-0.5, ""}, {0.0, "0"}, {0.5, ""}, {1.0, "+1"}})
+        face.marks.push_back({(value + 1.0) * 0.5, text, value < 0.0});
+    return face;
+}
+
 //==================================================================================================
-/** The console's display: the cassette's signal path (lit where it acts), its output meters (dBu),
-    the compressor's gain reduction, the outputs' correlation and the cassette's lamps. */
+/** The cassette's face: its meters, the nameplate, the signal path (lit where it acts), its lamps
+    and its fader. */
 class ConsoleFace final : public juce::Component, private juce::Timer
 {
 public:
     explicit ConsoleFace(Console& console)
         : console_(console)
     {
+        setInterceptsMouseClicks(false, true);
+        const int cassette = console_.getCassette();
+        if (auto* level = dynamic_cast<juce::RangedAudioParameter*>(findParameter(console_, ConsoleEditor::faderFor(cassette))))
+        {
+            hardware::FaderStyle style;
+            style.cap = cassette == Console::mainMix ? kRed : juce::Colour(0xfff1eee6);
+            style.capLine = cassette == Console::mainMix ? juce::Colour(0xfff4f1ea) : juce::Colour(0xff121212);
+            style.slot = juce::Colour(0xff050505);
+            style.scale = kInk;
+            fader_ = std::make_unique<hardware::ParameterFader>(*level, style);
+            addAndMakeVisible(*fader_);
+        }
         startTimerHz(30);
+    }
+
+    [[nodiscard]] hardware::ParameterFader* getFader() const noexcept { return fader_.get(); }
+
+    void resized() override
+    {
+        if (fader_ == nullptr)
+            return;
+        auto content = getLocalBounds().toFloat().reduced(6.0f, 5.0f);
+        const auto strip = content.removeFromRight(kFaderWidth - 6.0f); // (as paint lays it out)
+        fader_->setBounds(strip.withTrimmedTop(12.0f).reduced(0.0f, 1.0f).toNearestInt());
     }
 
     void paint(juce::Graphics& g) override
     {
         using namespace theme;
         const auto area = getLocalBounds().toFloat();
-        g.setColour(colour::meterBackground);
-        g.fillRoundedRectangle(area, 3.0f);
-        auto content = area.reduced(6.0f, 4.0f);
-
-        // The badge: model, cassette, and the cassette's own regulated supply.
-        auto header = content.removeFromTop(13.0f);
+        hardware::paintMetal(g, area, kMeterPanel, 3.0f, true, 77);
+        g.setColour(juce::Colour(0xff595e5c));
+        g.drawRoundedRectangle(area.reduced(0.5f), 3.0f, 1.0f);
+        auto content = area.reduced(6.0f, 5.0f);
         const int cassette = console_.getCassette();
-        g.setFont(label(9.0f));
-        g.setColour(colour::gold);
-        const juce::String model = "TG12345" + juce::String(cassette == Console::microphone ? (console_.isMarkTwo() ? " MK II" : " MK I") : "");
-        g.drawText(model, header, juce::Justification::centredLeft, false);
-        g.setColour(colour::textSecondary);
-        g.drawText(Console::cassetteNames()[cassette].toUpperCase(), header.withTrimmedLeft(78.0f).withTrimmedRight(40.0f),
-                   juce::Justification::centredLeft, true);
-        g.setColour(colour::play);
-        g.fillEllipse(juce::Rectangle<float>(5.0f, 5.0f).withCentre({header.getRight() - 36.0f, header.getCentreY()}));
-        g.setColour(colour::textMuted);
-        g.drawText("REG", header.removeFromRight(30.0f), juce::Justification::centredRight, false);
 
-        // The signal path.
-        content.removeFromTop(3.0f);
-        const auto meters = content.removeFromBottom(46.0f);
+        // The fader's slot plate and its legend.
+        if (fader_ != nullptr)
+        {
+            auto strip = content.removeFromRight(kFaderWidth - 6.0f);
+            content.removeFromRight(4.0f);
+            g.setColour(juce::Colour(0xff7b807e));
+            g.fillRoundedRectangle(strip, 2.5f);
+            hardware::paintEngraved(g, strip.removeFromTop(11.0f), faderLegend(cassette), kInk, label(7.0f));
+        }
+
+        // A row of small white-faced meters.
+        const float meterHeight = std::min(content.getHeight() * 0.38f, 62.0f);
+        auto meters = content.removeFromTop(meterHeight);
+        const bool reduction = cassette == Console::microphone || cassette == Console::group;
+        const bool correlation = cassette == Console::mainMix;
+        const int count = reduction || correlation ? 3 : 2;
+        const float width = (meters.getWidth() - 4.0f * static_cast<float>(count - 1)) / static_cast<float>(count);
+        const auto next = [&] { auto m = meters.removeFromLeft(width); meters.removeFromLeft(4.0f); return m; };
+        hardware::paintNeedleMeter(g, next(), (peak_[0] + 20.0) / 46.0, dbuFace("OUT L"));
+        hardware::paintNeedleMeter(g, next(), (peak_[1] + 20.0) / 46.0, dbuFace("OUT R"));
+        if (reduction)
+            hardware::paintNeedleMeter(g, next(), 1.0 - static_cast<double>(gr_) / 20.0, reductionFace());
+        else if (correlation)
+            hardware::paintNeedleMeter(g, next(), (static_cast<double>(correlation_) + 1.0) * 0.5, correlationFace());
+        content.removeFromTop(5.0f);
+
+        // The nameplate: the model, the cassette, and its own regulated supply.
+        auto plate = content.removeFromTop(19.0f);
+        juce::ColourGradient chrome(juce::Colour(0xffe2e5e4), 0.0f, plate.getY(), juce::Colour(0xff7d8381), 0.0f, plate.getBottom(), false);
+        g.setGradientFill(chrome);
+        g.fillRoundedRectangle(plate, 2.5f);
+        auto black = plate.reduced(1.5f);
+        g.setColour(juce::Colour(0xff121313));
+        g.fillRoundedRectangle(black, 2.0f);
+        black.reduce(6.0f, 0.0f);
+        g.setColour(kCream);
+        g.setFont(sansBold(10.5f).withExtraKerningFactor(0.12f));
+        const juce::String model = "TG12345" + juce::String(cassette == Console::microphone ? (console_.isMarkTwo() ? "  MK II" : "  MK I") : "");
+        g.drawText(model, black, juce::Justification::centredLeft, false);
+        hardware::paintLed(g, {black.getRight() - 3.0f, black.getCentreY()}, 2.6f, juce::Colour(0xff58d26e), true);
+        g.setColour(juce::Colour(0xffb9b6ad));
+        g.setFont(label(7.5f));
+        g.drawText("REG", black.withTrimmedRight(9.0f), juce::Justification::centredRight, false);
+        g.drawText(Console::cassetteNames()[cassette].toUpperCase(), black.withTrimmedLeft(96.0f).withTrimmedRight(30.0f),
+                   juce::Justification::centredLeft, true);
+        content.removeFromTop(6.0f);
+
+        // The lamps (Main: announce; Monitor: talkback, dim, mono, cut), then the signal path.
+        if (cassette == Console::mainMix || cassette == Console::monitor)
+        {
+            auto lamps = content.removeFromBottom(15.0f);
+            content.removeFromBottom(4.0f);
+            if (cassette == Console::mainMix)
+                hardware::paintLamp(g, lamps.removeFromRight(76.0f), kRed, console_.announce_->get(), "ANNOUNCE", 2.0f, 7.0f);
+            else
+            {
+                const float w = lamps.getWidth() / 4.0f;
+                hardware::paintLamp(g, lamps.removeFromLeft(w).reduced(1.5f, 0.0f), kRed, console_.talkback_->get(), "TALKBACK", 2.0f, 7.0f);
+                hardware::paintLamp(g, lamps.removeFromLeft(w).reduced(1.5f, 0.0f), juce::Colour(0xfff2b03a),
+                                    console_.dim_->get() || console_.talkback_->get(), "DIM", 2.0f, 7.0f);
+                hardware::paintLamp(g, lamps.removeFromLeft(w).reduced(1.5f, 0.0f), juce::Colour(0xfff2b03a), console_.mono_->get(), "MONO", 2.0f, 7.0f);
+                hardware::paintLamp(g, lamps.reduced(1.5f, 0.0f), kRed, console_.cut_->get(), "CUT", 2.0f, 7.0f);
+            }
+        }
         paintPath(g, content);
-        paintMeters(g, meters, cassette);
     }
 
 private:
@@ -135,13 +256,13 @@ private:
     void paintPath(juce::Graphics& g, juce::Rectangle<float> area) const
     {
         using namespace theme;
-        const auto font = mono(8.5f);
+        const auto font = label(7.5f);
         g.setFont(font);
         float x = area.getX(), y = area.getY();
         constexpr float height = 14.0f, gap = 9.0f;
         for (const auto& chip : chips())
         {
-            const float width = juce::GlyphArrangement::getStringWidth(font, chip.text) + 8.0f;
+            const float width = juce::GlyphArrangement::getStringWidth(font, chip.text) + 10.0f;
             if (x + width > area.getRight() && x > area.getX())
             {
                 x = area.getX();
@@ -149,100 +270,32 @@ private:
             }
             if (y + height > area.getBottom())
                 break;
+            // A legend: lit where the stage acts, dark where it is switched out.
             const juce::Rectangle<float> box(x, y, width, height);
-            g.setColour(chip.active ? colour::accent.withAlpha(0.22f) : colour::panelRaised);
-            g.fillRoundedRectangle(box, 2.5f);
-            g.setColour(chip.active ? colour::accent : colour::outlineStrong);
-            g.drawRoundedRectangle(box, 2.5f, 1.0f);
-            g.setColour(chip.active ? colour::textPrimary : colour::textMuted);
+            hardware::paintLamp(g, box, kCream, chip.active, {}, 2.0f);
+            g.setFont(font);
+            g.setColour(chip.active ? kInk : juce::Colour(0xff9b9890));
             g.drawText(chip.text, box, juce::Justification::centred, false);
             x += width;
-            g.setColour(colour::textMuted);
+            g.setColour(kInk);
             g.drawText(juce::String::fromUTF8("\xe2\x80\xba"), juce::Rectangle<float>(x, y, gap, height), juce::Justification::centred, false);
             x += gap;
         }
     }
 
-    void paintMeters(juce::Graphics& g, juce::Rectangle<float> area, int cassette) const
+    static juce::String faderLegend(int cassette)
     {
-        using namespace theme;
-        // Output, dBu: -20 .. +26, +4 (0 VU) and +24 (the drivers' maximum) marked.
-        constexpr float low = -20.0f, high = 26.0f;
-        const auto bar = [&](juce::Rectangle<float> row, const juce::String& name, float dbu)
+        switch (cassette)
         {
-            g.setColour(colour::textMuted);
-            g.setFont(label(8.0f));
-            g.drawText(name, row.removeFromLeft(14.0f), juce::Justification::centredLeft, false);
-            const auto track = row.reduced(0.0f, 2.0f);
-            g.setColour(colour::panelRaised);
-            g.fillRect(track);
-            const float fraction = std::clamp((dbu - low) / (high - low), 0.0f, 1.0f);
-            g.setColour(dbu >= 24.0f ? colour::meterClip : dbu >= 4.0f ? colour::meterMid : colour::meterLow);
-            g.fillRect(track.withWidth(track.getWidth() * fraction));
-            for (const float mark : {4.0f, 24.0f})
-            {
-                g.setColour(colour::textSecondary);
-                const float mx = track.getX() + track.getWidth() * (mark - low) / (high - low);
-                g.drawVerticalLine(juce::roundToInt(mx), track.getY() - 1.0f, track.getBottom() + 1.0f);
-            }
-        };
-        auto rows = area;
-        auto labels = rows.removeFromTop(9.0f);
-        g.setColour(colour::textMuted);
-        g.setFont(label(7.5f));
-        const auto at = [&](float dbu) { return labels.getX() + 14.0f + (labels.getWidth() - 14.0f) * (dbu - low) / (high - low); };
-        g.drawText("+4", juce::Rectangle<float>(at(4.0f) - 10.0f, labels.getY(), 20.0f, 9.0f), juce::Justification::centred, false);
-        g.drawText("+24 dBu", juce::Rectangle<float>(at(24.0f) - 28.0f, labels.getY(), 34.0f, 9.0f), juce::Justification::centredRight, false);
-        bar(rows.removeFromTop(9.0f), "L", peak_[0]);
-        bar(rows.removeFromTop(9.0f), "R", peak_[1]);
-
-        // Gain reduction (Microphone, Group), the outputs' correlation (Main), or the lamps.
-        auto last = rows.reduced(0.0f, 1.0f);
-        g.setFont(label(8.0f));
-        if (cassette == Console::microphone || cassette == Console::group)
-        {
-            g.setColour(colour::textMuted);
-            g.drawText("GR", last.removeFromLeft(14.0f), juce::Justification::centredLeft, false);
-            const auto track = last.reduced(0.0f, 3.0f);
-            g.setColour(colour::panelRaised);
-            g.fillRect(track);
-            const float fraction = std::clamp(gr_ / 20.0f, 0.0f, 1.0f);
-            g.setColour(colour::gold);
-            g.fillRect(track.withLeft(track.getRight() - track.getWidth() * fraction));
-            g.setColour(colour::textSecondary);
-            g.drawText(juce::String(gr_, 1) + " dB", track, juce::Justification::centredLeft, false);
+        case Console::mainMix:
+            return "MAIN";
+        case Console::echoAux:
+            return "RETURN";
+        case Console::monitor:
+            return "C.R.";
+        default:
+            return "FADER";
         }
-        else if (cassette == Console::mainMix)
-        {
-            g.setColour(colour::textMuted);
-            g.drawText("CORR", last.removeFromLeft(26.0f), juce::Justification::centredLeft, false);
-            const auto track = last.reduced(0.0f, 3.0f);
-            g.setColour(colour::panelRaised);
-            g.fillRect(track);
-            const float centre = track.getCentreX();
-            const float x = centre + track.getWidth() * 0.5f * std::clamp(correlation_, -1.0f, 1.0f);
-            g.setColour(correlation_ < 0.0f ? colour::meterClip : colour::play);
-            g.fillRect(juce::Rectangle<float>(std::min(centre, x), track.getY(), std::abs(x - centre), track.getHeight()));
-            lamp(g, last.withTrimmedLeft(last.getWidth() - 70.0f), "ANNOUNCE", console_.announce_->get());
-        }
-        else if (cassette == Console::monitor)
-        {
-            const float w = last.getWidth() / 4.0f;
-            lamp(g, last.removeFromLeft(w), "TALKBACK", console_.talkback_->get());
-            lamp(g, last.removeFromLeft(w), "DIM", console_.dim_->get() || console_.talkback_->get());
-            lamp(g, last.removeFromLeft(w), "MONO", console_.mono_->get());
-            lamp(g, last, "CUT", console_.cut_->get());
-        }
-    }
-
-    static void lamp(juce::Graphics& g, juce::Rectangle<float> area, const juce::String& name, bool on)
-    {
-        using namespace theme;
-        const auto dot = juce::Rectangle<float>(6.0f, 6.0f).withCentre({area.getX() + 5.0f, area.getCentreY()});
-        g.setColour(on ? colour::accentBright : colour::panelRaised);
-        g.fillEllipse(dot);
-        g.setColour(on ? colour::textPrimary : colour::textMuted);
-        g.drawText(name, area.withTrimmedLeft(11.0f), juce::Justification::centredLeft, false);
     }
 
     void timerCallback() override
@@ -250,21 +303,24 @@ private:
         // Peak meters: rise at once, fall 20 dB/s.
         for (int ch = 0; ch < 2; ++ch)
         {
-            const float now = console_.takeOutputPeakDbu(ch);
+            const double now = static_cast<double>(console_.takeOutputPeakDbu(ch));
             auto& shown = peak_[static_cast<std::size_t>(ch)];
-            shown = std::max(now, shown - 20.0f / 30.0f);
+            shown = std::max(now, shown - 20.0 / 30.0);
         }
         gr_ = console_.getGainReductionDb();
         correlation_ = console_.getCorrelation();
+        if (fader_ != nullptr)
+            fader_->refresh();
         repaint();
     }
 
     Console& console_;
-    std::array<float, 2> peak_{-100.0f, -100.0f};
+    std::unique_ptr<hardware::ParameterFader> fader_;
+    std::array<double, 2> peak_{-100.0, -100.0};
     float gr_ = 0.0f, correlation_ = 1.0f;
 };
 
-constexpr int kDisplayWidth = 250;
+constexpr int kDisplayWidth = 300;
 } // namespace
 
 //==================================================================================================
@@ -272,8 +328,56 @@ constexpr int kDisplayWidth = 250;
 ConsoleEditor::ConsoleEditor(Console& console)
     : console_(console)
 {
+    setLookAndFeel(&look_);
     rebuild();
     startTimerHz(5);
+}
+
+ConsoleEditor::~ConsoleEditor()
+{
+    pages_.reset();
+    setLookAndFeel(nullptr);
+}
+
+juce::String ConsoleEditor::faderFor(int cassette)
+{
+    switch (cassette)
+    {
+    case Console::echoAux:
+        return "echoreturn";
+    case Console::monitor:
+        return "crlevel";
+    default:
+        return "fader";
+    }
+}
+
+void ConsoleEditor::paint(juce::Graphics& g)
+{
+    const auto area = getLocalBounds().toFloat();
+    // The desk's grey metalwork, hammertone, and the black label strip along its top.
+    hardware::paintMetal(g, area, kGrey, 4.0f, true, 1912);
+    hardware::paintMetal(g, area.withHeight(static_cast<float>(PagedEditor::kTabHeight) + 2.0f), juce::Colour(0xff4e5352), 4.0f, false);
+    if (pages_ == nullptr)
+        return;
+
+    // A module per column of controls: its seams, and the screws that hold it (where there is room).
+    const auto grid = pages_->getGridBounds().translated(pages_->getX(), pages_->getY()).toFloat();
+    const float top = grid.getY() - 2.0f, bottom = area.getBottom() - 2.0f;
+    const bool screws = bottom - (grid.getY() + 2.0f * static_cast<float>(ParameterControl::kHeight)) >= 9.0f;
+    for (float x = grid.getX(); x <= grid.getRight() + 0.5f; x += static_cast<float>(ParameterControl::kWidth))
+    {
+        g.setColour(juce::Colour(0xff6c7170));
+        g.drawVerticalLine(juce::roundToInt(x), top, bottom);
+        g.setColour(juce::Colour(0xffc6cac8));
+        g.drawVerticalLine(juce::roundToInt(x) + 1, top, bottom);
+        if (screws && x + static_cast<float>(ParameterControl::kWidth) <= grid.getRight() + 0.5f)
+            hardware::paintScrew(g, {x + static_cast<float>(ParameterControl::kWidth) * 0.5f, bottom - 4.5f}, 2.3f, x * 0.11f);
+    }
+    // The chrome trim along the front edge.
+    juce::ColourGradient trim(juce::Colour(0xffe9ecea), 0.0f, area.getBottom() - 3.0f, juce::Colour(0xff6f7472), 0.0f, area.getBottom(), false);
+    g.setGradientFill(trim);
+    g.fillRect(area.withTop(area.getBottom() - 3.0f).reduced(3.0f, 0.0f));
 }
 
 std::vector<Page> ConsoleEditor::pagesFor(Console& console, int cassette, bool markTwo, bool stereo)

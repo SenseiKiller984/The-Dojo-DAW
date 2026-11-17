@@ -63,6 +63,10 @@ add_library(dojo_ui STATIC
     devices/KeysEditors.h
     devices/ConsoleEditors.cpp
     devices/ConsoleEditors.h
+    devices/ConsoleLookAndFeel.cpp
+    devices/ConsoleLookAndFeel.h
+    devices/HardwarePainting.cpp
+    devices/HardwarePainting.h
     devices/HarrisonEditors.cpp
     devices/HarrisonEditors.h
     devices/MoreDeviceEditors.cpp
@@ -70,6 +74,8 @@ add_library(dojo_ui STATIC
     devices/PagedEditor.h
     devices/StudioDeviceEditors.cpp
     devices/StudioDeviceEditors.h
+    devices/TapeDeck.cpp
+    devices/TapeDeck.h
     devices/ParameterControl.cpp
     devices/ParameterControl.h
     devices/TempoDetectPanel.cpp

@@ -637,6 +637,14 @@ public:
 
     /** End time of the last clip (0 for an empty session). */
     [[nodiscard]] double getEndTime() const;
+    /**
+        How far `owner`'s material runs, in seconds from the session start (0 if it has none):
+        - the master (or an invalid tree): the whole arrangement (getEndTime);
+        - a track: the end of its last clip, or later material that feeds it: the active tracks routed
+          to it or in it (a bus or folder), sending to it (track and device sends), playing their
+          MIDI to it, and the instrument an aux track takes its outputs from, all the way back.
+    */
+    [[nodiscard]] double getContentEnd(const juce::ValueTree& owner) const;
 
     // --- Clip groups, loops, sync points -----------------------------------------------------------
     /** Every clip (on any track) of group `groupId`, at any depth. */

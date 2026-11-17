@@ -1144,7 +1144,7 @@ std::unique_ptr<juce::Component> createMoreDeviceEditor(juce::AudioProcessor& pr
     }
     if (auto* gate = dynamic_cast<devices::Gate*>(&processor))
         return paged(processor, gatePages(*gate), preferredWidth);
-    if (auto studio = createStudioDeviceEditor(processor, preferredWidth))
+    if (auto studio = createStudioDeviceEditor(processor, context, preferredWidth))
         return studio;
     if (auto keys = createKeysDeviceEditor(processor, context, preferredWidth))
         return keys;

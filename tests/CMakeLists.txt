@@ -50,10 +50,12 @@ add_executable(dojo_tests
     RealtimeGuardTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
+    ConsoleLookTests.cpp
     ConsoleTests.cpp
     HarrisonTests.cpp
     InsertLoopTests.cpp
     RhodesTests.cpp
+    TapeDeckTests.cpp
     TapeTests.cpp
     SurroundTests.cpp
     SynthTests.cpp

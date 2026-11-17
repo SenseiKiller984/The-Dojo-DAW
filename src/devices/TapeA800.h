@@ -96,6 +96,10 @@ public:
     [[nodiscard]] int getActivePath() const noexcept { return activePath_.load(std::memory_order_relaxed); }
     /** Whether the transport is rolling (the reels turn). */
     [[nodiscard]] bool isRolling() const noexcept { return rolling_.load(std::memory_order_relaxed); }
+    /** Whether the transport records (the REC lamp). */
+    [[nodiscard]] bool isRecording() const noexcept { return recording_.load(std::memory_order_relaxed); }
+    /** Where the tape is: the transport's time (seconds) at the last block the machine played. */
+    [[nodiscard]] double getTapeSeconds() const noexcept { return tapeSeconds_.load(std::memory_order_relaxed); }
     /** The output's VU reading per channel (0 VU = -18 dBFS), with VU ballistics. */
     [[nodiscard]] float getVuDb(int channel) const noexcept { return vu_[static_cast<std::size_t>(channel & 1)].load(std::memory_order_relaxed); }
     [[nodiscard]] int currentLatency() const noexcept;
@@ -180,7 +184,8 @@ private:
     std::uint32_t noiseState_ = 0x2545f491u;
     std::array<double, 2> vuSquare_{};
     std::atomic<int> activePath_{repro};
-    std::atomic<bool> rolling_{false};
+    std::atomic<bool> rolling_{false}, recording_{false};
+    std::atomic<double> tapeSeconds_{0.0};
     std::array<std::atomic<float>, 2> vu_{};
     bool loading_ = false, applyingGroup_ = false;
 };

@@ -27,6 +27,7 @@ public:
 
     static constexpr int kTabHeight = 22;
     static constexpr int kRows = 2;
+    static constexpr int kTabGroup = 4242; ///< the page keys' radio group
 
     PagedEditor(juce::AudioProcessor& processor, std::vector<Page> pages)
         : processor_(processor)
@@ -35,7 +36,7 @@ public:
         for (std::size_t i = 0; i < pages_.size(); ++i)
         {
             auto tab = std::make_unique<juce::TextButton>(pages_[i].title);
-            tab->setRadioGroupId(4242);
+            tab->setRadioGroupId(kTabGroup);
             tab->setClickingTogglesState(true);
             tab->setWantsKeyboardFocus(false);
             tab->setColour(juce::TextButton::buttonOnColourId, theme::colour::controlHover);
@@ -82,6 +83,10 @@ public:
     }
 
     [[nodiscard]] std::size_t getPage() const noexcept { return page_; }
+    /** Where the page's controls are (this editor's coordinates): consoles draw their modules there. */
+    [[nodiscard]] juce::Rectangle<int> getGridBounds() const noexcept { return grid_.getBounds(); }
+    /** The page's display, if it has one. */
+    [[nodiscard]] juce::Component* getDisplay() const noexcept { return display_.get(); }
     [[nodiscard]] std::size_t getNumPages() const noexcept { return pages_.size(); }
     [[nodiscard]] const juce::String& getPageTitle(std::size_t index) const { return pages_[index].title; }
     /** Parameter ids on any page that the processor does not have (tests). */

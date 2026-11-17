@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/devices/DeviceEditors.h"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -14,10 +16,11 @@ namespace dojo::ui
 {
 
 /**
-    Editors of the studio devices: The Glue, De-Esser, Expander, Soft Clipper and Plate Reverb.
-    Null for any other processor.
+    Editors of the studio devices: The Glue, De-Esser, Expander, Soft Clipper, Plate Reverb and the
+    A800 tape machine (its deck: see TapeDeck). Null for any other processor.
 */
-std::unique_ptr<juce::Component> createStudioDeviceEditor(juce::AudioProcessor& processor, int& preferredWidth);
+std::unique_ptr<juce::Component> createStudioDeviceEditor(juce::AudioProcessor& processor, const DeviceEditorContext& context,
+                                                          int& preferredWidth);
 
 /**
     The Glue's VU meter of the gain reduction.

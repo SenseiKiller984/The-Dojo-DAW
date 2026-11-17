@@ -4,6 +4,7 @@
 #include "session/Project.h"
 #include "session/Session.h"
 #include "ui/DeviceActions.h"
+#include "ui/devices/HardwarePainting.h"
 #include "ui/theme/DojoTheme.h"
 
 #include <algorithm>
@@ -66,89 +67,165 @@ void styleToggle(juce::TextButton& button)
     button.setColour(juce::TextButton::buttonOnColourId, theme::colour::accent);
 }
 
+// The desk's colours.
+const juce::Colour kPanel{0xff161719};
+const juce::Colour kPrint{0xffe9e5d9};
+const juce::Colour kWalnut{0xff5b3920};
+const juce::Colour kLeather{0xff5e3a24};
+const juce::Colour kVuFace{0xfff2e4b8};
+constexpr float kFaderWidth = 44.0f;
+
+/** A black recess (a meter window, the scope) set into the panel or the bridge. */
+void paintRecess(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour fill)
+{
+    g.setColour(juce::Colours::black.withAlpha(0.6f));
+    g.fillRoundedRectangle(area.expanded(1.0f), 3.0f);
+    g.setColour(fill);
+    g.fillRoundedRectangle(area, 2.5f);
+    g.setColour(juce::Colours::white.withAlpha(0.07f));
+    g.drawRoundedRectangle(area.expanded(1.0f), 3.0f, 0.8f);
+}
+
 //==================================================================================================
-/** The console's display: the revision's circuits, the EQ and filter curve (I/O module), the lamps
-    and the output meters (dBu). */
+/** The console's face: the wooden meter bridge with the outputs' VU meters and the revision's
+    badge, then on the black panel the revision's circuits, the EQ and filter curve (I/O module),
+    the lamps, and the long fader. */
 class HarrisonFace final : public juce::Component, private juce::Timer
 {
 public:
     explicit HarrisonFace(Console& console)
         : console_(console)
     {
-        setInterceptsMouseClicks(false, false);
+        setInterceptsMouseClicks(false, true);
+        if (auto* level = dynamic_cast<juce::RangedAudioParameter*>(findParameter(console_, "fader")))
+        {
+            hardware::FaderStyle style;
+            style.cap = juce::Colour(0xff9da1a6);
+            style.capLine = juce::Colour(0xfff6f5f0);
+            style.slot = juce::Colour(0xff030303);
+            style.scale = kPrint;
+            style.capHeight = 20.0f;
+            fader_ = std::make_unique<hardware::ParameterFader>(*level, style);
+            addAndMakeVisible(*fader_);
+        }
         startTimerHz(30);
+    }
+
+    void resized() override
+    {
+        if (fader_ != nullptr) // the long fader, the whole height of the strip (as paint lays it out)
+            fader_->setBounds(getLocalBounds().toFloat().removeFromRight(kFaderWidth).reduced(3.0f, 14.0f).withTrimmedTop(4.0f).toNearestInt());
     }
 
     void paint(juce::Graphics& g) override
     {
         using namespace theme;
-        const auto area = getLocalBounds().toFloat();
-        g.setColour(colour::meterBackground);
-        g.fillRoundedRectangle(area, 3.0f);
-        auto content = area.reduced(6.0f, 4.0f);
+        auto area = getLocalBounds().toFloat();
         const auto& spec = Console::revisionSpec(console_.getRevision());
         const int module = console_.getModule();
 
-        // The badge: the revision and what its circuits are.
-        auto header = content.removeFromTop(12.0f);
-        g.setFont(label(9.5f));
-        g.setColour(colour::gold);
-        g.drawText("HARRISON 4032", header, juce::Justification::centredLeft, false);
-        g.setColour(colour::textSecondary);
-        g.drawText("REV " + juce::String(spec.name) + "  " + spec.years, header, juce::Justification::centredRight, false);
-        g.setFont(mono(8.0f));
-        g.setColour(colour::textMuted);
+        // The fader's strip of panel, its whole height.
+        if (fader_ != nullptr)
+        {
+            auto strip = area.removeFromRight(kFaderWidth);
+            hardware::paintMetal(g, strip, kPanel, 0.0f, false);
+            g.setColour(juce::Colours::black);
+            g.drawVerticalLine(juce::roundToInt(strip.getX()), strip.getY(), strip.getBottom());
+            g.setColour(kPrint);
+            g.setFont(label(7.0f));
+            g.drawText(console_.getModule() == Console::ioModule ? "FADER" : "MASTER", strip.removeFromTop(16.0f).translated(0.0f, 2.0f),
+                       juce::Justification::centred, false);
+        }
+
+        // The meter bridge: walnut, the two VU meters in its black window, the badge between them.
+        auto bridge = area.removeFromTop(bridgeHeight(area));
+        hardware::paintWood(g, bridge, kWalnut, 9, 3.0f);
+        auto window = bridge.reduced(5.0f, 5.0f);
+        paintRecess(g, window, juce::Colour(0xff0c0c0d));
+        window.reduce(3.0f, 3.0f);
+        const float badgeWidth = std::min(64.0f, window.getWidth() * 0.24f);
+        const float meterWidth = (window.getWidth() - badgeWidth - 6.0f) * 0.5f;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto face = hardware::vuFace(kVuFace, "VU");
+            face.caption = ch == 0 ? "L" : "R";
+            const auto meter = ch == 0 ? window.withWidth(meterWidth) : window.withLeft(window.getRight() - meterWidth);
+            hardware::paintNeedleMeter(g, meter, hardware::vuPosition(vu_[static_cast<std::size_t>(ch)]), face);
+        }
+        auto badge = window.withSizeKeepingCentre(badgeWidth, window.getHeight());
+        g.setColour(kPrint);
+        g.setFont(sansBold(8.0f).withExtraKerningFactor(0.18f));
+        g.drawText("HARRISON", badge.removeFromTop(12.0f), juce::Justification::centred, false);
+        g.setFont(sansBold(14.0f));
+        g.drawText("4032", badge.removeFromTop(17.0f), juce::Justification::centred, false);
+        const auto revision = badge.removeFromTop(13.0f).withSizeKeepingCentre(42.0f, 12.0f);
+        g.setColour(juce::Colour(0xffb6332a));
+        g.fillRoundedRectangle(revision, 2.0f);
+        g.setColour(juce::Colours::white);
+        g.setFont(label(7.5f));
+        g.drawText("REV " + juce::String(spec.name), revision, juce::Justification::centred, false);
+        g.setColour(kPrint.withAlpha(0.7f));
+        g.setFont(label(6.5f));
+        g.drawText(spec.years, badge.removeFromTop(10.0f), juce::Justification::centred, false);
+
+        // The black panel under it.
+        hardware::paintMetal(g, area, kPanel, 0.0f, false);
+        auto content = area.reduced(6.0f, 4.0f);
+        g.setFont(mono(7.5f));
+        g.setColour(kPrint.withAlpha(0.75f));
         g.drawText(juce::String(spec.opAmps) + "  " + spec.vca + "  +-" + juce::String(static_cast<int>(spec.railVolts)) + " V  +" +
                        juce::String(spec.maxOutputDbu, std::abs(spec.maxOutputDbu - std::round(spec.maxOutputDbu)) < 0.01 ? 0 : 1) + " dBu",
-                   content.removeFromTop(11.0f), juce::Justification::centredLeft, true);
+                   content.removeFromTop(10.0f), juce::Justification::centredLeft, true);
         content.removeFromTop(3.0f);
-        const auto meters = content.removeFromBottom(26.0f);
-        const auto lamps = content.removeFromBottom(14.0f);
-        content.removeFromBottom(3.0f);
+        const auto lamps = content.removeFromBottom(12.0f);
+        content.removeFromBottom(4.0f);
 
         if (module == Console::ioModule)
         {
             paintCurve(g, content);
             const bool filters = console_.filtersEngaged();
             paintLamps(g, lamps,
-                       {{"FLIP", console_.flip_->get()},
-                        {"+48V", console_.phantom_->get()},
-                        {"PAD", console_.pad_->get()},
-                        {juce::String::fromUTF8("\xc3\x98"), console_.phase_->get()},
-                        {"FILT", filters},
-                        {"EQ", console_.eqIn_->get()},
-                        {"MIX", console_.mix_->get()}});
+                       {{"FLIP", console_.flip_->get(), ConsoleLookAndFeel::harrisonLamp("flip")},
+                        {"48V", console_.phantom_->get(), ConsoleLookAndFeel::harrisonLamp("phantom")},
+                        {"PAD", console_.pad_->get(), ConsoleLookAndFeel::harrisonLamp("pad")},
+                        {juce::String::fromUTF8("\xc3\x98"), console_.phase_->get(), ConsoleLookAndFeel::harrisonLamp("phase")},
+                        {"FILT", filters, ConsoleLookAndFeel::harrisonLamp("filtersin")},
+                        {"EQ", console_.eqIn_->get(), ConsoleLookAndFeel::harrisonLamp("eqin")},
+                        {"MIX", console_.mix_->get(), ConsoleLookAndFeel::harrisonLamp("mix")}});
         }
         else
         {
-            g.setFont(sans(10.5f));
-            g.setColour(colour::textSecondary);
+            g.setFont(sans(10.0f));
+            g.setColour(kPrint);
             const juce::String text = module == Console::busMaster
                                           ? "SUB-GROUP / AUX / CUE MASTER\nsumming amp > master fader > line driver" +
                                                 juce::String(console_.transformer_->get() ? " > Jensen transformer" : "")
                                           : "MASTER SECTION\nmix amp > master fader > line drivers\nmonitor: " +
                                                 console_.monitorSource_->getCurrentChoiceName() + (console_.mono_->get() ? ", mono" : "");
-            g.drawFittedText(text, content.toNearestInt(), juce::Justification::centredLeft, 4);
+            g.drawFittedText(text, content.toNearestInt(), juce::Justification::centredLeft, 5);
             if (module == Console::masterSection)
-                paintLamps(g, lamps, {{"MONO", console_.mono_->get()}, {"XFMR", console_.transformer_->get()}});
+                paintLamps(g, lamps, {{"MONO", console_.mono_->get(), ConsoleLookAndFeel::harrisonLamp("mono")},
+                                      {"XFMR", console_.transformer_->get(), ConsoleLookAndFeel::harrisonLamp("transformer")}});
             else
-                paintLamps(g, lamps, {{"XFMR", console_.transformer_->get()}});
+                paintLamps(g, lamps, {{"XFMR", console_.transformer_->get(), ConsoleLookAndFeel::harrisonLamp("transformer")}});
         }
-        paintMeters(g, meters, static_cast<float>(spec.maxOutputDbu));
     }
 
 private:
+    static float bridgeHeight(juce::Rectangle<float> area) { return std::clamp(area.getHeight() * 0.44f, 40.0f, 84.0f); }
+
     void paintCurve(juce::Graphics& g, juce::Rectangle<float> area) const
     {
         using namespace theme;
-        g.setColour(colour::panelRaised);
-        g.fillRect(area);
-        const auto xOf = [&](double hz) { return area.getX() + area.getWidth() * static_cast<float>(std::log(hz / 20.0) / std::log(1000.0)); };
-        const auto yOf = [&](double db) { return area.getCentreY() - area.getHeight() * 0.5f * static_cast<float>(std::clamp(db, -18.0, 18.0) / 18.0); };
-        g.setColour(colour::outline);
+        // A small phosphor scope.
+        paintRecess(g, area, juce::Colour(0xff040806));
+        const auto inner = area.reduced(2.0f);
+        const auto xOf = [&](double hz) { return inner.getX() + inner.getWidth() * static_cast<float>(std::log(hz / 20.0) / std::log(1000.0)); };
+        const auto yOf = [&](double db) { return inner.getCentreY() - inner.getHeight() * 0.5f * static_cast<float>(std::clamp(db, -18.0, 18.0) / 18.0); };
+        g.setColour(juce::Colour(0xff163a22));
         for (const double hz : {100.0, 1000.0, 10000.0})
-            g.drawVerticalLine(juce::roundToInt(xOf(hz)), area.getY(), area.getBottom());
-        g.drawHorizontalLine(juce::roundToInt(yOf(0.0)), area.getX(), area.getRight());
+            g.drawVerticalLine(juce::roundToInt(xOf(hz)), inner.getY(), inner.getBottom());
+        g.drawHorizontalLine(juce::roundToInt(yOf(0.0)), inner.getX(), inner.getRight());
         const bool active = console_.eqIn_->get() || console_.filtersEngaged();
         juce::Path path;
         for (std::size_t i = 0; i < curve_.size(); ++i)
@@ -160,63 +237,50 @@ private:
             else
                 path.lineTo(point);
         }
-        g.setColour(active ? colour::accentBright : colour::textMuted);
-        g.strokePath(path, juce::PathStrokeType(1.4f));
-        g.setFont(label(8.0f));
-        g.setColour(colour::textMuted);
+        const juce::Colour trace = active ? juce::Colour(0xff63f08e) : juce::Colour(0xff2c6b40);
+        g.setColour(trace.withAlpha(0.25f));
+        g.strokePath(path, juce::PathStrokeType(3.0f));
+        g.setColour(trace);
+        g.strokePath(path, juce::PathStrokeType(1.2f));
         if (!active)
-            g.drawText("EQ / FILTERS OUT", area.reduced(4.0f, 2.0f), juce::Justification::topRight, false);
-    }
-
-    static void paintLamps(juce::Graphics& g, juce::Rectangle<float> area, std::initializer_list<std::pair<juce::String, bool>> lamps)
-    {
-        using namespace theme;
-        const float width = area.getWidth() / static_cast<float>(std::max<std::size_t>(lamps.size(), 1));
-        g.setFont(label(7.5f));
-        for (const auto& [name, on] : lamps)
         {
-            auto cell = area.removeFromLeft(width);
-            const auto dot = juce::Rectangle<float>(5.0f, 5.0f).withCentre({cell.getX() + 4.0f, cell.getCentreY()});
-            g.setColour(on ? colour::accentBright : colour::panelRaised);
-            g.fillEllipse(dot);
-            g.setColour(on ? colour::textPrimary : colour::textMuted);
-            g.drawText(name, cell.withTrimmedLeft(9.0f), juce::Justification::centredLeft, false);
+            g.setFont(label(7.5f));
+            g.setColour(juce::Colour(0xff3f8f58));
+            g.drawText("EQ / FILTERS OUT", inner.reduced(4.0f, 2.0f), juce::Justification::topRight, false);
         }
     }
 
-    void paintMeters(juce::Graphics& g, juce::Rectangle<float> area, float maxDbu) const
+    struct Lamp
     {
-        using namespace theme;
-        constexpr float low = -20.0f, high = 28.0f;
-        const auto bar = [&](juce::Rectangle<float> row, const juce::String& name, float dbu)
+        juce::String name;
+        bool on;
+        juce::Colour colour;
+    };
+
+    static void paintLamps(juce::Graphics& g, juce::Rectangle<float> area, std::initializer_list<Lamp> lamps)
+    {
+        const float width = area.getWidth() / static_cast<float>(std::max<std::size_t>(lamps.size(), 1));
+        for (const auto& lamp : lamps)
         {
-            g.setColour(colour::textMuted);
-            g.setFont(label(8.0f));
-            g.drawText(name, row.removeFromLeft(12.0f), juce::Justification::centredLeft, false);
-            const auto track = row.reduced(0.0f, 2.0f);
-            g.setColour(colour::panelRaised);
-            g.fillRect(track);
-            const float fraction = std::clamp((dbu - low) / (high - low), 0.0f, 1.0f);
-            g.setColour(dbu >= maxDbu - 0.5f ? colour::meterClip : dbu >= 4.0f ? colour::meterMid : colour::meterLow);
-            g.fillRect(track.withWidth(track.getWidth() * fraction));
-            for (const float mark : {4.0f, maxDbu})
-            {
-                g.setColour(colour::textSecondary);
-                g.drawVerticalLine(juce::roundToInt(track.getX() + track.getWidth() * (mark - low) / (high - low)), track.getY() - 1.0f,
-                                   track.getBottom() + 1.0f);
-            }
-        };
-        bar(area.removeFromTop(13.0f), "L", peak_[0]);
-        bar(area.removeFromTop(13.0f), "R", peak_[1]);
+            auto cell = area.removeFromLeft(width);
+            hardware::paintLed(g, {cell.getX() + 4.0f, cell.getCentreY()}, 2.6f, lamp.colour, lamp.on);
+            g.setFont(theme::label(7.0f));
+            g.setColour(kPrint.withAlpha(lamp.on ? 1.0f : 0.7f));
+            g.drawText(lamp.name, cell.withTrimmedLeft(9.0f), juce::Justification::centredLeft, false);
+        }
     }
 
     void timerCallback() override
     {
+        // VU ballistics on the outputs (0 VU = +4 dBu): about 300 ms to settle.
         for (int ch = 0; ch < 2; ++ch)
         {
-            auto& shown = peak_[static_cast<std::size_t>(ch)];
-            shown = std::max(console_.takeOutputPeakDbu(ch), shown - 20.0f / 30.0f);
+            const double target = static_cast<double>(console_.takeOutputPeakDbu(ch)) - 4.0;
+            auto& vu = vu_[static_cast<std::size_t>(ch)];
+            vu += (std::max(target, -40.0) - vu) * (1.0 - std::exp(-(1.0 / 30.0) / 0.065));
         }
+        if (fader_ != nullptr)
+            fader_->refresh();
         // The curve, when a setting changed.
         std::vector<float> signature;
         for (auto* parameter : console_.getParameters())
@@ -231,7 +295,8 @@ private:
     }
 
     Console& console_;
-    std::array<float, 2> peak_{-100.0f, -100.0f};
+    std::unique_ptr<hardware::ParameterFader> fader_;
+    std::array<double, 2> vu_{-40.0, -40.0};
     std::array<double, 96> curve_{};
     std::vector<float> signature_;
 };
@@ -283,13 +348,12 @@ public:
     void paint(juce::Graphics& g) override
     {
         using namespace theme;
-        g.setColour(colour::meterBackground);
-        g.fillRoundedRectangle(getLocalBounds().toFloat(), 3.0f);
-        g.setColour(colour::textMuted);
+        paintRecess(g, getLocalBounds().toFloat().reduced(1.0f), juce::Colour(0xff101113));
+        g.setColour(kPrint);
         g.setFont(label(8.5f));
         g.drawText("ROUTING  -  32 MULTITRACK BUSES", getLocalBounds().reduced(6, 3).removeFromTop(12), juce::Justification::centredLeft, false);
         g.setFont(sans(10.0f));
-        g.setColour(colour::textSecondary);
+        g.setColour(kPrint.withAlpha(0.75f));
         g.drawFittedText(text_, status_.reduced(2), juce::Justification::topLeft, 3);
     }
 
@@ -366,9 +430,8 @@ public:
     void paint(juce::Graphics& g) override
     {
         using namespace theme;
-        g.setColour(colour::meterBackground);
-        g.fillRoundedRectangle(getLocalBounds().toFloat(), 3.0f);
-        g.setColour(colour::textMuted);
+        paintRecess(g, getLocalBounds().toFloat().reduced(1.0f), juce::Colour(0xff101113));
+        g.setColour(kPrint);
         g.setFont(label(8.5f));
         g.drawText("TO BUSSES", getLocalBounds().reduced(6, 3).removeFromTop(12), juce::Justification::centredLeft, false);
     }
@@ -487,7 +550,7 @@ private:
     juce::TextButton button_;
 };
 
-constexpr int kFaceWidth = 260;
+constexpr int kFaceWidth = 320;
 } // namespace
 
 //==================================================================================================
@@ -496,8 +559,55 @@ HarrisonEditor::HarrisonEditor(Console& console, const DeviceEditorContext& cont
     : console_(console)
     , context_(context)
 {
+    setLookAndFeel(&look_);
     rebuild();
     startTimerHz(5);
+}
+
+HarrisonEditor::~HarrisonEditor()
+{
+    pages_.reset();
+    setLookAndFeel(nullptr);
+}
+
+int HarrisonEditor::armrestHeight() const noexcept
+{
+    const int controls = PagedEditor::kTabHeight + 4 + PagedEditor::kRows * ParameterControl::kHeight;
+    return std::clamp(getHeight() - controls - 4, 0, kArmrestHeight);
+}
+
+void HarrisonEditor::paint(juce::Graphics& g)
+{
+    const auto area = getLocalBounds().toFloat();
+    const auto cheek = static_cast<float>(kCheekWidth);
+    auto panel = area.reduced(cheek, 0.0f);
+
+    // The black panel, the page keys' strip along its top, the channel strips' seams.
+    hardware::paintMetal(g, panel, kPanel, 0.0f, false);
+    g.setColour(juce::Colour(0xff0b0b0c));
+    g.fillRect(panel.withHeight(static_cast<float>(PagedEditor::kTabHeight) + 2.0f));
+    g.setColour(juce::Colour(0xff3a3c40));
+    g.drawHorizontalLine(PagedEditor::kTabHeight + 2, panel.getX(), panel.getRight());
+    if (pages_ != nullptr)
+    {
+        const auto grid = pages_->getGridBounds().translated(pages_->getX(), pages_->getY()).toFloat();
+        for (float x = grid.getX(); x <= grid.getRight() + 0.5f; x += static_cast<float>(ParameterControl::kWidth))
+        {
+            g.setColour(juce::Colours::black);
+            g.drawVerticalLine(juce::roundToInt(x), grid.getY(), grid.getBottom());
+            g.setColour(juce::Colour(0xff2a2c30));
+            g.drawVerticalLine(juce::roundToInt(x) + 1, grid.getY(), grid.getBottom());
+        }
+    }
+
+    // The leather armrest along the front, between the walnut end cheeks.
+    if (const int armrest = armrestHeight(); armrest >= 6)
+        hardware::paintLeather(g, panel.removeFromBottom(static_cast<float>(armrest)).expanded(2.0f, 0.0f), kLeather);
+    hardware::paintWood(g, area.withWidth(cheek), kWalnut, 3, 3.0f);
+    hardware::paintWood(g, area.withLeft(area.getRight() - cheek), kWalnut, 4, 3.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.45f));
+    g.drawVerticalLine(kCheekWidth, 0.0f, area.getBottom());
+    g.drawVerticalLine(getWidth() - kCheekWidth - 1, 0.0f, area.getBottom());
 }
 
 std::vector<Page> HarrisonEditor::pagesFor(Console& console, const DeviceEditorContext& context, int module, int revision, bool, int panMode)
@@ -576,7 +686,7 @@ int HarrisonEditor::preferredWidth(Console& console, const DeviceEditorContext& 
         for (int revision = 0; revision < 3; ++revision)
             for (int panMode = 0; panMode < 3; ++panMode)
                 width = std::max(width, PagedEditor::preferredWidth(pagesFor(console, context, module, revision, false, panMode)));
-    return width;
+    return width + 2 * kCheekWidth;
 }
 
 void HarrisonEditor::rebuild()
@@ -599,7 +709,7 @@ void HarrisonEditor::timerCallback()
 void HarrisonEditor::resized()
 {
     if (pages_ != nullptr)
-        pages_->setBounds(getLocalBounds());
+        pages_->setBounds(getLocalBounds().reduced(kCheekWidth, 0).withTrimmedBottom(armrestHeight()));
 }
 
 std::unique_ptr<juce::Component> createHarrisonDeviceEditor(juce::AudioProcessor& processor, const DeviceEditorContext& context, int& preferredWidth)

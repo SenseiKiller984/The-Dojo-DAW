@@ -1521,6 +1521,40 @@ double Session::getEndTime() const
     return end;
 }
 
+double Session::getContentEnd(const juce::ValueTree& owner) const
+{
+    if (!owner.hasType(ids::track))
+        return getEndTime();
+
+    const auto tracks = getAllTracks();
+    std::set<std::uint32_t> visited;
+    std::function<double(const juce::ValueTree&)> endOf = [&](const juce::ValueTree& t) -> double
+    {
+        const auto id = track::getId(t);
+        if (!visited.insert(id).second)
+            return 0.0;
+        double end = 0.0;
+        for (const auto& c : t)
+            if (isClip(c))
+                end = std::max(end, clip::getEnd(c));
+        for (const auto& other : tracks)
+        {
+            if (other == t || !track::isActive(other))
+                continue;
+            bool feeds = getDestination(other) == t || track::getMidiTarget(other) == id;
+            for (const auto& s : getSends(other))
+                feeds = feeds || send::getTarget(s) == id;
+            if (feeds)
+                end = std::max(end, endOf(other));
+        }
+        if (const auto source = track::getAuxSource(t); source != 0)
+            if (const auto instrument = findTrack(source); instrument.isValid())
+                end = std::max(end, endOf(instrument));
+        return end;
+    };
+    return endOf(owner);
+}
+
 // --- Clip groups, loops, sync points --------------------------------------------------------------
 
 std::vector<juce::ValueTree> Session::getGroupMembers(std::uint32_t groupId) const
