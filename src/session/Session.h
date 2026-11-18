@@ -21,20 +21,21 @@ using engine::TrackKind;
     Property and type identifiers of the session document (file format version 2).
 
         DOJO_SESSION  version, tempo, masterVolumeDb, masterFormat, nextId, loopEnabled, loopStart, loopEnd,
-                      speed, keepPitch, transpose
+                      speed, keepPitch, transpose, takesToLanes, loopRecord, compCrossfade (seconds)
           MASTER        (the master bus: devices and automation)
             DEVICE ...  AUTOMATION ...
           TRACK       id, name, colour, kind (audio|instrument|bus), folder, collapsed,
                       volumeDb, pan, muted, soloed, phaseInverted, output, input, inputStereo,
                       monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation,
-                      format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre
+                      format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre,
+                      showTakes, audition (the take lane played instead of the comp)
             CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, gainBypassed, stretch,
                         pitch, sourceChannel, editLocked, timeLocked, rating (1..5), groups (clip group ids,
                         outermost first), looped, loopLength, syncPoint (seconds from the start), userNamed,
                         timeStamp (original time stamp of the source's start, seconds), userTimeShift
                         (user time stamp - original), listEntry (the Clip List entry it was placed
                         from), autoCreated (made by editing), autoNameRoot / autoNameZeros /
-                        autoNameSuffix (Auto Rename)
+                        autoNameSuffix (Auto Rename), take (the take lane a comp clip was comped from)
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
                         (and rating, groups, looped, loopLength, syncPoint, userNamed)
             MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above)
@@ -44,6 +45,8 @@ using engine::TrackKind;
             SEND        id, target (bus track id), gainDb, preFader
             AUTOMATION  id, target ("volume", "pan", "send:<id>", "param:<deviceId>:<index>"), visible
               POINT       time (seconds), value (0..1)
+            TAKELANE    id, name: a take lane (playlist) holding takes, CLIP / MIDICLIP children that do
+                        not play; the comp (what plays) is the track's own clips
             TRACK ...   (folders contain tracks)
           CLIPGROUPS    the clip groups: CLIPGROUP id, name
           CLIPLIST      captured clips (Clip > Capture) and whole-file clips (wholeFile, one per
@@ -119,6 +122,13 @@ inline const juce::Identifier syncPoint {"syncPoint"};
 inline const juce::Identifier gainBypassed {"gainBypassed"};
 inline const juce::Identifier warpMarkers {"warp"};
 inline const juce::Identifier hitpoints {"hitpoints"};
+inline const juce::Identifier takeLane {"TAKELANE"};
+inline const juce::Identifier fromTake {"take"};
+inline const juce::Identifier showTakes {"showTakes"};
+inline const juce::Identifier audition {"audition"};
+inline const juce::Identifier takesToLanes {"takesToLanes"};
+inline const juce::Identifier loopRecord {"loopRecord"};
+inline const juce::Identifier compCrossfade {"compCrossfade"};
 inline const juce::Identifier userNamed {"userNamed"};
 inline const juce::Identifier clipGroupList {"CLIPGROUPS"};
 inline const juce::Identifier clipGroup {"CLIPGROUP"};
@@ -276,6 +286,10 @@ std::uint32_t getMidiTarget(const juce::ValueTree& t);
 std::uint32_t getVca(const juce::ValueTree& t);
 /** Master Faders: the bus they control, 0 = the main output. */
 std::uint32_t getControlledBus(const juce::ValueTree& t);
+/** The track's take lanes are shown under it in the arranger. */
+bool isShowingTakes(const juce::ValueTree& t);
+/** The take lane auditioned: played instead of the comp (0 = none, the comp plays). */
+std::uint32_t getAuditionedTake(const juce::ValueTree& t);
 
 void setName(juce::ValueTree t, const juce::String& name, juce::UndoManager* um);
 void setColour(juce::ValueTree t, juce::Colour colour, juce::UndoManager* um);
@@ -300,7 +314,21 @@ void setActive(juce::ValueTree t, bool active, juce::UndoManager* um);
 void setMidiTarget(juce::ValueTree t, std::uint32_t instrumentTrackId, juce::UndoManager* um);
 void setVca(juce::ValueTree t, std::uint32_t vcaTrackId, juce::UndoManager* um);
 void setControlledBus(juce::ValueTree t, std::uint32_t busId, juce::UndoManager* um);
+void setShowingTakes(juce::ValueTree t, bool show, juce::UndoManager* um);
+void setAuditionedTake(juce::ValueTree t, std::uint32_t laneId, juce::UndoManager* um);
 } // namespace track
+
+/** Accessors for a TAKELANE tree (a take lane: takes that do not play, comped into the track). */
+namespace takelane
+{
+std::uint32_t getId(const juce::ValueTree& lane);
+juce::String getName(const juce::ValueTree& lane);
+void setName(juce::ValueTree lane, const juce::String& name, juce::UndoManager* um);
+/** Its clips (the takes), in time order. */
+std::vector<juce::ValueTree> getClips(const juce::ValueTree& lane);
+/** From the start of its first take to the end of its last (0, 0 when it is empty). */
+std::pair<double, double> getExtent(const juce::ValueTree& lane);
+} // namespace takelane
 
 /** Typed accessors for a CLIP (audio) or MIDICLIP tree; the timing ones work on both. */
 namespace clip
@@ -377,6 +405,10 @@ void setGainBypassed(juce::ValueTree c, bool bypassed, juce::UndoManager* um);
 
 /** Renamed by the user (shown in the Clip List as a user-defined clip). */
 bool isUserNamed(const juce::ValueTree& c);
+
+/** A comp clip: the take lane (its id) it was comped from; 0 = none. */
+std::uint32_t getTake(const juce::ValueTree& c);
+void setTake(juce::ValueTree c, std::uint32_t laneId, juce::UndoManager* um);
 
 void setStart(juce::ValueTree c, double seconds, juce::UndoManager* um);
 void setLength(juce::ValueTree c, double seconds, juce::UndoManager* um);
@@ -522,6 +554,20 @@ public:
     void setPunchOutEnabled(bool enabled);
     /** The part of the timeline recording keeps: [loop start or 0, loop end or no end). */
     [[nodiscard]] std::pair<double, double> getPunchWindow() const;
+
+    /** Record Takes to Lanes (on unless switched off): a take recorded over earlier material, onto a
+        track that has take lanes, or in several loop passes goes into a take lane of its own under
+        the track and is comped in, and the earlier material is kept in a take lane too. Off: a take
+        replaces what was there. Saved with the session. */
+    [[nodiscard]] bool isRecordingTakesToLanes() const;
+    void setRecordingTakesToLanes(bool enabled);
+    /** Loop Record: with the loop on (and no punch in or out), recording cycles the loop and keeps
+        each pass as a take in its own take lane; the newest is comped in. Saved with the session. */
+    [[nodiscard]] bool isLoopRecording() const;
+    void setLoopRecording(bool enabled);
+    /** The quick crossfade comping puts at each edit, in seconds (0: plain cuts; default 10 ms). */
+    [[nodiscard]] double getCompCrossfade() const;
+    void setCompCrossfade(double seconds);
 
     /** How record-enabled tracks (with automatic monitoring) are monitored: Input Only (always the
         input) or, when false, Auto Input (the input while stopped and while punched in; the track's
@@ -746,6 +792,42 @@ public:
         the edges are trimmed (or split, when they span the whole range). For recording over. Locked
         clips are left as they are. */
     void clearRange(juce::ValueTree track, double start, double end);
+
+    // --- Take lanes and comping ---------------------------------------------------------------------
+    /** `track`'s take lanes, top to bottom. Each holds takes (clips that do not play); the comp, what
+        the track plays, is its own clips, put together from the takes by comping. */
+    [[nodiscard]] static std::vector<juce::ValueTree> getTakeLanes(const juce::ValueTree& track);
+    [[nodiscard]] juce::ValueTree findTakeLane(std::uint32_t laneId) const;
+    /** An empty take lane at the bottom of `track`'s: "Take N" (one more than the highest take
+        number there) unless `name` is given. */
+    juce::ValueTree addTakeLane(juce::ValueTree track, const juce::String& name = {});
+    /** A take lane holding a copy of the comp (all of `track`'s clips): "Comp N". */
+    juce::ValueTree addTakeLaneFromComp(juce::ValueTree track);
+    /** The comp's clips between `start` and `end` that came from no take lane go into a new take
+        lane (copies; the clips are linked to it), so that comping or recording over them loses
+        nothing. Returns the lane, or an invalid tree if there were none. */
+    juce::ValueTree keepCompInTakeLane(juce::ValueTree track, double start, double end);
+    /** Removes a take lane. Comp clips taken from it stay, no longer linked to a take. */
+    void removeTakeLane(juce::ValueTree lane);
+    /** Removes `track`'s take lanes none of whose material is in the comp. Returns how many. */
+    int removeUnusedTakeLanes(juce::ValueTree track);
+    /** Removes all of `track`'s take lanes (the comp stays as it is). */
+    void removeAllTakeLanes(juce::ValueTree track);
+    /**
+        Comping (a swipe across a take lane): between `start` and `end` the comp becomes `lane`'s
+        material (silence where the lane has none). Each edit gets a quick crossfade
+        (getCompCrossfade; centred on the edit where both sides have the material): equal power
+        where the comp changes take, equal gain (linear fades) where the same material goes on
+        (with its gain changed, say), so nothing dips or swells. Where the comp meets silence it
+        gets a quick fade instead. Neighbouring stretches of the comp that already play this take
+        untouched join the new one into one clip, keeping their outer edits. With the crossfade off
+        (0) edits are plain cuts. Clips locked in time or edit-locked stay as they are.
+    */
+    void compTake(juce::ValueTree lane, double start, double end);
+    /** The take lane a comp clip was comped from (invalid: none, or it was removed). */
+    [[nodiscard]] juce::ValueTree getTakeLaneOf(const juce::ValueTree& compClip) const;
+    /** The stretches of the comp that come from `lane`, in time order (overlaps merged). */
+    [[nodiscard]] static std::vector<std::pair<double, double>> getCompedRanges(const juce::ValueTree& lane);
 
     // --- MIDI --------------------------------------------------------------------------------------
     juce::ValueTree addNote(juce::ValueTree midiClip, double startBeat, double lengthBeats, int noteNumber,

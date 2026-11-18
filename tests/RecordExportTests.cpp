@@ -455,7 +455,9 @@ TEST_CASE("Record-enabled tracks: Auto Input, Input Only, and punch recording", 
     app.controller.stop();
     session.setInputOnlyMonitoring(false);
 
-    // Punch in at 1 s, out at 2 s (the loop range; the loop itself stays off).
+    // Punch in at 1 s, out at 2 s (the loop range; the loop itself stays off). Takes replace what
+    // was there (take lanes: TakeLaneTests).
+    session.setRecordingTakesToLanes(false);
     session.setLoop(false, 1.0, 2.0);
     session.setPunchInEnabled(true);
     session.setPunchOutEnabled(true);

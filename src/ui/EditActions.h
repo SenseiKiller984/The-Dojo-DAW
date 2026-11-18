@@ -139,6 +139,23 @@ std::vector<juce::ValueTree> splitSelectedIntoMono(session::Project& project, Ed
 /** Track > Make Inactive / Make Active for every selected track. One undo step. */
 bool setSelectedTracksActive(session::Session& session, EditorState& editor, bool active);
 
+// --- Take lanes -------------------------------------------------------------------------------------
+/** The selected tracks that can have take lanes (they hold audio or MIDI clips), in arranger order. */
+[[nodiscard]] std::vector<juce::ValueTree> getSelectedTakeTracks(const session::Session& session, const EditorState& editor);
+/** True if there are such tracks and every one shows its take lanes. */
+[[nodiscard]] bool selectedTracksShowTakes(const session::Session& session, const EditorState& editor);
+/** Track > Show Take Lanes: shows them on the selected tracks (or hides them when all show them). */
+bool toggleSelectedTracksTakeLanes(session::Session& session, EditorState& editor);
+/** True if a selected track has take lanes. */
+[[nodiscard]] bool selectionHasTakeLanes(const session::Session& session, const EditorState& editor);
+/** Track > New Take Lane from Comp: each selected track keeps a copy of its comp in a new take lane
+    (and shows its lanes). One undo step. Returns how many lanes were made. */
+int newTakeLanesFromComp(session::Session& session, EditorState& editor);
+/** Track > Delete Unused Take Lanes (none of their material is in the comp). One undo step. */
+int deleteUnusedTakeLanes(session::Session& session, EditorState& editor);
+/** Track > Delete All Take Lanes: the comps stay as they are. One undo step. */
+int deleteAllTakeLanes(session::Session& session, EditorState& editor);
+
 /** Track > Create Click Track: a mono aux input named "Click" with the Click device inserted, after
     the current track (selected). One undo step. */
 juce::ValueTree createClickTrack(session::Session& session, EditorState& editor);

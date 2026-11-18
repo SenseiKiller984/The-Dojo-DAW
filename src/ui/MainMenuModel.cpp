@@ -68,6 +68,15 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, toggleRecordMonitoring);
         menu.addCommandItem(cm, clearClipIndicators);
         menu.addSeparator();
+        {
+            juce::PopupMenu takes;
+            takes.addCommandItem(cm, toggleTakeLanes);
+            takes.addCommandItem(cm, newTakeLaneFromComp);
+            takes.addSeparator();
+            takes.addCommandItem(cm, deleteUnusedTakeLanes);
+            takes.addCommandItem(cm, deleteAllTakeLanes);
+            menu.addSubMenu("Take Lanes", takes);
+        }
         menu.addCommandItem(cm, scrollToTrack);
         break;
     case 3:
@@ -114,6 +123,15 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, toggleLoop);
         menu.addCommandItem(cm, togglePunchIn);
         menu.addCommandItem(cm, togglePunchOut);
+        menu.addSeparator();
+        menu.addCommandItem(cm, toggleLoopRecord);
+        menu.addCommandItem(cm, toggleTakesToLanes);
+        {
+            juce::PopupMenu crossfade;
+            for (int c = compCrossfadeOff; c <= compCrossfade50; ++c)
+                crossfade.addCommandItem(cm, c);
+            menu.addSubMenu("Comp Crossfade", crossfade);
+        }
         break;
     case 5:
         menu.addCommandItem(cm, zoomIn);

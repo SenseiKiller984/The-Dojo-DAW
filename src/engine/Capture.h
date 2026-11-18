@@ -17,6 +17,7 @@ struct CapturedMidiEvent
     double seconds = 0.0;
     std::uint8_t data[3]{};
     std::uint8_t size = 0;
+    int pass = 0; ///< loop recording: how many times the loop had come round
 };
 
 /**
@@ -46,6 +47,9 @@ struct CaptureSession
 
     bool onlyWhilePlaying = true;
     bool suspendLoop = false; ///< ignore the loop range while capturing (recording)
+    /** Loop recording (the loop not suspended): how many times the loop has come round (written by
+        the audio thread). */
+    std::atomic<int> loopPasses{0};
 };
 
 } // namespace dojo::engine

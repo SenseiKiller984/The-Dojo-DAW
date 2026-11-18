@@ -90,7 +90,21 @@ enum : juce::CommandID
     warpAtHitpoints,
     quantizeWarpMarkers,
     clearWarpMarkers,
+    toggleTakeLanes,
+    newTakeLaneFromComp,
+    deleteUnusedTakeLanes,
+    deleteAllTakeLanes,
+    toggleLoopRecord,
+    toggleTakesToLanes,
+    compCrossfadeOff, ///< followed by compCrossfade5 .. compCrossfade50 (kCompCrossfadeMs)
+    compCrossfade5,
+    compCrossfade10,
+    compCrossfade20,
+    compCrossfade50,
 };
+
+/** The comp crossfade lengths offered (milliseconds), from compCrossfadeOff on. */
+inline constexpr int kCompCrossfadeMs[] = {0, 5, 10, 20, 50};
 
 namespace categories
 {

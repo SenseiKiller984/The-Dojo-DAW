@@ -107,9 +107,31 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Input Only**: always their input.
   - **Auto Input** (tape-machine style, the default): the input while stopped. While playing, the track's own clips. While recording, the input from the punch-in point to the punch-out point, and the clips before and after.
 - **Punch In / Punch Out** (the buttons next to the loop button, or the Transport menu) use the loop range. A take keeps only what lies between the punch points; red brackets in the ruler show them.
-- A take replaces what was on its track where it lies; one undo brings the old take back whole.
+- **Space** (or Stop) while recording ends the recording and keeps the take, as Record does.
+- Recording over earlier material keeps every take in **take lanes** (below). With *Record Takes to Lanes* off, a take replaces what was on its track where it lies. Either way one undo removes the recording whole.
 - MIDI keyboards are enabled automatically, also when plugged in while The Dojo runs. Armed instrument tracks play and record live MIDI (notes, controllers, pitch bend).
 - Recorded clips are placed with **latency compensation** (input + output + plug-in latency).
+
+**Take lanes and comping** (playlists)
+- Audio, instrument and MIDI tracks can keep **takes** in **take lanes** under them. The track's own clips are the **comp**: what plays. The takes in the lanes do not play.
+- **T** in a track header shows or hides its take lanes (it appears once the track has some, with how many). *Track > Take Lanes > Show Take Lanes* (Shift+T) does it for the selected tracks.
+- **Record Takes to Lanes** (Transport menu, on by default): a take goes into a take lane of its own ("Take 3") and is comped in when it is recorded over earlier material or onto a track that has take lanes. The earlier material goes into a take lane too, if none holds it yet. A first take onto empty space stays a plain clip.
+- **Loop Record** (Transport menu, Shift+L): with the loop on, recording cycles the loop and each pass becomes a take in its own lane (all from one file), the newest comped in.
+  - A last pass shorter than a quarter of the loop is dropped (Stop came just after the loop came round).
+  - Punch In or Out turn it off: they use the loop range as theirs.
+  - MIDI takes work the same way, a clip per pass.
+- **Swipe comping**: drag across a take lane and that stretch of the take goes into the comp, replacing what was there (silence where the take has none). It snaps to the grid unless Alt or Shift is held. **Click** a take to comp all of it.
+  - The parts of each take that are in the comp are lit, and each lane says how much of it is.
+  - Comp clips name the take they came from ("Vocal [Take 2]").
+- **Quick crossfades**: every edit in the comp gets a short crossfade (*Transport > Comp Crossfade*: 10 ms by default; 5, 20, 50 ms, or Off for plain cuts). It is centred on the edit where both sides have audio.
+  - Between takes it is equal power.
+  - Where the same take goes on (its gain changed, say) it is equal gain, so nothing dips or swells.
+  - Where the comp meets silence, a quick fade.
+  - Swiping more of a take that is already in the comp extends that stretch as one clip, and its other edit (and crossfade) stays where it was.
+- **Audition** a take: **S** on its lane plays the lane instead of the comp (the comp is dimmed meanwhile). S again goes back to the comp.
+- A lane's menu (right-click): Comp Whole Take, Audition, Rename (or double-click its name), Delete Take Lane.
+- *Track > Take Lanes*: New Take Lane from Comp (keeps a version of the comp), Delete Unused Take Lanes, Delete All Take Lanes (the comp stays as it is).
+- Takes are saved with the project; duplicated tracks keep their takes; files used only by takes count as used in the Clip List. Every comp is one undo step.
 
 **Editing**
 - Audio clips: move (also across tracks), trim, fades, split, duplicate, cut/copy/paste; overlapping clips **crossfade** (equal power).
@@ -455,8 +477,9 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 | Keys | Action |
 |---|---|
-| Space / Home | Play-stop / return to start |
+| Space / Home | Play-stop (while recording: end the recording) / return to start |
 | R / L | Record / loop on-off |
+| Shift+L, Shift+T | Loop Record on-off, show the selected tracks' take lanes |
 | Ctrl+T, Ctrl+Shift+T, Ctrl+B, Ctrl+Shift+F | Add audio track, instrument track, bus, folder |
 | Ctrl+Shift+N, Alt+Shift+D | New tracks, duplicate tracks |
 | Ctrl+Shift+G | Put the selected tracks into a new folder |
@@ -481,6 +504,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 Mouse:
 - Right-click clips, track headers, automation lanes or empty lanes for context menus.
 - Drag in an empty part of the lanes for a rubber band: it selects the clips it touches and is the time selection (for Capture). Ctrl or Shift add to the selection.
+- Drag across a take lane to comp that stretch of the take; click a take to comp all of it.
 - Shift+wheel scrolls sideways; Ctrl+wheel zooms (also in the piano roll).
 - Double-click a fader, knob or slider to reset it.
 - The window's square button (or a double-click on its title bar) maximises it to the screen's work area and restores it again. From full screen (F11), F11 or the square button goes back to the window as it was, maximised or not.
@@ -574,9 +598,9 @@ src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-o
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),
               Media Foundation (Windows); background frame server for the Video window and thumbnails
-src/session   the document (tracks, clips, MIDI, devices, sends, automation) with undo, audio
-              decoding/streaming, device instances, graph compiler, recorder, exporter, save/open,
-              device presets (.dojopreset)
+src/session   the document (tracks, clips, take lanes and comping, MIDI, devices, sends, automation)
+              with undo, audio decoding/streaming, device instances, graph compiler, recorder (takes,
+              loop recording), exporter, save/open, device presets (.dojopreset)
 src/ui        arranger, mixer, devices panel + editors, piano roll, step sequencer, browser,
               transport, export dialog, menus, look-and-feel
 src/app       application entry point, main window, settings

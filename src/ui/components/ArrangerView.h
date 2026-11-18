@@ -22,8 +22,8 @@ namespace dojo::ui
     The arranger: bar/beat ruler with the loop range, track headers and lanes, editing the session
     directly.
 
-    Rows are tracks (folders indent their contents and can be collapsed) and, below a track whose
-    automation is shown, one row per automation lane.
+    Rows are tracks (folders indent their contents and can be collapsed) and, below a track, one row
+    per take lane (when its take lanes are shown) and per automation lane (when its automation is).
 
     Mouse
       ruler (top strip)    drag to set the loop range; drag it to move it, its edges to resize;
@@ -36,8 +36,12 @@ namespace dojo::ui
       clip left/right edge drag to trim (non-destructive)
       clip top corners     drag the square handles to set fade-in / fade-out
       automation lane      click to add a point, drag points, double-click a point to delete it
+      take lane            drag across a take (swipe) to comp that stretch of it into the track;
+                           click a take to comp all of it; its header: S auditions the lane,
+                           double-click renames it, right-click for its menu
       track header         click to select, drag to reorder (also into/out of folders), double-click
-                           the name to rename; buttons: folder fold, R(ecord arm), M, S, A(utomation)
+                           the name to rename; buttons: folder fold, R(ecord arm), M, S, A(utomation),
+                           T (take lanes, on tracks that have some)
       right-click          context menus for clips, tracks, lanes and empty space
       wheel                vertical scroll; Shift+wheel horizontal; Ctrl+wheel zoom
     Holding Alt or Shift while dragging bypasses grid snapping.
@@ -150,6 +154,14 @@ public:
     [[nodiscard]] juce::Rectangle<int> getTrackHeaderArea(const juce::ValueTree& track) const;
     /** A header's toggle, counted from the right: 0 automation (A), 1 solo (S), 2 mute (M), 3 arm (R). */
     [[nodiscard]] juce::Rectangle<int> getTrackButtonArea(const juce::ValueTree& track, int indexFromRight) const;
+    /** The T button (take lanes) of a track's header (empty if the track has no take lanes or is not shown). */
+    [[nodiscard]] juce::Rectangle<int> getTakesButtonArea(const juce::ValueTree& track) const;
+
+    // --- Take lanes (public for tests) -----------------------------------------------------------------
+    /** Where a take lane is drawn (header and lane), in component coordinates (empty if not shown). */
+    [[nodiscard]] juce::Rectangle<int> getTakeLaneArea(const juce::ValueTree& lane) const;
+    /** A take lane header's S (audition) button. */
+    [[nodiscard]] juce::Rectangle<int> getTakeAuditionButtonArea(const juce::ValueTree& lane) const;
 
 private:
     struct Row
@@ -158,10 +170,11 @@ private:
         {
             track,
             automation,
+            take, ///< a take lane
         };
         Kind kind = Kind::track;
         juce::ValueTree track; ///< the track (for lanes: the lane's owner)
-        juce::ValueTree lane;  ///< AUTOMATION tree for automation rows
+        juce::ValueTree lane;  ///< AUTOMATION tree for automation rows, TAKELANE tree for take rows
         int depth = 0;
         int top = 0; ///< content y (before scrolling)
         int height = 0;
@@ -184,6 +197,7 @@ private:
         automationPoint,
         marquee,
         warpMarker,
+        swipe, ///< across a take lane: comping
     };
 
     enum class ClipZone
@@ -268,6 +282,11 @@ private:
     void paintHeaders(juce::Graphics& g) const;
     void paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& row) const;
     void paintLaneHeader(juce::Graphics& g, int rowIndex, const Row& row) const;
+    void paintTakeHeader(juce::Graphics& g, int rowIndex, const Row& row) const;
+    /** A take lane: its takes, the stretches of them in the comp lit, the swipe being dragged. */
+    void paintTakeLane(juce::Graphics& g, int rowIndex, const Row& row) const;
+    /** The T button on a track header (the track has take lanes); empty otherwise. */
+    [[nodiscard]] juce::Rectangle<int> getTakesButton(int row) const;
     void paintLanes(juce::Graphics& g) const;
     void paintAutomation(juce::Graphics& g, int rowIndex, const Row& row) const;
     void paintClip(juce::Graphics& g, const juce::ValueTree& clip, int row, juce::Colour colour) const;
@@ -295,6 +314,9 @@ private:
     void dragLoop(const juce::MouseEvent& e);
     void mouseDownOnHeader(const juce::MouseEvent& e, int row);
     void mouseDownOnAutomation(const juce::MouseEvent& e, int row);
+    void mouseDownOnTake(const juce::MouseEvent& e, int row);
+    void showTakeMenu(const juce::ValueTree& lane);
+    [[nodiscard]] int rowOfTakeLane(const juce::ValueTree& lane) const;
     void showClipMenu(const juce::ValueTree& clip);
     void showTrackMenu(const juce::ValueTree& track);
     void showLaneMenu(int row, double seconds);
@@ -334,7 +356,8 @@ private:
     juce::ScrollBar verticalScroll_{true};
     juce::TextButton addTrackButton_;
     std::unique_ptr<juce::TextEditor> renameEditor_;
-    std::uint32_t renamingTrackId_ = 0;
+    std::uint32_t renamingTrackId_ = 0; ///< (or the take lane being renamed, with renamingTake_)
+    bool renamingTake_ = false;
 
     double pixelsPerSecond_ = 40.0;
     // Rubber-band selection: corners in timeline coordinates (seconds, content y), so the band stays
@@ -368,6 +391,11 @@ private:
     std::uint32_t pendingTrackClick_ = 0; ///< a click (no drag) on a track of a multi-selection selects only it
     juce::ValueTree dragPoint_;
     int dragPointRow_ = -1;
+    juce::ValueTree swipeLane_; ///< the take lane being swiped across
+    int swipeRow_ = -1;
+    double swipeAnchor_ = 0.0;   ///< where the swipe began (snapped)
+    double swipeEnd_ = 0.0;
+    double swipeClick_ = 0.0;    ///< where the mouse went down (a click comps the take there)
     double loopDragStart_ = 0.0;
     double loopDragEnd_ = 0.0;
     double loopAnchor_ = 0.0;

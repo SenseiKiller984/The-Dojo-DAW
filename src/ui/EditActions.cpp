@@ -566,6 +566,81 @@ bool setSelectedTracksActive(session::Session& session, EditorState& editor, boo
     return true;
 }
 
+// --- Take lanes -----------------------------------------------------------------------------------
+
+std::vector<juce::ValueTree> getSelectedTakeTracks(const session::Session& session, const EditorState& editor)
+{
+    std::vector<juce::ValueTree> tracks;
+    for (const auto& t : session.getAllTracks())
+    {
+        const auto kind = session::track::getKind(t);
+        if (editor.isTrackSelected(session::track::getId(t)) && !session::track::isFolder(t)
+            && (session::holdsAudio(kind) || session::holdsMidi(kind)))
+            tracks.push_back(t);
+    }
+    return tracks;
+}
+
+bool selectedTracksShowTakes(const session::Session& session, const EditorState& editor)
+{
+    const auto tracks = getSelectedTakeTracks(session, editor);
+    return !tracks.empty() && std::all_of(tracks.begin(), tracks.end(), [](const juce::ValueTree& t) { return session::track::isShowingTakes(t); });
+}
+
+bool toggleSelectedTracksTakeLanes(session::Session& session, EditorState& editor)
+{
+    const auto tracks = getSelectedTakeTracks(session, editor);
+    if (tracks.empty())
+        return false;
+    const bool show = !selectedTracksShowTakes(session, editor);
+    for (auto t : tracks)
+        session::track::setShowingTakes(t, show, nullptr); // (a view setting: not an edit)
+    return true;
+}
+
+bool selectionHasTakeLanes(const session::Session& session, const EditorState& editor)
+{
+    const auto tracks = getSelectedTakeTracks(session, editor);
+    return std::any_of(tracks.begin(), tracks.end(), [](const juce::ValueTree& t) { return !session::Session::getTakeLanes(t).empty(); });
+}
+
+int newTakeLanesFromComp(session::Session& session, EditorState& editor)
+{
+    const auto tracks = getSelectedTakeTracks(session, editor);
+    if (tracks.empty())
+        return 0;
+    session.beginTransaction("New Take Lane from Comp");
+    int made = 0;
+    for (auto t : tracks)
+        if (session.addTakeLaneFromComp(t).isValid())
+        {
+            session::track::setShowingTakes(t, true, nullptr);
+            ++made;
+        }
+    return made;
+}
+
+int deleteUnusedTakeLanes(session::Session& session, EditorState& editor)
+{
+    session.beginTransaction("Delete Unused Take Lanes");
+    int removed = 0;
+    for (auto t : getSelectedTakeTracks(session, editor))
+        removed += session.removeUnusedTakeLanes(t);
+    return removed;
+}
+
+int deleteAllTakeLanes(session::Session& session, EditorState& editor)
+{
+    session.beginTransaction("Delete All Take Lanes");
+    int removed = 0;
+    for (auto t : getSelectedTakeTracks(session, editor))
+    {
+        removed += static_cast<int>(session::Session::getTakeLanes(t).size());
+        session.removeAllTakeLanes(t);
+    }
+    return removed;
+}
+
 namespace
 {
 bool hasLock(const juce::ValueTree& c, ClipLock lock)

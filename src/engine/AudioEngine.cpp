@@ -359,6 +359,7 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
                 captured.seconds = positionSeconds_;
                 std::copy_n(event.data, event.size, captured.data);
                 captured.size = event.size;
+                captured.pass = capture_->loopPasses.load(std::memory_order_relaxed);
                 capture_->midiCount.store(index + 1, std::memory_order_release);
             }
         }
@@ -428,6 +429,8 @@ void AudioEngine::renderBlock(const float* const* inputs, int numInputs, float* 
         {
             positionSeconds_ = loopStart_ + std::max(0.0, positionSeconds_ - loopEnd_);
             panicAll();
+            if (capture_ != nullptr) // loop recording: the next pass begins
+                capture_->loopPasses.fetch_add(1, std::memory_order_release);
         }
         else if (reachesEnd)
         {

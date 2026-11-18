@@ -356,7 +356,54 @@ void setControlledBus(juce::ValueTree t, std::uint32_t busId, juce::UndoManager*
 {
     t.setProperty(ids::controls, static_cast<int>(busId), um);
 }
+bool isShowingTakes(const juce::ValueTree& t) { return t.getProperty(ids::showTakes, false); }
+std::uint32_t getAuditionedTake(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::audition, 0))); }
+void setShowingTakes(juce::ValueTree t, bool show, juce::UndoManager* um)
+{
+    if (show)
+        t.setProperty(ids::showTakes, true, um);
+    else
+        t.removeProperty(ids::showTakes, um);
+}
+void setAuditionedTake(juce::ValueTree t, std::uint32_t laneId, juce::UndoManager* um)
+{
+    if (laneId != 0)
+        t.setProperty(ids::audition, static_cast<int>(laneId), um);
+    else
+        t.removeProperty(ids::audition, um);
+}
 } // namespace track
+
+//==================================================================================================
+// Take lane accessors
+
+namespace takelane
+{
+std::uint32_t getId(const juce::ValueTree& lane) { return readId(lane); }
+juce::String getName(const juce::ValueTree& lane) { return lane.getProperty(ids::name).toString(); }
+void setName(juce::ValueTree lane, const juce::String& name, juce::UndoManager* um) { lane.setProperty(ids::name, name, um); }
+
+std::vector<juce::ValueTree> getClips(const juce::ValueTree& lane)
+{
+    std::vector<juce::ValueTree> clips;
+    for (const auto& c : lane)
+        if (Session::isClip(c))
+            clips.push_back(c);
+    std::stable_sort(clips.begin(), clips.end(), [](const auto& a, const auto& b) { return clip::getStart(a) < clip::getStart(b); });
+    return clips;
+}
+
+std::pair<double, double> getExtent(const juce::ValueTree& lane)
+{
+    const auto clips = getClips(lane);
+    if (clips.empty())
+        return {0.0, 0.0};
+    double end = 0.0;
+    for (const auto& c : clips)
+        end = std::max(end, clip::getEnd(c));
+    return {clip::getStart(clips.front()), end};
+}
+} // namespace takelane
 
 //==================================================================================================
 // Clip accessors
@@ -558,6 +605,15 @@ void setGainBypassed(juce::ValueTree c, bool bypassed, juce::UndoManager* um)
 }
 
 bool isUserNamed(const juce::ValueTree& c) { return c.getProperty(ids::userNamed, false); }
+
+std::uint32_t getTake(const juce::ValueTree& c) { return static_cast<std::uint32_t>(static_cast<int>(c.getProperty(ids::fromTake, 0))); }
+void setTake(juce::ValueTree c, std::uint32_t laneId, juce::UndoManager* um)
+{
+    if (laneId != 0)
+        c.setProperty(ids::fromTake, static_cast<int>(laneId), um);
+    else
+        c.removeProperty(ids::fromTake, um);
+}
 
 bool isEditLocked(const juce::ValueTree& c) { return c.getProperty(ids::editLocked, false); }
 bool isTimeLocked(const juce::ValueTree& c) { return c.getProperty(ids::timeLocked, false); }
@@ -783,6 +839,13 @@ std::pair<double, double> Session::getPunchWindow() const
 {
     return {isPunchInEnabled() ? getLoopStart() : 0.0, isPunchOutEnabled() ? getLoopEnd() : std::numeric_limits<double>::infinity()};
 }
+
+bool Session::isRecordingTakesToLanes() const { return state_.getProperty(ids::takesToLanes, true); }
+void Session::setRecordingTakesToLanes(bool enabled) { state_.setProperty(ids::takesToLanes, enabled, nullptr); }
+bool Session::isLoopRecording() const { return state_.getProperty(ids::loopRecord, false); }
+void Session::setLoopRecording(bool enabled) { state_.setProperty(ids::loopRecord, enabled, nullptr); }
+double Session::getCompCrossfade() const { return state_.getProperty(ids::compCrossfade, 0.010); }
+void Session::setCompCrossfade(double seconds) { state_.setProperty(ids::compCrossfade, juce::jlimit(0.0, 0.5, seconds), nullptr); }
 
 bool Session::isInputOnlyMonitoring() const { return state_.getProperty(ids::inputOnly, false); }
 void Session::setInputOnlyMonitoring(bool inputOnly) { state_.setProperty(ids::inputOnly, inputOnly, nullptr); }
@@ -1017,7 +1080,7 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
         for (int i = node.getNumChildren(); --i >= 0;)
         {
             const auto child = node.getChild(i);
-            const bool drop = (isClip(child) && !options.clips)
+            const bool drop = ((isClip(child) || child.hasType(ids::takeLane)) && !options.clips)
                               || (child.hasType(ids::device) && !options.devices) || (child.hasType(ids::send) && !options.sends)
                               || (child.hasType(ids::automation) && !options.automation);
             if (drop)
@@ -1092,7 +1155,7 @@ juce::ValueTree Session::duplicateTrack(const juce::ValueTree& t, const Duplicat
         }
         else
         {
-            for (const auto& property : {ids::output, ids::auxSource, ids::sidechain, ids::target, ids::sourceDevice})
+            for (const auto& property : {ids::output, ids::auxSource, ids::sidechain, ids::target, ids::sourceDevice, ids::fromTake, ids::audition})
                 if (node.hasProperty(property))
                     node.setProperty(property, static_cast<int>(remap(static_cast<std::uint32_t>(static_cast<int>(node.getProperty(property))))), nullptr);
         }
@@ -2644,11 +2707,20 @@ void Session::reset()
 std::vector<juce::File> Session::getReferencedFiles() const
 {
     std::vector<juce::File> files;
+    const auto add = [&files](const juce::ValueTree& c)
+    {
+        if (c.hasType(ids::clip))
+            if (const auto f = clip::getFile(c); std::find(files.begin(), files.end(), f) == files.end())
+                files.push_back(f);
+    };
     for (const auto& t : getAllTracks())
         for (const auto& c : t)
-            if (c.hasType(ids::clip))
-                if (const auto f = clip::getFile(c); std::find(files.begin(), files.end(), f) == files.end())
-                    files.push_back(f);
+        {
+            add(c);
+            if (c.hasType(ids::takeLane)) // (takes are shown, and comped from)
+                for (const auto& take : c)
+                    add(take);
+        }
     return files;
 }
 
@@ -2662,7 +2734,7 @@ void forEachMediaClip(juce::ValueTree parent, Fn&& fn)
     {
         if (child.hasType(ids::clip) || child.hasType(ids::videoClip))
             fn(child);
-        else if (child.hasType(ids::track) || child.hasType(ids::clipList))
+        else if (child.hasType(ids::track) || child.hasType(ids::clipList) || child.hasType(ids::takeLane))
             forEachMediaClip(child, fn);
     }
 }

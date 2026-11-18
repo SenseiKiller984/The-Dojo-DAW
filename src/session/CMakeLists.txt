@@ -17,6 +17,7 @@ add_library(dojo_session STATIC
     Recorder.h
     Session.cpp
     Session.h
+    Takes.cpp
     TempoDetector.cpp
     TempoDetector.h)
 add_library(dojo::session ALIAS dojo_session)

@@ -196,7 +196,9 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     };
     stopButton_.onClick = [this]
     {
-        if (playing_)
+        if (playing_ && onStop)
+            onStop();
+        else if (playing_)
             controller_.stop();
         else if (onReturnToStart)
             onReturnToStart();

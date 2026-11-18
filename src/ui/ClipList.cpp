@@ -56,6 +56,18 @@ std::vector<juce::ValueTree> trackClips(const Session& session)
     return clips;
 }
 
+/** Every clip placed in the session: on tracks, and the takes in their take lanes. */
+std::vector<juce::ValueTree> placedClips(const Session& session)
+{
+    auto clips = trackClips(session);
+    for (const auto& t : session.getAllTracks())
+        for (const auto& lane : Session::getTakeLanes(t))
+            for (const auto& c : lane)
+                if (Session::isClip(c))
+                    clips.push_back(c);
+    return clips;
+}
+
 /** A sort value: a number or a text (empty text and NaN sort last). */
 struct SortValue
 {
@@ -205,6 +217,7 @@ std::vector<Item> collectItems(const Session& session, const Show& show)
 {
     std::vector<Item> items;
     const auto clips = trackClips(session);
+    const auto placed = placedClips(session); // (an entry a take uses is in use)
     const auto entries = session.getClipListEntries();
 
     // Clip List entries: whole-file and captured clips.
@@ -218,7 +231,7 @@ std::vector<Item> collectItems(const Session& session, const Show& show)
         item.userDefined = !item.wholeFile;
         item.offline = isOffline(e);
         const auto id = static_cast<int>(clip::getId(e));
-        item.used = std::any_of(clips.begin(), clips.end(), [&](const juce::ValueTree& c)
+        item.used = std::any_of(placed.begin(), placed.end(), [&](const juce::ValueTree& c)
                                 { return static_cast<int>(c.getProperty(session::ids::listEntry, 0)) == id || sameMaterial(c, e, false); });
         if (wanted(show, item.kind))
             items.push_back(item);

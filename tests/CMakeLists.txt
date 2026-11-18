@@ -53,6 +53,7 @@ add_executable(dojo_tests
     HardwareInsertTests.cpp
     ControlSurfaceTests.cpp
     WarpTests.cpp
+    TakeLaneTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleLookTests.cpp

@@ -2,6 +2,7 @@
 
 #include "engine/AudioEngine.h"
 
+#include <algorithm>
 #include <map>
 #include <tuple>
 
@@ -68,9 +69,13 @@ juce::String Recorder::start()
     const double sampleRate = engine.getSampleRate();
     const int numInputs = engine.getNumInputChannels();
 
+    // Loop Record cycles the loop (not with punch in or out: they take the loop range as theirs).
+    const bool loopRecording = session.isLoopRecording() && session.isLoopEnabled() && !session.isPunchInEnabled()
+                               && !session.isPunchOutEnabled() && session.getLoopEnd() > session.getLoopStart() + kMinClipLength;
+
     auto capture = std::make_unique<engine::CaptureSession>();
     capture->onlyWhilePlaying = true;
-    capture->suspendLoop = true;
+    capture->suspendLoop = !loopRecording;
     std::vector<AudioTake> takes;
     std::vector<std::uint32_t> midiTracks;
     juce::StringArray problems;
@@ -151,6 +156,10 @@ juce::String Recorder::start()
     audioLatency_ = getAudioLatencySeconds();
     midiLatency_ = getMidiLatencySeconds();
     std::tie(punchStart_, punchEnd_) = session.getPunchWindow();
+    loopRecording_ = loopRecording;
+    loopStart_ = session.getLoopStart();
+    loopEnd_ = session.getLoopEnd();
+    stopPasses_ = 0;
     capture_ = std::move(capture);
     takes_ = std::move(takes);
     midiTracks_ = std::move(midiTracks);
@@ -171,6 +180,7 @@ void Recorder::stop()
         return;
 
     stopPosition_ = controller_.getEngine().collectTelemetry().playheadSeconds;
+    stopPasses_ = capture_ != nullptr ? capture_->loopPasses.load(std::memory_order_acquire) : 0;
     stopCountBefore_ = controller_.getEngine().getCaptureStopCount();
     controller_.stopCapture();
     controller_.stop();
@@ -195,12 +205,73 @@ void Recorder::timerCallback()
     }
 }
 
+std::vector<Recorder::Pass> Recorder::audioPassesOf(double captureStart, double start, double length, int loopPasses) const
+{
+    // The whole take: the comp keeps what lies in the punch window, its take lane all of it.
+    const double laneFrom = std::max(0.0, start);
+    if (!loopRecording_ || loopPasses == 0)
+    {
+        Pass pass;
+        pass.from = std::max(laneFrom, punchStart_);
+        pass.to = std::min(start + length, punchEnd_);
+        pass.offset = pass.from - start;
+        pass.laneFrom = laneFrom;
+        pass.laneTo = start + length;
+        pass.laneOffset = laneFrom - start;
+        if (pass.to - pass.from <= kMinClipLength)
+            return {};
+        return {pass};
+    }
+
+    // Loop recording: the transport played on to the loop end, then the loop over and over. What
+    // the performer played at time u of pass k reached the file `latency` after the transport
+    // played u.
+    std::vector<Pass> passes;
+    const double latency = audioLatency_;
+    const double loopLength = loopEnd_ - loopStart_;
+    const double firstWrap = loopEnd_ - captureStart; // seconds into the capture
+    const auto add = [&passes](double from, double to, double offset)
+    {
+        if (to - from > kMinClipLength)
+            passes.push_back({from, to, offset, from, to, offset});
+    };
+    const double from = std::max({loopStart_, start, 0.0});
+    add(from, std::min(loopEnd_, start + length), from - start);
+    for (int k = 1; k <= std::min(loopPasses, stopPasses_); ++k) // (passes begun after Stop are not kept)
+    {
+        const double offset = firstWrap + (k - 1) * loopLength + latency;
+        add(loopStart_, loopStart_ + std::min(loopLength, length - offset), offset);
+    }
+    // A last pass much shorter than the loop: Stop came just after the loop came round.
+    if (passes.size() > 1 && passes.back().to - passes.back().from < 0.25 * loopLength)
+        passes.pop_back();
+    return passes;
+}
+
+bool Recorder::recordsToLanes(const juce::ValueTree& track, double from, double to, std::size_t passes) const
+{
+    if (passes > 1)
+        return true; // (the passes of a loop recording are takes, whatever the setting)
+    const auto& session = project_.getSession();
+    if (!session.isRecordingTakesToLanes())
+        return false;
+    if (!Session::getTakeLanes(track).empty())
+        return true;
+    for (const auto& c : track)
+        if ((c.hasType(ids::clip) || c.hasType(ids::midiClip)) && clip::getEnd(c) > from + 1.0e-9 && clip::getStart(c) < to - 1.0e-9)
+            return true; // it would replace earlier material
+    return false;
+}
+
 void Recorder::finish()
 {
     auto& session = project_.getSession();
     const double captureStart = controller_.getEngine().getCaptureStartSeconds();
     const bool captured = captureStart >= 0.0;
     const double sampleRate = controller_.getEngine().getSampleRate();
+    // How often the loop came round (the capture may have been abandoned to the audio thread).
+    const auto* capture = capture_ != nullptr ? capture_.get() : (abandoned_.empty() ? nullptr : abandoned_.back().get());
+    const int loopPasses = capture != nullptr ? capture->loopPasses.load(std::memory_order_acquire) : 0;
 
     for (auto& take : takes_)
     {
@@ -223,27 +294,49 @@ void Recorder::finish()
             continue;
         }
 
-        // The take covers [start, start + length) of the timeline; keep what lies in the punch window.
+        // The take covers [start, start + length) of the timeline (one pass after another when
+        // loop recording); the comp keeps what lies in the punch window.
         const double start = captureStart - audioLatency_;
-        const double keepFrom = std::max({start, 0.0, punchStart_});
-        const double keepTo = std::min(start + length, punchEnd_);
-
-        if (keepTo - keepFrom > kMinClipLength)
-        {
-            project_.getAssets().request(take.file, {});
-            session.clearRange(t, keepFrom, keepTo); // the take replaces what was there
-            session.addWholeFileClip(take.file, length, false, start); // (time stamped where it was recorded)
-            session.addClip(t, take.file, keepFrom, keepTo - keepFrom, keepFrom - start);
-        }
-        else
+        const auto passes = audioPassesOf(captureStart, start, length, loopPasses);
+        if (passes.empty())
         {
             take.stream.reset();
             take.file.deleteFile(); // nothing of it is inside the punch window
+            continue;
+        }
+
+        project_.getAssets().request(take.file, {});
+        session.addWholeFileClip(take.file, length, false, start); // (time stamped where it was recorded)
+        double from = passes.front().from, to = passes.front().to;
+        for (const auto& pass : passes)
+        {
+            from = std::min(from, pass.from);
+            to = std::max(to, pass.to);
+        }
+
+        if (recordsToLanes(t, from, to, passes.size()))
+        {
+            // Each take in a take lane of its own (earlier material too), the newest comped in.
+            session.keepCompInTakeLane(t, from, to);
+            for (const auto& pass : passes)
+            {
+                auto lane = session.addTakeLane(t);
+                session.addClip(lane, take.file, pass.laneFrom, pass.laneTo - pass.laneFrom, pass.laneOffset);
+                session.compTake(lane, pass.from, pass.to);
+            }
+        }
+        else
+        {
+            for (const auto& pass : passes)
+            {
+                session.clearRange(t, pass.from, pass.to); // the take replaces what was there
+                session.addClip(t, take.file, pass.from, pass.to - pass.from, pass.offset);
+            }
         }
     }
 
     if (captured && capture_ != nullptr && capture_->captureMidi)
-        createMidiClips(captureStart, std::max(stopPosition_, captureStart + kMinClipLength));
+        createMidiClips(captureStart, std::max(stopPosition_, captureStart + kMinClipLength), loopPasses);
 
     takes_.clear();
     midiTracks_.clear();
@@ -254,16 +347,39 @@ void Recorder::finish()
         onStateChanged();
 }
 
-void Recorder::createMidiClips(double captureStart, double stopPosition)
+void Recorder::createMidiClips(double captureStart, double stopPosition, int loopPasses)
 {
     auto& session = project_.getSession();
     const int count = std::min(capture_->midiCount.load(std::memory_order_acquire),
                                static_cast<int>(capture_->midiEvents.size()));
     const double beatsPerSecond = session.getTempo() / 60.0;
-    const double clipStart = std::max(0.0, captureStart - midiLatency_);
-    const double clipEnd = std::max(clipStart + kMinClipLength, stopPosition - midiLatency_);
+    const double loopLength = loopEnd_ - loopStart_;
+    const bool looped = loopRecording_ && loopPasses > 0;
 
-    // Pair note-ons with note-offs; notes still held at the end end with the clip.
+    // The passes: what each one covers of the timeline (one, unless the loop came round).
+    struct Range
+    {
+        double from = 0.0, to = 0.0;
+    };
+    std::vector<Range> passes;
+    const double first = std::max(0.0, captureStart - midiLatency_);
+    const double stop = stopPosition - midiLatency_;
+    if (!looped)
+        passes.push_back({first, std::max(first + kMinClipLength, stop)});
+    else
+    {
+        // Every pass up to the one Stop came in, which ends there (the loop may have come round
+        // once more before the capture stopped).
+        for (int k = 0; k <= stopPasses_; ++k)
+        {
+            const double from = k == 0 ? std::max(first, loopStart_) : loopStart_;
+            passes.push_back({from, k < stopPasses_ ? loopEnd_ : std::clamp(stop, from, loopEnd_)});
+        }
+        if (passes.size() > 1 && passes.back().to - passes.back().from < 0.25 * loopLength)
+            passes.pop_back(); // Stop came just after the loop came round
+    }
+
+    // Pair note-ons with note-offs, pass by pass; notes still held at a pass's end end with it.
     struct Pending
     {
         double startBeat;
@@ -281,67 +397,96 @@ void Recorder::createMidiClips(double captureStart, double stopPosition)
         int controller, channel;
         float value;
     };
-    std::map<int, Pending> held; // key: channel * 128 + note
-    std::vector<Note> notes;
-    std::vector<Control> controls;
-    const auto beatOf = [&](double seconds) { return std::max(0.0, (seconds - midiLatency_ - clipStart) * beatsPerSecond); };
-
-    for (int i = 0; i < count; ++i)
+    struct Take
     {
-        const auto& e = capture_->midiEvents[static_cast<std::size_t>(i)];
-        const auto message = juce::MidiMessage(e.data, e.size);
-        const int channel = message.getChannel();
-        const double beat = beatOf(e.seconds);
+        double from = 0.0, to = 0.0; ///< (the punch window's part of the pass)
+        std::vector<Note> notes;
+        std::vector<Control> controls;
+    };
+    std::vector<Take> recorded;
 
-        if (message.isNoteOn())
+    for (std::size_t p = 0; p < passes.size(); ++p)
+    {
+        const auto range = passes[p];
+        std::map<int, Pending> held; // key: channel * 128 + note
+        std::vector<Note> notes;
+        std::vector<Control> controls;
+        const auto beatOf = [&](double seconds) { return std::max(0.0, (seconds - range.from) * beatsPerSecond); };
+
+        for (int i = 0; i < count; ++i)
         {
-            held[channel * 128 + message.getNoteNumber()] = {beat, message.getFloatVelocity()};
-        }
-        else if (message.isNoteOff())
-        {
-            const auto key = channel * 128 + message.getNoteNumber();
-            if (const auto it = held.find(key); it != held.end())
+            const auto& e = capture_->midiEvents[static_cast<std::size_t>(i)];
+            // When it was played: an event just after the loop came round was played (heard
+            // late) at the end of the pass before.
+            double seconds = e.seconds - midiLatency_;
+            int pass = looped ? e.pass : 0;
+            if (looped && pass > 0 && seconds < loopStart_ - 1.0e-9)
             {
-                notes.push_back({it->second.startBeat, std::max(beat, it->second.startBeat + kMinNoteLength),
-                                 message.getNoteNumber(), channel, it->second.velocity});
-                held.erase(it);
+                --pass;
+                seconds += loopLength;
+            }
+            if (pass != static_cast<int>(p) || seconds < range.from - 1.0e-9 || seconds >= range.to)
+                continue;
+
+            const auto message = juce::MidiMessage(e.data, e.size);
+            const int channel = message.getChannel();
+            const double beat = beatOf(seconds);
+
+            if (message.isNoteOn())
+            {
+                held[channel * 128 + message.getNoteNumber()] = {beat, message.getFloatVelocity()};
+            }
+            else if (message.isNoteOff())
+            {
+                const auto key = channel * 128 + message.getNoteNumber();
+                if (const auto it = held.find(key); it != held.end())
+                {
+                    notes.push_back({it->second.startBeat, std::max(beat, it->second.startBeat + kMinNoteLength),
+                                     message.getNoteNumber(), channel, it->second.velocity});
+                    held.erase(it);
+                }
+            }
+            else if (message.isController())
+            {
+                controls.push_back({beat, message.getControllerNumber(), channel, static_cast<float>(message.getControllerValue()) / 127.0f});
+            }
+            else if (message.isPitchWheel())
+            {
+                controls.push_back({beat, 128, channel, static_cast<float>(message.getPitchWheelValue()) / 16383.0f});
             }
         }
-        else if (message.isController())
-        {
-            controls.push_back({beat, message.getControllerNumber(), channel, static_cast<float>(message.getControllerValue()) / 127.0f});
-        }
-        else if (message.isPitchWheel())
-        {
-            controls.push_back({beat, 128, channel, static_cast<float>(message.getPitchWheelValue()) / 16383.0f});
-        }
+
+        const double endBeat = (range.to - range.from) * beatsPerSecond;
+        for (const auto& [key, pending] : held)
+            notes.push_back({pending.startBeat, std::max(endBeat, pending.startBeat + kMinNoteLength), key % 128, key / 128,
+                             pending.velocity});
+
+        // Keep the punch window: notes that start in it (ending by its end) and controllers in it.
+        Take take;
+        take.from = std::max(range.from, punchStart_);
+        take.to = std::min(range.to, punchEnd_);
+        if (take.to - take.from <= kMinClipLength)
+            continue;
+        const double fromBeat = (take.from - range.from) * beatsPerSecond;
+        const double toBeat = (take.to - range.from) * beatsPerSecond;
+        for (const auto& n : notes)
+            if (n.startBeat >= fromBeat && n.startBeat < toBeat)
+                take.notes.push_back({n.startBeat - fromBeat, std::min(n.endBeat, toBeat) - fromBeat, n.note, n.channel, n.velocity});
+        for (const auto& c : controls)
+            if (c.beat >= fromBeat && c.beat < toBeat)
+                take.controls.push_back({c.beat - fromBeat, c.controller, c.channel, c.value});
+        if (!take.notes.empty() || !take.controls.empty()) // (a pass with nothing played leaves no take)
+            recorded.push_back(std::move(take));
     }
 
-    const double endBeat = (clipEnd - clipStart) * beatsPerSecond;
-    for (const auto& [key, pending] : held)
-        notes.push_back({pending.startBeat, std::max(endBeat, pending.startBeat + kMinNoteLength), key % 128, key / 128,
-                         pending.velocity});
-
-    // Keep the punch window: notes that start in it (ending by its end) and controllers in it.
-    const double keepFrom = std::max(clipStart, punchStart_);
-    const double keepTo = std::min(clipEnd, punchEnd_);
-    if (keepTo - keepFrom <= kMinClipLength)
+    if (recorded.empty())
         return;
-    const double fromBeat = (keepFrom - clipStart) * beatsPerSecond;
-    const double toBeat = (keepTo - clipStart) * beatsPerSecond;
-    std::vector<Note> keptNotes;
-    for (const auto& n : notes)
-        if (n.startBeat >= fromBeat && n.startBeat < toBeat)
-            keptNotes.push_back({n.startBeat - fromBeat, std::min(n.endBeat, toBeat) - fromBeat, n.note, n.channel, n.velocity});
-    std::vector<Control> keptControls;
-    for (const auto& c : controls)
-        if (c.beat >= fromBeat && c.beat < toBeat)
-            keptControls.push_back({c.beat - fromBeat, c.controller, c.channel, c.value});
-    notes = std::move(keptNotes);
-    controls = std::move(keptControls);
-
-    if (notes.empty() && controls.empty())
-        return;
+    double from = recorded.front().from, to = recorded.front().to;
+    for (const auto& take : recorded)
+    {
+        from = std::min(from, take.from);
+        to = std::max(to, take.to);
+    }
 
     for (const auto id : midiTracks_)
     {
@@ -349,12 +494,33 @@ void Recorder::createMidiClips(double captureStart, double stopPosition)
         if (!t.isValid())
             continue;
 
-        session.clearRange(t, keepFrom, keepTo); // the take replaces what was there
-        auto clipTree = session.addMidiClip(t, keepFrom, keepTo - keepFrom, track::getName(t) + " take");
-        for (const auto& n : notes)
-            session.addNote(clipTree, n.startBeat, n.endBeat - n.startBeat, n.note, n.velocity, n.channel);
-        for (const auto& c : controls)
-            session.addControl(clipTree, c.controller, c.beat, c.value, c.channel);
+        const auto fill = [&session](juce::ValueTree clipTree, const Take& take)
+        {
+            for (const auto& n : take.notes)
+                session.addNote(clipTree, n.startBeat, n.endBeat - n.startBeat, n.note, n.velocity, n.channel);
+            for (const auto& c : take.controls)
+                session.addControl(clipTree, c.controller, c.beat, c.value, c.channel);
+        };
+
+        if (recordsToLanes(t, from, to, passes.size()))
+        {
+            // Each take in a take lane of its own (earlier material too), the newest comped in.
+            session.keepCompInTakeLane(t, from, to);
+            for (const auto& take : recorded)
+            {
+                auto lane = session.addTakeLane(t);
+                fill(session.addMidiClip(lane, take.from, take.to - take.from, track::getName(t) + " take"), take);
+                session.compTake(lane, take.from, take.to);
+            }
+        }
+        else
+        {
+            for (const auto& take : recorded)
+            {
+                session.clearRange(t, take.from, take.to); // the take replaces what was there
+                fill(session.addMidiClip(t, take.from, take.to - take.from, track::getName(t) + " take"), take);
+            }
+        }
     }
 }
 

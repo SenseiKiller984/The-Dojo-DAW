@@ -40,6 +40,8 @@ public:
     /** Play / stop (the play button). Defaults to the controller's; the main component adds "after a
         stop at the end, the view returns to the start" when that preference is on. */
     std::function<void()> onTogglePlayback;
+    /** Stop, while playing: the transport stops (and a recording ends). */
+    std::function<void()> onStop;
     std::function<void()> onRecordClicked;
 
     /** Lights the record button while recording. */

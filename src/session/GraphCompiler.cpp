@@ -608,13 +608,18 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             }
         }
 
-        // Sources.
+        // Sources: the comp (the track's clips), or the take lane auditioned instead.
         const double trackPitch = track::getPitch(t);
         const double trackSpeed = std::max(kMinStretch, track::getSpeed(t));
+        juce::ValueTree playing = t;
+        if (const auto auditioned = track::getAuditionedTake(t); auditioned != 0)
+            for (const auto& lane : Session::getTakeLanes(t))
+                if (takelane::getId(lane) == auditioned)
+                    playing = lane;
 
         if (rt.kind == TrackKind::audio)
         {
-            for (const auto& c : t)
+            for (const auto& c : playing)
             {
                 if (!c.hasType(ids::clip))
                     continue;
@@ -680,7 +685,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         {
             const int transpose = juce::roundToInt(globalTranspose + trackPitch);
 
-            for (const auto& c : t)
+            for (const auto& c : playing)
             {
                 if (!c.hasType(ids::midiClip))
                     continue;
@@ -1190,8 +1195,14 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     std::set<std::uint32_t> liveClips;
     for (const auto& t : trees)
         for (const auto& c : t)
+        {
             if (c.hasType(ids::clip))
                 liveClips.insert(clip::getId(c));
+            if (c.hasType(ids::takeLane)) // (an auditioned take plays through its own)
+                for (const auto& take : c)
+                    if (take.hasType(ids::clip))
+                        liveClips.insert(clip::getId(take));
+        }
     for (auto it = stretchers_.begin(); it != stretchers_.end();)
         it = liveClips.count(it->first) == 0 ? stretchers_.erase(it) : std::next(it);
 
@@ -1235,7 +1246,8 @@ void GraphCompiler::valueTreePropertyChanged(juce::ValueTree&, const juce::Ident
 {
     // Pure UI state and saved device state don't change what is rendered.
     if (property == ids::state || property == ids::collapsed || property == ids::showAutomation ||
-        property == ids::visible || property == ids::name || property == ids::colour)
+        property == ids::visible || property == ids::name || property == ids::colour || property == ids::showTakes ||
+        property == ids::fromTake)
         return;
     triggerAsyncUpdate();
 }

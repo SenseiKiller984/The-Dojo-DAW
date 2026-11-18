@@ -152,6 +152,13 @@ MainComponent::MainComponent(AppServices& services)
 
     transport_.onReturnToStart = [this] { goToStart(); };
     transport_.onTogglePlayback = [this] { togglePlayback(); };
+    transport_.onStop = [this]
+    {
+        if (services_.recorder.isRecording())
+            services_.recorder.stop(); // (the take is kept)
+        else
+            controller_.stop();
+    };
     transport_.onAudioSettingsRequested = [this]
     {
         showAudioSettings();
@@ -197,6 +204,12 @@ MainComponent::~MainComponent()
 
 void MainComponent::togglePlayback()
 {
+    // Stopping while recording ends the recording (keeping the take), as Record does.
+    if (services_.recorder.isRecording())
+    {
+        services_.recorder.stop();
+        return;
+    }
     const auto& telemetry = controller_.getLastTelemetry();
     if (!telemetry.playing && telemetry.stoppedAtEnd && services_.preferences.getReturnViewToStart())
         arranger_.scrollToTime(0.0);
@@ -388,7 +401,18 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    detectHitpoints,
                                    warpAtHitpoints,
                                    quantizeWarpMarkers,
-                                   clearWarpMarkers};
+                                   clearWarpMarkers,
+                                   toggleTakeLanes,
+                                   newTakeLaneFromComp,
+                                   deleteUnusedTakeLanes,
+                                   deleteAllTakeLanes,
+                                   toggleLoopRecord,
+                                   toggleTakesToLanes,
+                                   compCrossfadeOff,
+                                   compCrossfade5,
+                                   compCrossfade10,
+                                   compCrossfade20,
+                                   compCrossfade50};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -685,6 +709,48 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.setInfo("Punch In", "Recording starts at the loop start", categories::transport, 0);
         info.setTicked(session.isPunchInEnabled());
         break;
+    case toggleLoopRecord:
+        info.setInfo("Loop Record", "With the loop on (and no punch), recording cycles the loop: each pass is a take in its own take lane",
+                     categories::transport, 0);
+        info.setTicked(session.isLoopRecording());
+        info.addDefaultKeypress('l', shift);
+        break;
+    case toggleTakesToLanes:
+        info.setInfo("Record Takes to Lanes",
+                     "A take recorded over earlier material goes into a take lane of its own and is comped in; the earlier material is kept",
+                     categories::transport, 0);
+        info.setTicked(session.isRecordingTakesToLanes());
+        break;
+    case compCrossfadeOff:
+    case compCrossfade5:
+    case compCrossfade10:
+    case compCrossfade20:
+    case compCrossfade50:
+    {
+        const int ms = kCompCrossfadeMs[static_cast<std::size_t>(id - compCrossfadeOff)];
+        info.setInfo(ms == 0 ? juce::String("Off (plain cuts)") : juce::String(ms) + " ms",
+                     "The quick crossfade comping puts at each edit", categories::transport, 0);
+        info.setTicked(std::abs(session.getCompCrossfade() * 1000.0 - static_cast<double>(ms)) < 0.5);
+        break;
+    }
+    case toggleTakeLanes:
+        info.setInfo("Show Take Lanes", "Show the selected tracks' take lanes (swipe across a take to comp it in)", categories::track, 0);
+        info.setActive(!actions::getSelectedTakeTracks(session, editor_).empty());
+        info.setTicked(actions::selectedTracksShowTakes(session, editor_));
+        info.addDefaultKeypress('t', shift);
+        break;
+    case newTakeLaneFromComp:
+        info.setInfo("New Take Lane from Comp", "Keep a copy of the selected tracks' comps in a new take lane", categories::track, 0);
+        info.setActive(!actions::getSelectedTakeTracks(session, editor_).empty());
+        break;
+    case deleteUnusedTakeLanes:
+        info.setInfo("Delete Unused Take Lanes", "Remove the selected tracks' take lanes that nothing in the comp comes from", categories::track, 0);
+        info.setActive(actions::selectionHasTakeLanes(session, editor_));
+        break;
+    case deleteAllTakeLanes:
+        info.setInfo("Delete All Take Lanes", "Remove the selected tracks' take lanes; the comps stay as they are", categories::track, 0);
+        info.setActive(actions::selectionHasTakeLanes(session, editor_));
+        break;
     case togglePunchOut:
         info.setInfo("Punch Out", "Recording ends at the loop end", categories::transport, 0);
         info.setTicked(session.isPunchOutEnabled());
@@ -887,6 +953,31 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         break;
     case togglePunchIn:
         session.setPunchInEnabled(!session.isPunchInEnabled());
+        break;
+    case toggleLoopRecord:
+        session.setLoopRecording(!session.isLoopRecording());
+        break;
+    case toggleTakesToLanes:
+        session.setRecordingTakesToLanes(!session.isRecordingTakesToLanes());
+        break;
+    case compCrossfadeOff:
+    case compCrossfade5:
+    case compCrossfade10:
+    case compCrossfade20:
+    case compCrossfade50:
+        session.setCompCrossfade(kCompCrossfadeMs[static_cast<std::size_t>(invocation.commandID - compCrossfadeOff)] / 1000.0);
+        break;
+    case toggleTakeLanes:
+        actions::toggleSelectedTracksTakeLanes(session, editor_);
+        break;
+    case newTakeLaneFromComp:
+        actions::newTakeLanesFromComp(session, editor_);
+        break;
+    case deleteUnusedTakeLanes:
+        actions::deleteUnusedTakeLanes(session, editor_);
+        break;
+    case deleteAllTakeLanes:
+        actions::deleteAllTakeLanes(session, editor_);
         break;
     case clearClipIndicators:
         LevelMeter::clearAllClipIndicators();

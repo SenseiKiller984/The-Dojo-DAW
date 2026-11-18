@@ -20,6 +20,7 @@ namespace
 {
 constexpr int kTrackHeight = 64;
 constexpr int kLaneHeight = 48;
+constexpr int kTakeHeight = 44;
 constexpr int kScrollbarThickness = 10;
 constexpr int kExtraSpaceBelow = 2 * kTrackHeight; // empty drop zone below the last track
 constexpr int kHeaderButtonWidth = 20;
@@ -223,6 +224,20 @@ void ArrangerView::ensureRows() const
         rows_.push_back(row);
         y += kTrackHeight;
 
+        if (session::track::isShowingTakes(t))
+            for (const auto& lane : session::Session::getTakeLanes(t))
+            {
+                Row takeRow;
+                takeRow.kind = Row::Kind::take;
+                takeRow.track = t;
+                takeRow.lane = lane;
+                takeRow.depth = row.depth;
+                takeRow.top = y;
+                takeRow.height = kTakeHeight;
+                rows_.push_back(takeRow);
+                y += kTakeHeight;
+            }
+
         if (!session::track::isShowingAutomation(t))
             continue;
 
@@ -298,6 +313,33 @@ juce::Rectangle<int> ArrangerView::getTrackButtonArea(const juce::ValueTree& tra
 {
     const int row = rowOfTrack(track);
     return row >= 0 ? getHeaderButton(row, indexFromRight) : juce::Rectangle<int>();
+}
+
+juce::Rectangle<int> ArrangerView::getTakesButtonArea(const juce::ValueTree& track) const
+{
+    const int row = rowOfTrack(track);
+    return row >= 0 ? getTakesButton(row) : juce::Rectangle<int>();
+}
+
+int ArrangerView::rowOfTakeLane(const juce::ValueTree& lane) const
+{
+    const auto& all = rows();
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (all[i].kind == Row::Kind::take && all[i].lane == lane)
+            return static_cast<int>(i);
+    return -1;
+}
+
+juce::Rectangle<int> ArrangerView::getTakeLaneArea(const juce::ValueTree& lane) const
+{
+    const int row = rowOfTakeLane(lane);
+    return row >= 0 ? getRowBounds(row) : juce::Rectangle<int>();
+}
+
+juce::Rectangle<int> ArrangerView::getTakeAuditionButtonArea(const juce::ValueTree& lane) const
+{
+    const int row = rowOfTakeLane(lane);
+    return row >= 0 ? getHeaderButton(row, 0) : juce::Rectangle<int>();
 }
 
 std::vector<int> ArrangerView::trackRows() const
@@ -556,6 +598,15 @@ juce::Rectangle<int> ArrangerView::getHeaderButton(int row, int indexFromRight) 
     const auto bounds = getRowBounds(row);
     const int right = theme::metrics::trackHeaderWidth - 10;
     return {right - (indexFromRight + 1) * (kHeaderButtonWidth + 3), bounds.getY() + 8, kHeaderButtonWidth, 18};
+}
+
+juce::Rectangle<int> ArrangerView::getTakesButton(int row) const
+{
+    const auto& r = rows()[static_cast<std::size_t>(row)];
+    if (r.kind != Row::Kind::track || session::Session::getTakeLanes(r.track).empty())
+        return {};
+    const auto button = getHeaderButton(row, 0);
+    return {button.getX(), getRowBounds(row).getY() + 37, button.getWidth(), 16};
 }
 
 juce::Rectangle<int> ArrangerView::getFoldButton(int row) const
@@ -884,7 +935,8 @@ void ArrangerView::setRecording(bool recording, double startSeconds)
 
 void ArrangerView::valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier& property)
 {
-    if (property == session::ids::collapsed || property == session::ids::showAutomation || property == session::ids::visible)
+    if (property == session::ids::collapsed || property == session::ids::showAutomation || property == session::ids::visible
+        || property == session::ids::showTakes)
         structureChanged();
     else
         repaint();
@@ -1076,6 +1128,8 @@ void ArrangerView::paintHeaders(juce::Graphics& g) const
             continue;
         if (all[i].kind == Row::Kind::track)
             paintTrackHeader(g, static_cast<int>(i), all[i]);
+        else if (all[i].kind == Row::Kind::take)
+            paintTakeHeader(g, static_cast<int>(i), all[i]);
         else
             paintLaneHeader(g, static_cast<int>(i), all[i]);
     }
@@ -1178,7 +1232,7 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
             }
     }
 
-    if (!(renameEditor_->isVisible() && renamingTrackId_ == session::track::getId(t)))
+    if (!(renameEditor_->isVisible() && !renamingTake_ && renamingTrackId_ == session::track::getId(t)))
     {
         g.setColour(colour::textPrimary);
         g.setFont(sansBold(13.0f));
@@ -1201,6 +1255,14 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
     paintToggle(getHeaderButton(rowIndex, 2), "M", session::track::isMuted(t), colour::gold);
     if (canArm(kind))
         paintToggle(getHeaderButton(rowIndex, 3), "R", session::track::isArmed(t), colour::record);
+    // T: the take lanes (once the track has some), with how many there are.
+    const auto takesButton = getTakesButton(rowIndex);
+    if (!takesButton.isEmpty())
+    {
+        const auto count = session::Session::getTakeLanes(t).size();
+        const auto label = "T" + (count < 10 ? juce::String(static_cast<int>(count)) : juce::String("+"));
+        paintToggle(takesButton, label.toRawUTF8(), session::track::isShowingTakes(t), colour::accent);
+    }
 
     // Second line: routing summary.
     const auto format = session::track::getFormat(t);
@@ -1251,9 +1313,53 @@ void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& 
 
     g.setColour(colour::textMuted);
     g.setFont(sans(11.0f));
+    const int infoRight = takesButton.isEmpty() ? metrics::trackHeaderWidth - 8 : takesButton.getX() - 4;
     g.drawText(info, juce::Rectangle<int>(getNameBounds(rowIndex).getX(), getRowBounds(rowIndex).getY() + 34,
-                                          metrics::trackHeaderWidth - getNameBounds(rowIndex).getX() - 8, 18),
+                                          infoRight - getNameBounds(rowIndex).getX(), 18),
                juce::Justification::centredLeft, true);
+}
+
+void ArrangerView::paintTakeHeader(juce::Graphics& g, int rowIndex, const Row& row) const
+{
+    using namespace theme;
+
+    const auto laneId = session::takelane::getId(row.lane);
+    const bool auditioned = session::track::getAuditionedTake(row.track) == laneId;
+    auto bounds = getRowBounds(rowIndex).withWidth(metrics::trackHeaderWidth);
+    g.setColour(colour::panel);
+    g.fillRect(bounds);
+    g.setColour(colour::outline.withAlpha(0.6f));
+    g.fillRect(bounds.removeFromBottom(1));
+    g.setColour(session::track::getColour(row.track).withAlpha(0.5f));
+    g.fillRect(bounds.removeFromLeft(2));
+
+    const int left = 26 + row.depth * kIndent;
+    const auto button = getHeaderButton(rowIndex, 0);
+    if (!(renameEditor_->isVisible() && renamingTake_ && renamingTrackId_ == laneId))
+    {
+        g.setColour(colour::textSecondary);
+        g.setFont(sansBold(11.5f));
+        g.drawText(session::takelane::getName(row.lane), juce::Rectangle<int>(left, getRowBounds(rowIndex).getY() + 6, button.getX() - left - 6, 16),
+                   juce::Justification::centredLeft, true);
+    }
+
+    // How much of it is in the comp.
+    double comped = 0.0;
+    for (const auto& [from, to] : session::Session::getCompedRanges(row.lane))
+        comped += to - from;
+    g.setColour(colour::textMuted);
+    g.setFont(sans(10.5f));
+    g.drawText(auditioned ? juce::String("auditioning (plays instead of the comp)")
+                          : comped > 0.0 ? juce::String(comped, 1) + " s in the comp" : juce::String("not in the comp"),
+               juce::Rectangle<int>(left, getRowBounds(rowIndex).getY() + 24, metrics::trackHeaderWidth - left - 8, 14),
+               juce::Justification::centredLeft, true);
+
+    // S: audition the lane (it plays instead of the comp).
+    g.setColour(auditioned ? colour::play : colour::control);
+    g.fillRoundedRectangle(button.toFloat(), 3.0f);
+    g.setColour(auditioned ? textOn(colour::play) : colour::textMuted);
+    g.setFont(sansBold(10.0f));
+    g.drawText("S", button, juce::Justification::centred, false);
 }
 
 void ArrangerView::paintLaneHeader(juce::Graphics& g, int rowIndex, const Row& row) const
@@ -1316,6 +1422,11 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
             g.setColour(colour::panel);
             g.fillRect(bounds);
         }
+        else if (all[i].kind == Row::Kind::take)
+        {
+            g.setColour(colour::windowBackground.interpolatedWith(colour::panel, 0.5f));
+            g.fillRect(bounds);
+        }
         else
         {
             const bool selected = editor_.isTrackSelected(session::track::getId(all[i].track));
@@ -1362,10 +1473,11 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
         g.drawVerticalLine(juce::roundToInt(timeToX(t)), static_cast<float>(lanes.getY()), static_cast<float>(lanes.getBottom()));
     }
 
-    // Recording region on armed tracks.
+    // Recording region on armed tracks (when loop recording has come round: this pass).
     if (recording_)
     {
-        const float x0 = timeToX(recordStart_);
+        const bool cameRound = playheadSeconds_ < recordStart_ && session_.isLoopRecording() && session_.isLoopEnabled();
+        const float x0 = timeToX(cameRound ? session_.getLoopStart() : recordStart_);
         const float x1 = timeToX(playheadSeconds_);
         for (std::size_t i = 0; i < all.size(); ++i)
             if (all[i].kind == Row::Kind::track && session::track::isArmed(all[i].track))
@@ -1388,12 +1500,29 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
             paintAutomation(g, static_cast<int>(i), all[i]);
             continue;
         }
+        if (all[i].kind == Row::Kind::take)
+        {
+            paintTakeLane(g, static_cast<int>(i), all[i]);
+            continue;
+        }
 
         const auto trackColour = session::track::getColour(all[i].track);
         for (const auto& c : all[i].track)
             if (session::Session::isClip(c))
                 paintClip(g, c, static_cast<int>(i), trackColour);
         paintClipGroups(g, static_cast<int>(i), all[i].track);
+
+        // A take lane auditioned: the comp is silent meanwhile.
+        if (const auto lane = session_.findTakeLane(session::track::getAuditionedTake(all[i].track)); lane.isValid())
+        {
+            const auto row = bounds.withLeft(lanes.getX()).reduced(0, 1);
+            g.setColour(colour::windowBackground.withAlpha(0.6f));
+            g.fillRect(row);
+            g.setColour(colour::play);
+            g.setFont(sansBold(11.0f));
+            g.drawText("Auditioning " + session::takelane::getName(lane) + " (S on its lane: back to the comp)", row.reduced(10, 0),
+                       juce::Justification::centredLeft, true);
+        }
     }
 
     // The time selection.
@@ -1415,6 +1544,61 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
     }
 
     g.restoreState();
+}
+
+void ArrangerView::paintTakeLane(juce::Graphics& g, int rowIndex, const Row& row) const
+{
+    using namespace theme;
+
+    const auto trackColour = session::track::getColour(row.track);
+    const auto comped = session::Session::getCompedRanges(row.lane);
+    const bool auditioned = session::track::getAuditionedTake(row.track) == session::takelane::getId(row.lane);
+
+    for (const auto& c : row.lane)
+    {
+        if (!session::Session::isClip(c))
+            continue;
+        const auto bounds = getClipBounds(c, rowIndex);
+        if (!bounds.toNearestInt().intersects(g.getClipBounds()))
+            continue;
+
+        // The take, dimmed; drawn again at full strength where it is in the comp.
+        const auto paintBody = [&](juce::Colour colour, float fill)
+        {
+            g.setColour(colour.withAlpha(fill));
+            g.fillRoundedRectangle(bounds, 3.0f);
+            if (session::clip::isMidi(c))
+                paintMidiNotes(g, c, bounds.reduced(2.0f, 3.0f), colour);
+            else if (project_.getAssets().find(session::clip::getFile(c)) != nullptr)
+                paintWaveform(g, c, bounds.reduced(0.0f, 3.0f), colour);
+        };
+        paintBody(trackColour.withMultipliedSaturation(0.4f).withAlpha(auditioned ? 0.8f : 0.5f), 0.08f);
+        for (const auto& [from, to] : comped)
+        {
+            const float x0 = std::max(bounds.getX(), timeToX(from));
+            const float x1 = std::min(bounds.getRight(), timeToX(to));
+            if (x1 <= x0)
+                continue;
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(juce::Rectangle<float>(x0, bounds.getY(), x1 - x0, bounds.getHeight()).getSmallestIntegerContainer());
+            paintBody(trackColour.brighter(0.25f), 0.30f);
+        }
+        g.setColour(trackColour.withAlpha(auditioned ? 0.9f : 0.55f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 3.0f, auditioned ? 1.5f : 1.0f);
+    }
+
+    // The swipe being dragged.
+    if (dragMode_ == DragMode::swipe && swipeRow_ == rowIndex && dragMoved_)
+    {
+        const auto bounds = getRowBounds(rowIndex).toFloat();
+        const float x0 = timeToX(std::min(swipeAnchor_, swipeEnd_));
+        const float x1 = timeToX(std::max(swipeAnchor_, swipeEnd_));
+        const juce::Rectangle<float> band(x0, bounds.getY() + 2.0f, std::max(1.0f, x1 - x0), bounds.getHeight() - 4.0f);
+        g.setColour(colour::accent.withAlpha(0.22f));
+        g.fillRect(band);
+        g.setColour(colour::accent.withAlpha(0.9f));
+        g.drawRect(band, 1.0f);
+    }
 }
 
 void ArrangerView::paintClipGroups(juce::Graphics& g, int row, const juce::ValueTree& track) const
@@ -1631,6 +1815,9 @@ void ArrangerView::paintClip(juce::Graphics& g, const juce::ValueTree& c, int ro
         if (const double gainDb = session::clip::getGainDb(c); std::abs(gainDb) > 1.0e-6)
             name << "  " << (gainDb > 0 ? "+" : "") << juce::String(gainDb, 1) << " dB" << (session::clip::isGainBypassed(c) ? " (bypassed)" : "");
     }
+    // A comp clip: the take it came from.
+    if (const auto lane = session_.getTakeLaneOf(c); lane.isValid())
+        name << "  [" << session::takelane::getName(lane) << "]";
     // Badges on the right of the title bar: locks, loop, rating.
     auto titleText = title.reduced(6.0f, 0.0f);
     const bool editLocked = session::clip::isEditLocked(c);
@@ -2034,6 +2221,11 @@ void ArrangerView::mouseDown(const juce::MouseEvent& e)
         mouseDownOnAutomation(e, row);
         return;
     }
+    if (row >= 0 && rows()[static_cast<std::size_t>(row)].kind == Row::Kind::take)
+    {
+        mouseDownOnTake(e, row);
+        return;
+    }
 
     const auto hit = hitTestClip(e.position);
     if (!e.mods.isPopupMenu())
@@ -2087,6 +2279,23 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
     auto* um = &session_.getUndoManager();
     const auto trackId = session::track::getId(t);
 
+    if (row.kind == Row::Kind::take)
+    {
+        editor_.selectTrack(trackId);
+        if (e.mods.isPopupMenu())
+        {
+            showTakeMenu(row.lane);
+            return;
+        }
+        if (getHeaderButton(rowIndex, 0).contains(position))
+        {
+            // S: the lane plays instead of the comp (again: the comp plays).
+            const auto laneId = session::takelane::getId(row.lane);
+            session::track::setAuditionedTake(t, session::track::getAuditionedTake(t) == laneId ? 0u : laneId, nullptr);
+        }
+        return;
+    }
+
     if (row.kind == Row::Kind::automation)
     {
         editor_.selectTrack(trackId);
@@ -2118,6 +2327,11 @@ void ArrangerView::mouseDownOnHeader(const juce::MouseEvent& e, int rowIndex)
     if (session::track::isFolder(t) && getFoldButton(rowIndex).contains(position))
     {
         session::track::setCollapsed(t, !session::track::isCollapsed(t), nullptr);
+        return;
+    }
+    if (const auto takesButton = getTakesButton(rowIndex); takesButton.contains(position))
+    {
+        session::track::setShowingTakes(t, !session::track::isShowingTakes(t), nullptr);
         return;
     }
 
@@ -2298,6 +2512,14 @@ void ArrangerView::mouseDrag(const juce::MouseEvent& e)
         dragMarquee(e);
         return;
 
+    case DragMode::swipe:
+        if (!dragMoved_ && std::abs(e.position.x - dragStart_.x) < 3.0f)
+            return;
+        dragMoved_ = true;
+        swipeEnd_ = snap(std::max(0.0, xToTime(e.position.x)), e.mods);
+        repaint();
+        return;
+
     case DragMode::automationPoint:
     {
         if (!dragPoint_.isValid())
@@ -2369,6 +2591,7 @@ void ArrangerView::dragLoop(const juce::MouseEvent& e)
     case DragMode::marquee:
     case DragMode::automationPoint:
     case DragMode::warpMarker:
+    case DragMode::swipe:
         break;
     }
 
@@ -2404,7 +2627,8 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
         case DragMode::loopEnd:
         case DragMode::reorderTrack:
         case DragMode::marquee:
-        case DragMode::automationPoint: break;
+        case DragMode::automationPoint:
+        case DragMode::swipe: break;
         }
         session_.beginTransaction(name);
     }
@@ -2546,12 +2770,54 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     case DragMode::reorderTrack:
     case DragMode::marquee:
     case DragMode::automationPoint:
+    case DragMode::swipe:
         break;
     }
 }
 
+void ArrangerView::mouseDownOnTake(const juce::MouseEvent& e, int rowIndex)
+{
+    const auto& row = rows()[static_cast<std::size_t>(rowIndex)];
+    editor_.selectTrack(session::track::getId(row.track));
+    if (e.mods.isPopupMenu())
+    {
+        showTakeMenu(row.lane);
+        return;
+    }
+
+    // A swipe across the lane comps what it covers; a click comps the take under the mouse.
+    dragMode_ = DragMode::swipe;
+    swipeLane_ = row.lane;
+    swipeRow_ = rowIndex;
+    swipeClick_ = std::max(0.0, xToTime(e.position.x));
+    swipeAnchor_ = swipeEnd_ = snap(swipeClick_, e.mods);
+}
+
 void ArrangerView::mouseUp(const juce::MouseEvent& e)
 {
+    if (dragMode_ == DragMode::swipe && swipeLane_.isValid() && swipeLane_.getParent().isValid())
+    {
+        double from = std::min(swipeAnchor_, swipeEnd_);
+        double to = std::max(swipeAnchor_, swipeEnd_);
+        if (!dragMoved_ || to - from < session::kMinClipLength)
+        {
+            from = to = 0.0;
+            for (const auto& c : session::takelane::getClips(swipeLane_))
+                if (session::clip::getStart(c) <= swipeClick_ && swipeClick_ < session::clip::getEnd(c))
+                {
+                    from = session::clip::getStart(c);
+                    to = session::clip::getEnd(c);
+                }
+        }
+        if (to - from >= session::kMinClipLength)
+        {
+            session_.beginTransaction("Comp Take");
+            session_.compTake(swipeLane_, from, to);
+        }
+    }
+    swipeLane_ = {};
+    swipeRow_ = -1;
+
     if (dragMode_ == DragMode::reorderTrack && dragMoved_ && reorderTrack_.isValid())
     {
         const auto& all = rows();
@@ -2638,6 +2904,11 @@ void ArrangerView::mouseMove(const juce::MouseEvent& e)
     {
         newCursor = hitTestPoint(row, e.position).isValid() ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::CrosshairCursor;
     }
+    else if (const int takeRow = rowAt(position.y); takeRow >= 0 && getLaneArea().contains(position) &&
+                                                    rows()[static_cast<std::size_t>(takeRow)].kind == Row::Kind::take)
+    {
+        newCursor = juce::MouseCursor::IBeamCursor; // (swipe to comp)
+    }
     else if (const auto hit = hitTestClip(e.position); hit.clip.isValid())
     {
         switch (hit.zone)
@@ -2670,7 +2941,7 @@ void ArrangerView::mouseDoubleClick(const juce::MouseEvent& e)
         return;
     }
 
-    if (getHeaderArea().contains(position) && row >= 0 && rows()[static_cast<std::size_t>(row)].kind == Row::Kind::track &&
+    if (getHeaderArea().contains(position) && row >= 0 && rows()[static_cast<std::size_t>(row)].kind != Row::Kind::automation &&
         getNameBounds(row).contains(position))
     {
         startRename(row);
@@ -2689,6 +2960,8 @@ void ArrangerView::mouseDoubleClick(const juce::MouseEvent& e)
         }
         return;
     }
+    if (row >= 0 && rows()[static_cast<std::size_t>(row)].kind == Row::Kind::take)
+        return; // (its clicks comp)
 
     if (const auto hit = hitTestClip(e.position); hit.clip.isValid())
     {
@@ -2778,10 +3051,13 @@ void ArrangerView::createMidiClipAt(const juce::ValueTree& t, double seconds)
 
 void ArrangerView::startRename(int row)
 {
-    const auto t = rows()[static_cast<std::size_t>(row)].track;
-    renamingTrackId_ = session::track::getId(t);
-    renameEditor_->setBounds(getNameBounds(row).expanded(4, 2));
-    renameEditor_->setText(session::track::getName(t), false);
+    const auto& r = rows()[static_cast<std::size_t>(row)];
+    renamingTake_ = r.kind == Row::Kind::take;
+    renamingTrackId_ = renamingTake_ ? session::takelane::getId(r.lane) : session::track::getId(r.track);
+    renameEditor_->setBounds(renamingTake_ ? juce::Rectangle<int>(getNameBounds(row).getX(), getRowBounds(row).getY() + 4,
+                                                                  getHeaderButton(row, 0).getX() - getNameBounds(row).getX() - 6, 20)
+                                           : getNameBounds(row).expanded(4, 2));
+    renameEditor_->setText(renamingTake_ ? session::takelane::getName(r.lane) : session::track::getName(r.track), false);
     renameEditor_->setVisible(true);
     renameEditor_->selectAll();
     renameEditor_->grabKeyboardFocus();
@@ -2796,6 +3072,22 @@ void ArrangerView::finishRename(bool commit)
     const auto trackId = renamingTrackId_;
     renamingTrackId_ = 0; // guards against re-entry from onFocusLost
     renameEditor_->setVisible(false);
+
+    if (renamingTake_)
+    {
+        renamingTake_ = false;
+        if (auto lane = session_.findTakeLane(trackId); commit && lane.isValid())
+        {
+            const auto newName = renameEditor_->getText().trim();
+            if (newName.isNotEmpty() && newName != session::takelane::getName(lane))
+            {
+                session_.beginTransaction("Rename Take Lane");
+                session::takelane::setName(lane, newName, &session_.getUndoManager());
+            }
+        }
+        repaint();
+        return;
+    }
 
     if (commit)
         if (auto t = session_.findTrack(trackId); t.isValid())
@@ -2983,6 +3275,49 @@ void ArrangerView::addAutomationMenuItems(juce::PopupMenu& menu, const juce::Val
                 parameters.addItem(list[i]->getName(40), addLane(session::automation::parameterTarget(session::device::getId(d), i)));
         menu.addSubMenu(session::device::getName(d), parameters, parameters.getNumItems() > 0);
     }
+}
+
+void ArrangerView::showTakeMenu(const juce::ValueTree& lane)
+{
+    juce::Component::SafePointer<ArrangerView> safe(this);
+    const auto laneId = session::takelane::getId(lane);
+    const auto track = lane.getParent();
+    const bool auditioned = session::track::getAuditionedTake(track) == laneId;
+    const auto withLane = [safe, laneId](auto fn)
+    {
+        return [safe, laneId, fn]
+        {
+            if (safe == nullptr)
+                return;
+            if (auto tree = safe->session_.findTakeLane(laneId); tree.isValid())
+                fn(*safe, tree);
+        };
+    };
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(session::takelane::getName(lane));
+    menu.addItem("Comp Whole Take", !session::takelane::getClips(lane).empty(), false,
+                 withLane([](ArrangerView& self, juce::ValueTree tree)
+                          {
+                              const auto [from, to] = session::takelane::getExtent(tree);
+                              self.session_.beginTransaction("Comp Take");
+                              self.session_.compTake(tree, from, to);
+                          }));
+    menu.addItem("Audition (plays instead of the comp)", true, auditioned,
+                 withLane([auditioned](ArrangerView&, juce::ValueTree tree)
+                          { session::track::setAuditionedTake(tree.getParent(), auditioned ? 0u : session::takelane::getId(tree), nullptr); }));
+    menu.addItem("Rename", withLane([](ArrangerView& self, juce::ValueTree tree)
+                                    {
+                                        if (const int row = self.rowOfTakeLane(tree); row >= 0)
+                                            self.startRename(row);
+                                    }));
+    menu.addSeparator();
+    menu.addItem("Delete Take Lane", withLane([](ArrangerView& self, juce::ValueTree tree)
+                                              {
+                                                  self.session_.beginTransaction("Delete Take Lane");
+                                                  self.session_.removeTakeLane(tree);
+                                              }));
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
 }
 
 void ArrangerView::showTrackMenu(const juce::ValueTree& t)
@@ -3242,6 +3577,25 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
         menu.addSubMenu("VCA", vcas, vcas.getNumItems() > 1);
     }
     menu.addSubMenu("Add Automation Lane", automationMenu);
+    if (session::holdsAudio(kind) || session::holdsMidi(kind))
+    {
+        const auto command = [safe](int id)
+        {
+            return [safe, id]
+            {
+                if (safe != nullptr && safe->onCommand)
+                    safe->onCommand(id);
+            };
+        };
+        const bool hasLanes = !session::Session::getTakeLanes(t).empty();
+        juce::PopupMenu takes;
+        takes.addItem("Show Take Lanes", true, actions::selectedTracksShowTakes(session_, editor_), command(commands::toggleTakeLanes));
+        takes.addItem("New Take Lane from Comp", command(commands::newTakeLaneFromComp));
+        takes.addSeparator();
+        takes.addItem("Delete Unused Take Lanes", hasLanes, false, command(commands::deleteUnusedTakeLanes));
+        takes.addItem("Delete All Take Lanes", hasLanes, false, command(commands::deleteAllTakeLanes));
+        menu.addSubMenu("Take Lanes", takes);
+    }
     menu.addSeparator();
     menu.addSubMenu("Move into Folder", folders, folders.getNumItems() > 0);
     menu.addItem("Move out of Folder", anyInFolder, false,
