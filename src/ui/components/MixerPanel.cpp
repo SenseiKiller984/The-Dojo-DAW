@@ -474,6 +474,7 @@ void ChannelStrip::syncFromModel()
     surround_.setPosition(session::track::getPan(track_), session::track::getPanFrontRear(track_), session::track::getPanCentre(track_));
     spatial_.setPosition({session::track::getAzimuth(track_), session::track::getElevation(track_), session::track::getDistance(track_),
                           session::track::getSize(track_)});
+    spatial_.setBadge(session::track::isObject(track_) ? "OBJ" : "");
     arm_.setToggleState(session::track::isArmed(track_), juce::dontSendNotification);
     const auto monitor = session::track::getMonitor(track_);
     monitor_.setButtonText(monitor == engine::MonitorMode::off ? "OFF" : monitor == engine::MonitorMode::always ? "IN" : "AUTO");

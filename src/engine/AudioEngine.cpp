@@ -1400,10 +1400,9 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
     rt::atomicStoreMax(telemetry_.surfacePeaks[static_cast<std::size_t>(track.slot)], static_cast<float>(std::max(peakLeft, peakRight)));
 }
 
-ChannelMatrix AudioEngine::spatialMatrix(const RenderTrack& track, double faderTime, int numIn, int numOut,
-                                         std::array<double, kMaxChannels>& diffuse) noexcept
+std::array<double, 4> AudioEngine::spatialPosition(const RenderTrack& track, double faderTime) noexcept
 {
-    // Where it is: its own settings, its automation (normalised lanes), a modulator over both.
+    // Its own settings, its automation (normalised lanes), a modulator over both.
     std::array<double, 4> position{track.azimuth, track.elevation, track.distance, track.size};
     const std::array<const AutomationCurve*, 4> lanes{&track.azimuthAutomation, &track.elevationAutomation,
                                                       &track.distanceAutomation, &track.sizeAutomation};
@@ -1426,6 +1425,13 @@ ChannelMatrix AudioEngine::spatialMatrix(const RenderTrack& track, double faderT
         telemetry_.trackSpatial[static_cast<std::size_t>(track.slot)][k].store(
             moves ? static_cast<float>(position[k]) : std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
     }
+    return position;
+}
+
+ChannelMatrix AudioEngine::spatialMatrix(const RenderTrack& track, double faderTime, int numIn, int numOut,
+                                         std::array<double, kMaxChannels>& diffuse) noexcept
+{
+    const auto position = spatialPosition(track, faderTime);
 
     // Each input from its direction (a stereo track's sides 30 degrees either side), spread as its
     // size and distance say; its size's share of the power is played diffuse (decorrelated).
@@ -1461,13 +1467,28 @@ void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, doub
     // panner or conversion by speaker), with volume, phase and mute folded in. It ramps towards the
     // block's target like the stereo gains do.
     const int numSamples = currentNumSamples_;
-    const int numIn = std::min(track.layout.numChannels, slot.main.getNumChannels());
-    const int numOut = std::min(track.outputLayout.numChannels, slot.out.getNumChannels());
+    int numIn = std::min(track.layout.numChannels, slot.main.getNumChannels());
+    int numOut = std::min(track.outputLayout.numChannels, slot.out.getNumChannels());
 
     std::array<double, kMaxChannels> diffuseTarget{};
-    const bool spatial = track.pan3d && track.spatialPanner != nullptr;
-    auto target = spatial ? spatialMatrix(track, faderTime, numIn, numOut, diffuseTarget)
-                          : outputMatrix(track.layout, track.outputLayout, pan, track.panFrontRear, track.panCentre);
+    const bool spatial = track.pan3d && track.spatialPanner != nullptr && !track.object;
+    ChannelMatrix target;
+    if (track.object)
+    {
+        // An ADM object: its own channels (one for a mono track), not panned; where it is still
+        // counts (for the metadata, and to show it moving).
+        (void) spatialPosition(track, faderTime);
+        numIn = numOut = track.mono ? 1 : std::min(2, numIn);
+        target.numInputs = numIn;
+        target.numOutputs = numOut;
+        for (int c = 0; c < numOut; ++c)
+            target.gain[static_cast<std::size_t>(c)][static_cast<std::size_t>(c)] = 1.0;
+    }
+    else
+    {
+        target = spatial ? spatialMatrix(track, faderTime, numIn, numOut, diffuseTarget)
+                         : outputMatrix(track.layout, track.outputLayout, pan, track.panFrontRear, track.panCentre);
+    }
     const double scale = track.audible ? volume * (track.phaseInverted ? -1.0 : 1.0) : 0.0;
     for (int o = 0; o < numOut; ++o)
     {
@@ -1846,6 +1867,10 @@ void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, in
     {
         rendering = numOutputs >= numMaster ? SurroundRendering::discrete : SurroundRendering::foldDown;
     }
+    else if (graph_ != nullptr && graph_->objectOutputs)
+    {
+        rendering = SurroundRendering::renderer; // (an external renderer does the monitoring)
+    }
     else if (numMaster > 2)
     {
         switch (surround_.mode)
@@ -1867,7 +1892,9 @@ void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, in
     }
     telemetry_.surroundRendering.store(static_cast<int>(rendering), std::memory_order_relaxed);
 
-    if (rendering == SurroundRendering::virtualizer)
+    if (rendering == SurroundRendering::renderer)
+        writeRendererOutputs(outputs, numOutputs, offset, numSamples);
+    else if (rendering == SurroundRendering::virtualizer)
         writeVirtualized(outputs, numOutputs, offset, numSamples);
     else if (rendering == SurroundRendering::device)
         writeToDevice(outputs, numOutputs, offset, numSamples);
@@ -1936,6 +1963,30 @@ void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, in
 
     if (clipped > 0)
         telemetry_.clippedSamples.fetch_add(clipped, std::memory_order_relaxed);
+}
+
+void AudioEngine::writeRendererOutputs(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
+{
+    // The bed as it is, one output per channel, then each object's channels (as many as fit).
+    int next = 0;
+    const auto put = [&](const Sample* source)
+    {
+        if (next < numOutputs && outputs[next] != nullptr)
+            for (int i = 0; i < numSamples; ++i)
+                outputs[next][offset + i] = static_cast<IoSample>(source[i]);
+        ++next;
+    };
+    for (int ch = 0; ch < masterChannels(); ++ch)
+        put(masterBus_.getReadPointer(ch));
+    for (const auto& object : graph_->objects)
+    {
+        const auto& slot = slots_[static_cast<std::size_t>(object.slot)];
+        for (int ch = 0; ch < object.numChannels && ch < slot.main.getNumChannels(); ++ch)
+            put(slot.main.getReadPointer(ch));
+    }
+    for (int ch = next; ch < numOutputs; ++ch)
+        if (outputs[ch] != nullptr)
+            std::fill_n(outputs[ch] + offset, numSamples, 0.0f);
 }
 
 void AudioEngine::writeVirtualized(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept

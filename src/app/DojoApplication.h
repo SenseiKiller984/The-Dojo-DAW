@@ -19,6 +19,7 @@ namespace dojo::session
 class Project;
 class Recorder;
 class Exporter;
+class AdmOscBridge;
 } // namespace dojo::session
 
 namespace dojo::plugins
@@ -77,6 +78,9 @@ private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     /** Preferences > Surround, to the engine. */
     void applySurroundMonitoring();
+    /** Preferences > Renderer: the objects' outputs (the compiler) and the ADM-OSC bridge. */
+    void applyExternalRenderer();
+    [[nodiscard]] juce::String describeExternalRenderer() const;
     void logStartupInformation(const juce::String& deviceError);
 
     CommandLineOptions options_;
@@ -92,6 +96,7 @@ private:
     std::unique_ptr<session::Project> project_;
     std::unique_ptr<session::Recorder> recorder_;
     std::unique_ptr<session::Exporter> exporter_;
+    std::unique_ptr<session::AdmOscBridge> oscBridge_;
     std::unique_ptr<engine::PreviewService> preview_;
     std::unique_ptr<juce::ApplicationCommandManager> commandManager_;
     std::unique_ptr<ui::AppServices> services_;

@@ -29,7 +29,7 @@ using engine::TrackKind;
                       monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation,
                       format (mono|stereo|3.1|5.1|7.1|5.1.4|7.1.4|9.1.6|dolbyDigital|dts), panFrontRear, panCentre,
                       showTakes, audition (the take lane played instead of the comp), pan3d, panAzimuth,
-                      panElevation, panDistance, panSize (the 3D panner)
+                      panElevation, panDistance, panSize (the 3D panner), admObject (an ADM object)
             CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, gainBypassed, stretch,
                         pitch, sourceChannel, editLocked, timeLocked, rating (1..5), groups (clip group ids,
                         outermost first), looped, loopLength, syncPoint (seconds from the start), userNamed,
@@ -121,6 +121,7 @@ inline const juce::Identifier panAzimuth   {"panAzimuth"};
 inline const juce::Identifier panElevation {"panElevation"};
 inline const juce::Identifier panDistance  {"panDistance"};
 inline const juce::Identifier panSize      {"panSize"};
+inline const juce::Identifier admObject    {"admObject"};
 inline const juce::Identifier timeLocked {"timeLocked"};
 inline const juce::Identifier rating {"rating"};
 inline const juce::Identifier clipGroups {"groups"};
@@ -304,6 +305,14 @@ double getPanCentre(const juce::ValueTree& t);
     A stereo track's two sides sit 30 degrees either side of its azimuth.
 */
 bool isPan3d(const juce::ValueTree& t);
+/**
+    An object (Dolby Atmos, ADM): a 3D-panned mono or stereo track whose sound leaves the mix as its
+    own channel(s) with its position, rather than being panned into the bed. While monitoring it is
+    panned into the bed like any 3D-panned track; an ADM BWF export writes it as an object (a stereo
+    track as two, its sides 30 degrees either side), and the external renderer outputs send it to an
+    output of its own.
+*/
+bool isObject(const juce::ValueTree& t);
 double getAzimuth(const juce::ValueTree& t);
 double getElevation(const juce::ValueTree& t);
 double getDistance(const juce::ValueTree& t);
@@ -341,6 +350,7 @@ void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um);
 void setPanFrontRear(juce::ValueTree t, double frontRear, juce::UndoManager* um);
 void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um);
 void setPan3d(juce::ValueTree t, bool on, juce::UndoManager* um);
+void setObject(juce::ValueTree t, bool on, juce::UndoManager* um);
 void setAzimuth(juce::ValueTree t, double degrees, juce::UndoManager* um); ///< (wrapped into -180..180)
 void setElevation(juce::ValueTree t, double degrees, juce::UndoManager* um);
 void setDistance(juce::ValueTree t, double distance, juce::UndoManager* um);

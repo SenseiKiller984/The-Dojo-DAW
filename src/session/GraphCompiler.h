@@ -66,6 +66,18 @@ public:
     /** Balance pan law used for every track. Returns {left, right}. */
     static std::pair<double, double> panGains(double pan) noexcept { return engine::balancePanGains(pan); }
 
+    /** How object tracks (track::isObject) are rendered. */
+    enum class ObjectRendering
+    {
+        inBed,   ///< panned into the bed like any 3D-panned track (monitoring)
+        apart,   ///< each its own channels, out of the bed (an ADM export reads them)
+        outputs, ///< apart, and on the device's outputs after the bed's (an external renderer)
+    };
+    void setObjectRendering(ObjectRendering rendering) noexcept { objectRendering_ = rendering; }
+    [[nodiscard]] ObjectRendering getObjectRendering() const noexcept { return objectRendering_; }
+    /** The tracks rendered as objects in the last build (none while they are in the bed). */
+    [[nodiscard]] const std::vector<engine::RenderObject>& getObjects() const noexcept { return objects_; }
+
 private:
     /** A stable slot for a track; `wide` tracks (multichannel signals) get one of the wide slots. */
     int assignSlot(std::uint32_t trackId, std::vector<bool>& used);
@@ -94,6 +106,8 @@ private:
     std::map<std::uint32_t, DecorrelatorEntry> decorrelators_;
     double sampleRate_ = 48000.0;
     int maxBlock_ = 2048;
+    ObjectRendering objectRendering_ = ObjectRendering::inBed;
+    std::vector<engine::RenderObject> objects_;
     int totalLatency_ = 0;
     int masterInputLatency_ = 0;
     std::map<std::uint32_t, int> outputLatencies_;
@@ -130,6 +144,11 @@ public:
     [[nodiscard]] int getTotalLatency() const noexcept { return builder_.getTotalLatency(); }
     [[nodiscard]] int getMasterInputLatency() const noexcept { return builder_.getMasterInputLatency(); }
     [[nodiscard]] int getOutputLatency(std::uint32_t trackId) const { return builder_.getOutputLatency(trackId); }
+
+    /** How object tracks are rendered (see GraphBuilder::ObjectRendering); triggers a rebuild. */
+    void setObjectRendering(GraphBuilder::ObjectRendering rendering);
+    [[nodiscard]] GraphBuilder::ObjectRendering getObjectRendering() const noexcept { return builder_.getObjectRendering(); }
+    [[nodiscard]] const std::vector<engine::RenderObject>& getObjects() const noexcept { return builder_.getObjects(); }
 
     /** Builds a graph without publishing it (for offline renders on a separate engine). */
     std::unique_ptr<engine::RenderGraph> buildGraph() { return builder_.build(session_, assets_, devices_); }

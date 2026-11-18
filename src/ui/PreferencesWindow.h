@@ -31,7 +31,7 @@ public:
         engine::SurroundRendering), for the Surround tab. */
     PreferencesWindow(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
                       std::function<void()> showEditingTips, std::function<int()> surroundRendering = {},
-                      std::function<juce::String(int)> surfaceStatus = {});
+                      std::function<juce::String(int)> surfaceStatus = {}, std::function<juce::String()> rendererStatus = {});
     ~PreferencesWindow() override;
 
     /** Shows the window (to front) on `tab`. */
@@ -52,11 +52,14 @@ private:
     std::function<void()> showEditingTips_;
     std::function<int()> surroundRendering_;
     std::function<juce::String(int)> surfaceStatus_; ///< (a control surface's, by its row)
+    std::function<juce::String()> rendererStatus_;   ///< (the Renderer tab's)
     Content* content_ = nullptr; // owned by the window
 };
 
 /** The Control Surfaces tab on its own (tests): the setups kept in `preferences`, each row's status
     from `status`. */
 [[nodiscard]] std::unique_ptr<juce::Component> createControlSurfacesPage(Preferences& preferences, std::function<juce::String(int)> status);
+/** The Renderer tab on its own (tests): the external renderer settings, its status from `status`. */
+[[nodiscard]] std::unique_ptr<juce::Component> createRendererPage(Preferences& preferences, std::function<juce::String()> status);
 
 } // namespace dojo::ui

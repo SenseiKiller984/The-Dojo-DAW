@@ -18,6 +18,12 @@ constexpr const char* kVirtualizerSpeakersKey = "prefVirtualizerSpeakers";
 constexpr const char* kVirtualizerRoomKey = "prefVirtualizerRoom";
 constexpr const char* kMpeInputKey = "prefMpeInput";
 constexpr const char* kMpeBendRangeKey = "prefMpeBendRange";
+constexpr const char* kRendererOutputsKey = "prefRendererOutputs";
+constexpr const char* kRendererOscKey = "prefRendererOsc";
+constexpr const char* kRendererHostKey = "prefRendererHost";
+constexpr const char* kRendererPortKey = "prefRendererPort";
+constexpr const char* kRendererRateKey = "prefRendererRate";
+constexpr const char* kRendererCartesianKey = "prefRendererCartesian";
 } // namespace
 
 Preferences::Preferences(juce::PropertiesFile& settings)
@@ -119,6 +125,39 @@ void Preferences::setVirtualizerRoom(double room)
     if (std::abs(room - getVirtualizerRoom()) < 1.0e-6)
         return;
     settings_.setValue(kVirtualizerRoomKey, room);
+    changed();
+}
+
+Preferences::ExternalRenderer Preferences::getExternalRenderer() const
+{
+    ExternalRenderer r;
+    r.objectOutputs = settings_.getBoolValue(kRendererOutputsKey, false);
+    r.osc = settings_.getBoolValue(kRendererOscKey, false);
+    r.host = settings_.getValue(kRendererHostKey, "127.0.0.1").trim();
+    if (r.host.isEmpty())
+        r.host = "127.0.0.1";
+    r.port = juce::jlimit(1, 65535, settings_.getIntValue(kRendererPortKey, 9000));
+    r.rate = juce::jlimit(10, 100, settings_.getIntValue(kRendererRateKey, 50));
+    r.cartesian = settings_.getBoolValue(kRendererCartesianKey, false);
+    return r;
+}
+
+void Preferences::setExternalRenderer(const ExternalRenderer& renderer)
+{
+    const auto before = getExternalRenderer();
+    auto r = renderer;
+    r.host = r.host.trim().isEmpty() ? juce::String("127.0.0.1") : r.host.trim();
+    r.port = juce::jlimit(1, 65535, r.port);
+    r.rate = juce::jlimit(10, 100, r.rate);
+    if (r.objectOutputs == before.objectOutputs && r.osc == before.osc && r.host == before.host && r.port == before.port
+        && r.rate == before.rate && r.cartesian == before.cartesian)
+        return;
+    settings_.setValue(kRendererOutputsKey, r.objectOutputs);
+    settings_.setValue(kRendererOscKey, r.osc);
+    settings_.setValue(kRendererHostKey, r.host);
+    settings_.setValue(kRendererPortKey, r.port);
+    settings_.setValue(kRendererRateKey, r.rate);
+    settings_.setValue(kRendererCartesianKey, r.cartesian);
     changed();
 }
 

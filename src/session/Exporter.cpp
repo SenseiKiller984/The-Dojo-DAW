@@ -1,16 +1,154 @@
 #include "session/Exporter.h"
 
 #include "engine/AudioEngine.h"
+#include "engine/io/AdmMetadata.h"
+#include "engine/io/Bw64Writer.h"
 #include "engine/io/LameMp3Format.h"
+#include "session/GraphCompiler.h"
 
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 
 namespace dojo::session
 {
 namespace
 {
 constexpr int kOfflineBlock = 512;
+
+/**
+    The ADM export's writer thread: the render thread fills blocks of audio (one channel per file
+    channel) and queues them; this thread interleaves, encodes and writes them, so rendering and
+    disk writing overlap. A fixed pool of blocks bounds the memory (the render thread waits when
+    every block is queued).
+*/
+class BlockWriter final : private juce::Thread
+{
+public:
+    struct Block
+    {
+        std::vector<std::vector<float>> channels;
+        int frames = 0;
+    };
+
+    BlockWriter(engine::adm::Bw64Writer& file, int numChannels, int blockFrames)
+        : juce::Thread("Dojo ADM writer")
+        , file_(file)
+    {
+        for (int b = 0; b < kBlocks; ++b)
+        {
+            auto block = std::make_unique<Block>();
+            block->channels.assign(static_cast<std::size_t>(numChannels), std::vector<float>(static_cast<std::size_t>(blockFrames), 0.0f));
+            free_.push_back(block.get());
+            blocks_.push_back(std::move(block));
+        }
+        startThread(juce::Thread::Priority::normal);
+    }
+
+    ~BlockWriter() override
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        changed_.notify_all();
+        stopThread(10'000);
+    }
+
+    /** A block to fill (waits while every block is queued); null once writing has failed. */
+    Block* acquire()
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        changed_.wait(lock, [this] { return failed_ || !free_.empty(); });
+        if (failed_)
+            return nullptr;
+        auto* block = free_.front();
+        free_.pop_front();
+        return block;
+    }
+
+    void submit(Block* block)
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            queued_.push_back(block);
+        }
+        changed_.notify_all();
+    }
+
+    /** Waits for everything queued to be written. False if writing failed. */
+    bool drain()
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        changed_.wait(lock, [this] { return failed_ || (queued_.empty() && !busy_); });
+        return !failed_;
+    }
+
+private:
+    void run() override
+    {
+        for (;;)
+        {
+            Block* block = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                changed_.wait(lock, [this] { return stopping_ || !queued_.empty(); });
+                if (queued_.empty())
+                    return; // (stopping, nothing left)
+                block = queued_.front();
+                queued_.pop_front();
+                busy_ = true;
+            }
+            std::vector<const float*> pointers;
+            for (const auto& c : block->channels)
+                pointers.push_back(c.data());
+            const bool ok = file_.write(pointers.data(), block->frames);
+            {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                busy_ = false;
+                failed_ = failed_ || !ok;
+                free_.push_back(block);
+            }
+            changed_.notify_all();
+        }
+    }
+
+    static constexpr int kBlocks = 32;
+    engine::adm::Bw64Writer& file_;
+    std::vector<std::unique_ptr<Block>> blocks_;
+    std::deque<Block*> free_, queued_;
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    bool busy_ = false;
+    bool failed_ = false;
+    bool stopping_ = false;
+};
 } // namespace
+
+/** An ADM export under way: the file, its bed and objects, and the objects' positions block by block. */
+struct Exporter::AdmExport
+{
+    struct Position
+    {
+        juce::int64 renderIndex = 0; ///< where the block started, in rendered samples
+        int length = 0;
+        std::array<double, 4> value{}; ///< azimuth, elevation, distance, size
+    };
+    struct ObjectTrack
+    {
+        engine::RenderObject object;
+        juce::String name;
+        std::array<double, 4> own{}; ///< its settings (where nothing moves it)
+        std::vector<Position> positions;
+        int firstFileTrack = 1;
+    };
+
+    engine::adm::Programme programme; ///< (its objects' blocks filled in at the end)
+    std::vector<ObjectTrack> objects;
+    int numChannels = 0;
+    std::unique_ptr<engine::adm::Bw64Writer> file;
+};
 
 Exporter::Exporter(Project& project, engine::EngineController& controller)
     : juce::Thread("Dojo export")
@@ -37,7 +175,8 @@ juce::String Exporter::getFileExtension(ExportSettings::Format format)
     {
     case ExportSettings::Format::flac: return ".flac";
     case ExportSettings::Format::mp3:  return ".mp3";
-    case ExportSettings::Format::wav:  break;
+    case ExportSettings::Format::wav:
+    case ExportSettings::Format::admBwf: break;
     }
     return ".wav";
 }
@@ -114,6 +253,9 @@ std::unique_ptr<juce::AudioFormatWriter> Exporter::createWriter(const juce::File
         writer = flac.createWriterFor(stream, options.withBitsPerSample(settings.bitDepth <= 16 ? 16 : 24));
         break;
     }
+    case ExportSettings::Format::admBwf:
+        error = "ADM BWF files are written by the exporter's own BW64 writer.";
+        return nullptr;
     case ExportSettings::Format::mp3:
     {
         engine::LameMp3Format mp3;
@@ -195,6 +337,68 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
     return {};
 }
 
+juce::String Exporter::prepareAdm(double sampleRate)
+{
+    targets_.clear();
+    adm_ = std::make_unique<AdmExport>();
+    auto& a = *adm_;
+    const auto& session = project_.getSession();
+
+    // The bed: the master's channels (everything that is not an object).
+    auto& programme = a.programme;
+    programme.name = project_.getDisplayName();
+    programme.sampleRate = sampleRate;
+    programme.bitDepth = settings_.bitDepth >= 32 ? 32 : (settings_.bitDepth <= 16 ? 16 : 24);
+    const auto master = session.getMasterFormat();
+    programme.bed = isMultichannel(master) ? getLayout(master) : engine::ChannelLayout::stereo();
+    for (int c = 0; c < programme.bed.numChannels; ++c)
+        programme.bedTracks.push_back(c + 1);
+    int next = programme.bed.numChannels + 1;
+
+    // The objects: each object track's own channel(s), after the bed's.
+    for (const auto& object : project_.getCompiler().getObjects())
+    {
+        const auto t = session.findTrack(object.trackId);
+        if (!t.isValid())
+            continue;
+        AdmExport::ObjectTrack o;
+        o.object = object;
+        o.name = track::getName(t);
+        o.own = {track::getAzimuth(t), track::getElevation(t), track::getDistance(t), track::getSize(t)};
+        o.firstFileTrack = next;
+        engine::adm::ObjectGroup group;
+        group.name = o.name;
+        if (object.numChannels == 1)
+            group.objects.push_back({o.name, next++, {}});
+        else
+        {
+            group.objects.push_back({o.name + " L", next++, {}});
+            group.objects.push_back({o.name + " R", next++, {}});
+        }
+        programme.groups.push_back(std::move(group));
+        a.objects.push_back(std::move(o));
+    }
+    a.numChannels = next - 1;
+    if (a.numChannels > 128)
+        return "An ADM BWF file holds up to 128 channels; this one would need " + juce::String(a.numChannels) + ".";
+
+    const auto format = programme.bitDepth == 32   ? engine::adm::Bw64Writer::Format::float32
+                        : programme.bitDepth == 16 ? engine::adm::Bw64Writer::Format::pcm16
+                                                   : engine::adm::Bw64Writer::Format::pcm24;
+    a.file = std::make_unique<engine::adm::Bw64Writer>(settings_.destination, a.numChannels, sampleRate, format,
+                                                       engine::adm::trackEntries(programme));
+    if (!a.file->isOpen())
+        return a.file->getError();
+
+    Target target; // (listed, so that a failed export removes the file)
+    target.file = settings_.destination;
+    target.channels = a.numChannels;
+    target.latency = latency_;
+    targets_.push_back(std::move(target));
+    longestLatency_ = latency_; // (the objects leave with the bed)
+    return {};
+}
+
 juce::String Exporter::start(const ExportSettings& settings)
 {
     if (running_)
@@ -208,6 +412,22 @@ juce::String Exporter::start(const ExportSettings& settings)
     error_.clear();
     progress_ = 0.0;
     speed_ = project_.getSession().getSpeed();
+
+    // ADM BWF: offline, with the object tracks rendered apart (each its own channels).
+    const bool adm = settings_.format == ExportSettings::Format::admBwf;
+    if (adm)
+    {
+        settings_.realtime = false;
+        settings_.includeMix = true;
+        settings_.includeStems = false;
+        objectRenderingBefore_ = static_cast<int>(project_.getCompiler().getObjectRendering());
+        project_.getCompiler().setObjectRendering(GraphBuilder::ObjectRendering::apart);
+    }
+    const auto putObjectsBack = [this, adm]
+    {
+        if (adm)
+            project_.getCompiler().setObjectRendering(static_cast<GraphBuilder::ObjectRendering>(objectRenderingBefore_));
+    };
 
     // Makes sure the engine renders the current state of the document, and measures its latency.
     const auto compile = [this]
@@ -267,6 +487,7 @@ juce::String Exporter::start(const ExportSettings& settings)
         if (preparedForExport_)
             engine.release();
         preparedForExport_ = false;
+        putObjectsBack();
         return "The audio device did not respond; try again.";
     }
 
@@ -275,13 +496,18 @@ juce::String Exporter::start(const ExportSettings& settings)
     project_.getDevices().setNonRealtime(true);
     compile();
 
-    if (auto error = prepareTargets(sampleRate_, false); error.isNotEmpty())
+    if (auto error = adm ? prepareAdm(sampleRate_) : prepareTargets(sampleRate_, false); error.isNotEmpty())
     {
         project_.getDevices().setNonRealtime(false);
         engine.endOfflineRender();
         if (preparedForExport_)
             engine.release();
         preparedForExport_ = false;
+        if (adm)
+            settings_.destination.deleteFile();
+        adm_.reset();
+        targets_.clear();
+        putObjectsBack();
         return error;
     }
 
@@ -318,6 +544,12 @@ void Exporter::run()
     {
         engine.applyCommandsOffline();
         wait(2);
+    }
+
+    if (adm_ != nullptr)
+    {
+        runAdm();
+        return;
     }
 
     engine.setOfflineTransport(settings_.startSeconds, true, true);
@@ -416,10 +648,144 @@ void Exporter::run()
                                     });
 }
 
+void Exporter::runAdm()
+{
+    auto& engine = controller_.getEngine();
+    auto& a = *adm_;
+    engine.setOfflineTransport(settings_.startSeconds, true, true);
+
+    const double timelineLength = settings_.endSeconds - settings_.startSeconds + settings_.tailSeconds;
+    const auto outputFrames = static_cast<juce::int64>(std::ceil(timelineLength / speed_ * sampleRate_));
+    const auto totalFrames = outputFrames + latency_; // (the objects leave aligned with the bed)
+    const int block = std::min(kOfflineBlock, engine.getMaximumBlockSize());
+    const int bedChannels = a.programme.bed.numChannels;
+
+    juce::AudioBuffer<float> bed(bedChannels, block);
+    {
+        BlockWriter writer(*a.file, a.numChannels, block);
+        for (juce::int64 rendered = 0; rendered < totalFrames && !threadShouldExit(); rendered += block)
+        {
+            const int n = static_cast<int>(std::min<juce::int64>(block, totalFrames - rendered));
+            engine.renderOffline(bed.getArrayOfWritePointers(), bedChannels, n);
+
+            // Where each object was this block (its own settings where nothing moves it).
+            for (auto& o : a.objects)
+            {
+                AdmExport::Position p;
+                p.renderIndex = rendered;
+                p.length = n;
+                for (int k = 0; k < 4; ++k)
+                {
+                    const float moving = engine.getMovingSpatial(o.object.slot, k);
+                    p.value[static_cast<std::size_t>(k)] = std::isnan(moving) ? o.own[static_cast<std::size_t>(k)] : static_cast<double>(moving);
+                }
+                o.positions.push_back(p);
+            }
+
+            // The audio, without the latency's pre-roll: the bed, then each object's channels.
+            const int skip = static_cast<int>(std::clamp<juce::int64>(latency_ - rendered, 0, n));
+            const juce::int64 alreadyWritten = std::max<juce::int64>(0, rendered - latency_);
+            const int count = static_cast<int>(std::min<juce::int64>(n - skip, outputFrames - alreadyWritten));
+            if (count > 0)
+            {
+                auto* out = writer.acquire();
+                if (out == nullptr)
+                {
+                    failed_ = true;
+                    break;
+                }
+                out->frames = count;
+                for (int c = 0; c < bedChannels; ++c)
+                    std::copy_n(bed.getReadPointer(c, skip), count, out->channels[static_cast<std::size_t>(c)].data());
+                int channel = bedChannels;
+                for (const auto& o : a.objects)
+                {
+                    const auto& source = engine.getSlotOutput(o.object.slot);
+                    for (int c = 0; c < o.object.numChannels; ++c)
+                    {
+                        auto& destination = out->channels[static_cast<std::size_t>(channel++)];
+                        if (c < source.getNumChannels())
+                            for (int i = 0; i < count; ++i)
+                                destination[static_cast<std::size_t>(i)] = static_cast<float>(source.getSample(c, skip + i));
+                        else
+                            std::fill_n(destination.begin(), count, 0.0f);
+                    }
+                }
+                writer.submit(out);
+            }
+            progress_.store(0.98 * static_cast<double>(rendered + n) / static_cast<double>(totalFrames), std::memory_order_relaxed);
+        }
+        if (!writer.drain())
+            failed_ = true;
+    }
+
+    // The metadata: each object's blocks, where its sound is in the file (the position worked out
+    // with a block belongs to the sound at the fader then: that much earlier than the output).
+    if (!failed_ && !threadShouldExit())
+    {
+        std::size_t group = 0;
+        for (auto& o : a.objects)
+        {
+            auto& objects = a.programme.groups[group++].objects;
+            for (std::size_t side = 0; side < objects.size(); ++side)
+            {
+                const double offset = objects.size() == 2 ? (side == 0 ? 30.0 : -30.0) : 0.0; // (a stereo track's sides)
+                std::vector<engine::adm::ObjectBlock> blocks;
+                for (std::size_t k = 0; k < o.positions.size(); ++k)
+                {
+                    const auto& p = o.positions[k];
+                    const auto start = std::max<juce::int64>(0, p.renderIndex - o.object.faderLatency);
+                    const auto end = std::min<juce::int64>(outputFrames, p.renderIndex + p.length - o.object.faderLatency);
+                    if (end <= start)
+                        continue;
+                    // A block says where the object has got to by its end: the position the next
+                    // block was worked out at (the renderer moves it there across the block).
+                    const auto& reached = o.positions[std::min(k + 1, o.positions.size() - 1)].value;
+                    engine::adm::ObjectBlock b;
+                    b.start = blocks.empty() ? 0 : start;
+                    b.length = end - b.start;
+                    b.position = engine::adm::polarToCartesian(reached[0] + offset, reached[1], std::clamp(reached[2], 0.0, 1.0));
+                    b.size = std::clamp(reached[3], 0.0, 1.0);
+                    blocks.push_back(b);
+                }
+                if (!blocks.empty())
+                    blocks.back().length = outputFrames - blocks.back().start; // (to the end of the file)
+                objects[side].blocks = engine::adm::simplify(blocks, 1.0e-4);
+            }
+        }
+        a.programme.length = outputFrames;
+        if (!a.file->finish(engine::adm::documentFor(a.programme)))
+            failed_ = true;
+    }
+    if (failed_ && error_.isEmpty())
+        error_ = a.file->getError().isNotEmpty() ? a.file->getError() : juce::String("Writing the audio file failed (is the disk full?).");
+    if (threadShouldExit() && !failed_)
+    {
+        failed_ = true;
+        error_ = "Export cancelled.";
+    }
+    a.file.reset(); // (closes it)
+    progress_.store(1.0, std::memory_order_relaxed);
+
+    engine.setOfflineTransport(previousPosition_, false, false);
+    engine.applyCommandsOffline();
+
+    juce::MessageManager::callAsync([this, alive = std::weak_ptr<int>(alive_)]
+                                    {
+                                        if (!alive.expired())
+                                            finishOffline();
+                                    });
+}
+
 void Exporter::finishOffline()
 {
     waitForThreadToExit(10'000);
     stopTimer();
+    if (adm_ != nullptr)
+    {
+        adm_.reset();
+        project_.getCompiler().setObjectRendering(static_cast<GraphBuilder::ObjectRendering>(objectRenderingBefore_));
+    }
     project_.getDevices().setNonRealtime(false);
     auto& engine = controller_.getEngine();
     engine.endOfflineRender();

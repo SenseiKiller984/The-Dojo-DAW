@@ -3540,6 +3540,17 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
                              if (safe->onOpenSpatialPanner)
                                  safe->onOpenSpatialPanner(tree);
                          });
+            // An ADM object (Dolby Atmos): its own channel(s) with its position in an ADM BWF
+            // export and on the external renderer's outputs, instead of panned into the bed.
+            const bool object = session::track::isObject(t);
+            menu.addItem("ADM Object (Dolby Atmos)", on, object,
+                         withTracks(idsOf(selection), [object](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                    {
+                                        self.session_.beginTransaction(object ? "ADM Object Off" : "ADM Object On");
+                                        for (auto tree : trees)
+                                            if (session::track::isPan3d(tree) || object)
+                                                session::track::setObject(tree, !object, &self.session_.getUndoManager());
+                                    }));
         }
     }
 

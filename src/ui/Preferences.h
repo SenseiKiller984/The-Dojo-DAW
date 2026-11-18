@@ -24,6 +24,7 @@ public:
         surround,
         keyboard,
         controlSurfaces,
+        renderer,
     };
 
     /** How a surround master (3.1, 5.1, 7.1, Dolby Digital, DTS) plays (the Surround tab). */
@@ -64,6 +65,20 @@ public:
     /** The virtualizer's room (0..1): reflections and reverberation. 0.5 by default. */
     [[nodiscard]] double getVirtualizerRoom() const;
     void setVirtualizerRoom(double room);
+
+    /** An external renderer (Dolby Atmos Renderer, SPAT Revolution, L-ISA...): the object tracks on
+        outputs of their own after the bed's, and/or their positions sent as ADM-OSC. */
+    struct ExternalRenderer
+    {
+        bool objectOutputs = false;
+        bool osc = false;
+        juce::String host = "127.0.0.1";
+        int port = 9000;
+        int rate = 50;          ///< updates a second
+        bool cartesian = false; ///< /xyz (the Cartesian room) instead of /aed (polar)
+    };
+    [[nodiscard]] ExternalRenderer getExternalRenderer() const;
+    void setExternalRenderer(const ExternalRenderer& renderer);
 
     /** The theme's name (see theme::getThemes()). */
     [[nodiscard]] juce::String getThemeName() const;

@@ -291,7 +291,8 @@ void MainWindow::showPreferences(ui::Preferences::Tab tab)
                     mainComponent_->showShortcutHelp();
             },
             [this] { return static_cast<int>(services_.controller.getLastTelemetry().surroundRendering); },
-            [this](int index) { return surfaces_ != nullptr ? surfaces_->describeStatus(index) : juce::String(); });
+            [this](int index) { return surfaces_ != nullptr ? surfaces_->describeStatus(index) : juce::String(); },
+            [this] { return services_.describeExternalRenderer ? services_.describeExternalRenderer() : juce::String(); });
     preferencesWindow_->showTab(tab);
 }
 

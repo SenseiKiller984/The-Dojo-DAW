@@ -446,6 +446,20 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                                                   : layouts[i];
     }
 
+    // --- Objects: 3D-panned mono or stereo tracks marked as objects, kept out of the bed when the
+    // graph renders objects apart. They feed nothing (their sends still do): their slot output is
+    // their own channels, aligned with the master output.
+    std::vector<bool> isObjectTrack(count, false);
+    if (objectRendering_ != ObjectRendering::inBed)
+    {
+        for (std::size_t i = 0; i < count; ++i)
+            isObjectTrack[i] = track::isObject(trees[i]) && track::isPan3d(trees[i]) && destination[i] != -2
+                               && layouts[i].numChannels <= 2 && outputLayouts[i].isMultichannel();
+        for (auto& sources : busSources)
+            sources.erase(std::remove_if(sources.begin(), sources.end(), [&](int s) { return isObjectTrack[static_cast<std::size_t>(s)]; }),
+                          sources.end());
+    }
+
     // Instances for the channel groups of a multichannel signal.
     const auto addCompanions = [&](engine::RenderDevice& device, const juce::ValueTree& deviceTree, const engine::ChannelGroups& groups)
     {
@@ -600,6 +614,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             rt.size = track::getSize(t);
             rt.spatialPanner = pannerFor(rt.outputLayout, *graph);
             rt.decorrelator = decorrelatorFor(rt.trackId, rt.outputLayout.numChannels, *graph);
+            rt.object = isObjectTrack[i];
         }
 
         // Devices.
@@ -888,7 +903,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     // --- Master ---------------------------------------------------------------------------------------
     for (std::size_t i = 0; i < count; ++i)
-        if (destination[i] == -1)
+        if (destination[i] == -1 && !isObjectTrack[i])
             graph->masterSources.push_back(static_cast<int>(i));
 
     graph->masterLayout = masterLayout;
@@ -1175,8 +1190,9 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     int masterInput = 0;
     for (std::size_t i = 0; i < count; ++i)
-        if (destination[i] == -1) // (-2: silenced, it reaches nothing)
+        if (destination[i] == -1 || isObjectTrack[i]) // (-2: silenced, it reaches nothing; an object: the bed waits for it)
             masterInput = std::max(masterInput, arrival[i]);
+    const int masterOutput = masterInput + chainLatency(graph->masterDevices) + chainLatency(graph->masterFaderDevices);
 
     const auto limited = [](int delay) { return std::clamp(delay, 0, engine::kMaxCompensationSamples - 1); };
     std::map<std::uint32_t, std::shared_ptr<engine::InputDelayLine>> sendLines, auxLines;
@@ -1200,7 +1216,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     for (std::size_t i = 0; i < count; ++i)
     {
         auto& rt = graph->tracks[i];
-        const int destinationInput = destination[i] >= 0 ? input[static_cast<std::size_t>(destination[i])]
+        const int destinationInput = isObjectTrack[i]       ? masterOutput // (an object leaves with the bed)
+                                     : destination[i] >= 0  ? input[static_cast<std::size_t>(destination[i])]
                                      : destination[i] == -1 ? masterInput
                                                             : arrival[i];
         rt.compensationDelay = limited(destinationInput - arrival[i]);
@@ -1231,6 +1248,22 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     }
     sendDelays_ = std::move(sendLines);
     auxDelays_ = std::move(auxLines);
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const auto& rt = graph->tracks[i];
+        if (!rt.object)
+            continue;
+        engine::RenderObject o;
+        o.trackId = rt.trackId;
+        o.trackIndex = static_cast<int>(i);
+        o.slot = rt.slot;
+        o.numChannels = rt.mono ? 1 : std::min(2, rt.layout.numChannels);
+        o.faderLatency = rt.faderLatency;
+        graph->objects.push_back(o);
+    }
+    graph->objectOutputs = objectRendering_ == ObjectRendering::outputs && !graph->objects.empty();
+    objects_ = graph->objects;
 
     // Post-fader sends leave before their source's compensation delay.
     for (std::size_t b = 0; b < count; ++b)
@@ -1370,6 +1403,14 @@ void GraphCompiler::rebuildNow()
 void GraphCompiler::setRenderFormat(double sampleRate, int maximumBlockSize)
 {
     builder_.setRenderFormat(sampleRate, maximumBlockSize);
+    triggerAsyncUpdate();
+}
+
+void GraphCompiler::setObjectRendering(GraphBuilder::ObjectRendering rendering)
+{
+    if (rendering == builder_.getObjectRendering())
+        return;
+    builder_.setObjectRendering(rendering);
     triggerAsyncUpdate();
 }
 

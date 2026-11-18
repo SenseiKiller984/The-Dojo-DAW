@@ -30,6 +30,8 @@ struct AppServices
     /** View > Full Screen: toggles it, and says whether it is on (set by the main window). */
     std::function<void()> toggleFullScreen;
     std::function<bool()> isFullScreen;
+    /** The external renderer's state in words (the Renderer tab; set by the application). */
+    std::function<juce::String()> describeExternalRenderer;
 };
 
 } // namespace dojo::ui

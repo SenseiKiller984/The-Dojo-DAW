@@ -76,6 +76,9 @@ public:
     /** The trajectory: the keyframes (automation points) and positions along it, in time order. */
     void setTrajectory(std::vector<Keyframe> keyframes, std::vector<SpatialPosition> path);
     void setPlayheadPosition(std::optional<SpatialPosition> position);
+    /** A tag in the view's corner (an ADM object: "OBJ"); empty for none. */
+    void setBadge(const juce::String& badge);
+    [[nodiscard]] const juce::String& getBadge() const noexcept { return badge_; }
 
     [[nodiscard]] juce::Point<float> project(const engine::Vec3& p) const;
     /** An orthographic view's point in the room: its two axes from `screen`, the third from `keep`. */
@@ -114,6 +117,7 @@ private:
     std::vector<Keyframe> keyframes_;
     std::vector<SpatialPosition> path_;
     std::optional<SpatialPosition> playhead_;
+    juce::String badge_;
     double yaw_ = 0.0; ///< perspective: the room turned (degrees)
 
     enum class Drag

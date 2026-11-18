@@ -23,6 +23,7 @@ struct ExportSettings
         wav,
         flac,
         mp3,
+        admBwf, ///< ADM BWF (ITU-R BS.2076 in a BW64 file): the bed and the object tracks, offline
     };
 
     juce::File destination; ///< the mix; stems are written next to it as "<name> - <track>.<ext>"
@@ -40,6 +41,13 @@ struct ExportSettings
 /**
     Bounces the project to audio files.
 
+    ADM BWF (Dolby Atmos masters, ITU-R BS.2076): one BW64 file holding the bed (the master's
+    channels, every track that is not an object) and each object track's own channel(s), with the
+    ADM metadata: the programme, the bed's common definition, and every object's position block by
+    block (Cartesian x, y, z, size, gain) as it moved, sample-aligned. The graph is compiled with the
+    objects apart for the export (and put back after). It renders offline on the export thread
+    (tracks in parallel on the engine's workers) while a writer thread encodes and writes the audio.
+
     Offline: live processing is paused (the device outputs silence) and an export thread renders the
     graph as fast as the CPU allows, through the very same engine code as playback (devices are put
     into non-real-time mode). Real-time: the project plays through the audio device while the mix and
@@ -54,6 +62,8 @@ class Exporter final : private juce::Thread, private juce::Timer
 public:
     Exporter(Project& project, engine::EngineController& controller);
     ~Exporter() override;
+    Exporter(const Exporter&) = delete;
+    Exporter& operator=(const Exporter&) = delete;
 
     /** Starts an export. Returns an error message, or an empty string if it started. */
     juce::String start(const ExportSettings& settings);
@@ -94,7 +104,10 @@ private:
         std::shared_ptr<engine::CaptureStream> stream;             // real-time
     };
 
+    struct AdmExport;
     void run() override;          // offline render thread
+    void runAdm();                // (the same, for an ADM BWF file)
+    juce::String prepareAdm(double sampleRate);
     void timerCallback() override; // real-time progress / completion
     juce::String prepareTargets(double sampleRate, bool forStreams);
     void finishOffline();
@@ -123,6 +136,8 @@ private:
     std::atomic<bool> failed_{false};
     juce::String error_;
     std::shared_ptr<int> alive_ = std::make_shared<int>(0); ///< guards async completion after destruction
+    std::unique_ptr<AdmExport> adm_;
+    int objectRenderingBefore_ = 0; ///< (GraphBuilder::ObjectRendering, put back after an ADM export)
 };
 
 } // namespace dojo::session

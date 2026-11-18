@@ -12,6 +12,7 @@
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
 #include "plugins/PluginManager.h"
+#include "session/AdmOscBridge.h"
 #include "session/Exporter.h"
 #include "session/Project.h"
 #include "session/Recorder.h"
@@ -150,6 +151,8 @@ void DojoApplication::initialise(const juce::String&)
     recorder_ = std::make_unique<session::Recorder>(*project_, *controller_);
     recorder_->setMpeInput(preferences_->getMpeInput(), preferences_->getMpeBendRange());
     exporter_ = std::make_unique<session::Exporter>(*project_, *controller_);
+    oscBridge_ = std::make_unique<session::AdmOscBridge>(*project_, *controller_);
+    applyExternalRenderer();
     preview_ = std::make_unique<engine::PreviewService>(*engine_, project_->getAssets().getFormatManager());
 
     if (options_.testTone)
@@ -158,7 +161,8 @@ void DojoApplication::initialise(const juce::String&)
     commandManager_ = std::make_unique<juce::ApplicationCommandManager>();
     services_ = std::make_unique<ui::AppServices>(ui::AppServices{*project_, *controller_, *commandManager_, *plugins_,
                                                                    *recorder_, *exporter_, *settings_, *preview_,
-                                                                   *preferences_, {}, {}, {}});
+                                                                   *preferences_, {}, {}, {}, {}});
+    services_->describeExternalRenderer = [this] { return describeExternalRenderer(); };
     mainWindow_ = std::make_unique<MainWindow>(*services_);
 
     if (options_.sessionFile != juce::File())
@@ -196,6 +200,7 @@ void DojoApplication::shutdown()
     mainWindow_.reset(); // 1. UI goes first: nothing can post commands any more.
     services_.reset();
     commandManager_.reset();
+    oscBridge_.reset();
     exporter_.reset();
     recorder_.reset();
     preview_.reset();
@@ -236,6 +241,7 @@ void DojoApplication::changeListenerCallback(juce::ChangeBroadcaster* source)
         if (recorder_ != nullptr)
             recorder_->setMpeInput(preferences_->getMpeInput(), preferences_->getMpeBendRange());
         applySurroundMonitoring();
+        applyExternalRenderer();
         return;
     }
 
@@ -267,6 +273,61 @@ void DojoApplication::applySurroundMonitoring()
     // ALSA orders surround channels its own way; every other driver uses the WAVE order.
     const bool alsa = deviceHost_ != nullptr && deviceHost_->getStatus().deviceType == "ALSA";
     controller_->setSurroundMonitoring(mode, preferences_->getVirtualizerSpeakers(), preferences_->getVirtualizerRoom(), alsa);
+}
+
+void DojoApplication::applyExternalRenderer()
+{
+    if (preferences_ == nullptr || project_ == nullptr || oscBridge_ == nullptr)
+        return;
+    const auto r = preferences_->getExternalRenderer();
+    using Rendering = session::GraphBuilder::ObjectRendering;
+    if (exporter_ == nullptr || !exporter_->isRunning()) // (an ADM export puts it back itself)
+        project_->getCompiler().setObjectRendering(r.objectOutputs ? Rendering::outputs : Rendering::inBed);
+    session::AdmOscBridge::Settings osc;
+    osc.enabled = r.osc;
+    osc.host = r.host;
+    osc.port = r.port;
+    osc.rate = r.rate;
+    osc.polar = !r.cartesian;
+    osc.cartesian = r.cartesian;
+    const auto& current = oscBridge_->getSettings();
+    if (osc.enabled != current.enabled || osc.host != current.host || osc.port != current.port || osc.rate != current.rate
+        || osc.polar != current.polar || osc.cartesian != current.cartesian)
+        oscBridge_->setSettings(osc);
+}
+
+juce::String DojoApplication::describeExternalRenderer() const
+{
+    if (preferences_ == nullptr || project_ == nullptr || oscBridge_ == nullptr)
+        return {};
+    const auto r = preferences_->getExternalRenderer();
+    const auto objects = oscBridge_->currentObjects();
+    const auto count = [](std::size_t n) { return juce::String(static_cast<int>(n)) + (n == 1 ? " object" : " objects"); };
+    juce::String text;
+    if (r.objectOutputs)
+    {
+        const auto master = project_->getSession().getMasterFormat();
+        const int bed = session::isMultichannel(master) ? session::getLayout(master).numChannels : 2;
+        const int needed = bed + static_cast<int>(objects.size());
+        int active = 0;
+        if (deviceHost_ != nullptr)
+            if (auto* device = deviceHost_->getDeviceManager().getCurrentAudioDevice())
+                active = device->getActiveOutputChannels().countNumberOfSetBits();
+        text << "Outputs: the bed on 1-" << bed;
+        if (!objects.empty())
+            text << ", " << count(objects.size()) << " on " << (bed + 1) << (objects.size() > 1 ? "-" + juce::String(needed) : juce::String());
+        text << " (" << active << " outputs on" << (active < needed ? ": turn more on in Audio Settings" : "") << "). ";
+    }
+    if (r.osc)
+    {
+        if (oscBridge_->getError().isNotEmpty())
+            text << oscBridge_->getError() << ".";
+        else
+            text << "ADM-OSC: " << count(objects.size()) << " to " << r.host << ":" << r.port << ", " << r.rate << " times a second.";
+    }
+    if (!r.objectOutputs && !r.osc)
+        text = "Off: object tracks are panned into the bed.";
+    return text;
 }
 
 void DojoApplication::logStartupInformation(const juce::String& deviceError)

@@ -11,9 +11,10 @@ namespace dojo::ui
 {
 
 /**
-    Export Audio dialog: format (WAV 16/24/32-bit float, FLAC 16/24-bit, MP3 128..320 kbps), range
-    (whole session or loop), tail, offline (faster than real time) or real-time bounce, the mix
-    and/or one stem per track, and the destination file. Shows progress and can cancel.
+    Export Audio dialog: format (WAV 16/24/32-bit float, FLAC 16/24-bit, MP3 128..320 kbps, ADM BWF
+    16/24/32-bit float), range (whole session or loop), tail, offline (faster than real time) or
+    real-time bounce, the mix and/or one stem per track, and the destination file. ADM BWF writes one
+    file (the bed and the object tracks), offline. Shows progress and can cancel.
 */
 class ExportDialog final : public juce::Component, private juce::Timer
 {
@@ -29,6 +30,8 @@ public:
 
 private:
     void updateQualityChoices();
+    /** What the chosen format allows (ADM BWF: offline, one file) and says (its objects). */
+    void updateForFormat();
     void chooseDestination();
     void startExport();
     void timerCallback() override;
@@ -43,6 +46,7 @@ private:
     juce::ToggleButton mix_{"Mix (master output)"};
     juce::ToggleButton stems_{"Stems (one file per track)"};
     juce::Label destination_;
+    juce::Label admHint_;
     juce::TextButton chooseButton_{"Choose..."};
     juce::TextButton exportButton_{"Export"};
     juce::TextButton cancelButton_{"Cancel"};

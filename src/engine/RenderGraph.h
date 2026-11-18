@@ -236,6 +236,18 @@ struct RenderSend
     int auxDevice = -1; ///< (the device's place in the source's chain: its latency up to there)
 };
 
+/** A track rendered as an ADM object. */
+struct RenderObject
+{
+    std::uint32_t trackId = 0;
+    int trackIndex = 0;   ///< in RenderGraph::tracks
+    int slot = 0;
+    int numChannels = 1;  ///< 1 (mono) or 2 (stereo: its sides 30 degrees either side of it)
+    /** How late the sound at its fader is (samples): the position worked out in a block belongs to
+        the timeline that much earlier. */
+    int faderLatency = 0;
+};
+
 struct RenderTrack
 {
     std::uint32_t trackId = 0; ///< stable identity, so smoothing/delay state survives graph swaps
@@ -268,6 +280,10 @@ struct RenderTrack
     AutomationCurve azimuthAutomation, elevationAutomation, distanceAutomation, sizeAutomation; ///< normalised lanes
     const SpatialPanner* spatialPanner = nullptr;
     Decorrelator* decorrelator = nullptr;
+    /** Rendered as an ADM object (a 3D-panned track, when the graph keeps objects apart): its fader
+        delivers its own channels (one for a mono track, two for stereo), not panned, and nothing
+        sums it into its destination. Its position is still worked out (and published) each block. */
+    bool object = false;
     /** Needs a wide slot (layout or outputLayout has more than two channels). */
     [[nodiscard]] bool isWide() const noexcept { return layout.isMultichannel() || outputLayout.isMultichannel(); }
 
@@ -419,6 +435,12 @@ struct RenderGraph
     /** LFO devices and their targets: applied once per block, before any track renders. */
     std::vector<RenderModulator> modulators;
     std::vector<int> masterSources;       ///< graph indices feeding the master bus
+    /** The tracks rendered as ADM objects (RenderTrack::object), in the session's order. Each one's
+        slot output holds its channels, aligned with the master output (like the bed). */
+    std::vector<RenderObject> objects;
+    /** The objects also play on the device's outputs, after the bed's channels (for an external
+        renderer); the bed then plays as it is, one output per channel. */
+    bool objectOutputs = false;
     /** Devices in the graph that send to the sound card's outputs and return from its inputs (HW
         Inserts): before each sub-block the engine gives them the sound card's inputs, after it adds
         their sends to the outputs. */

@@ -362,6 +362,29 @@ void SpatialPannerView::paint(juce::Graphics& g)
         g.drawText((position_.elevation >= 0.0 ? "+" : "") + juce::String(juce::roundToInt(position_.elevation)) + juce::String::fromUTF8("\xc2\xb0"),
                    viewArea().removeFromBottom(10.0f), juce::Justification::bottomRight, false);
     }
+
+    if (badge_.isNotEmpty())
+    {
+        // (top left in the compact view; under the view's name in the full one)
+        g.setFont(theme::label(compact_ ? 8.0f : 10.0f));
+        const float width = static_cast<float>(juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), badge_)) + 8.0f;
+        auto area = viewArea().reduced(compact_ ? 1.0f : 4.0f);
+        if (!compact_)
+            area.removeFromTop(17.0f);
+        const auto tag = area.removeFromTop(compact_ ? 11.0f : 15.0f).removeFromLeft(width);
+        g.setColour(colour::accent.withAlpha(0.85f));
+        g.fillRoundedRectangle(tag, 2.5f);
+        g.setColour(colour::panel);
+        g.drawText(badge_, tag, juce::Justification::centred, false);
+    }
+}
+
+void SpatialPannerView::setBadge(const juce::String& badge)
+{
+    if (badge == badge_)
+        return;
+    badge_ = badge;
+    repaint();
 }
 
 int SpatialPannerView::keyframeAt(juce::Point<float> point) const
@@ -728,6 +751,7 @@ void SpatialPannerEditor::refresh()
     const juce::ScopedValueSetter<bool> guard(updating_, true);
     const auto own = getOwnPosition();
     view_.setPosition(own);
+    view_.setBadge(session::track::isObject(track_) ? "ADM OBJECT" : "");
     azimuth.setValue(own.azimuth, juce::dontSendNotification);
     elevation.setValue(own.elevation, juce::dontSendNotification);
     distance.setValue(own.distance, juce::dontSendNotification);

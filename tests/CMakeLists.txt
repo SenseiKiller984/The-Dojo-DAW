@@ -56,6 +56,9 @@ add_executable(dojo_tests
     TakeLaneTests.cpp
     NoteExpressionTests.cpp
     HeightBinauralTests.cpp
+    AdmTests.cpp
+    AdmExportTests.cpp
+    AdmOscTests.cpp
     ImmersiveBedTests.cpp
     SpatialPannerTests.cpp
     SpatialPannerUiTests.cpp

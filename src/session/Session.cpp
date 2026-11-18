@@ -283,6 +283,7 @@ TrackFormat getFormat(const juce::ValueTree& t)
 double getPanFrontRear(const juce::ValueTree& t) { return t.getProperty(ids::panFrontRear, -1.0); }
 double getPanCentre(const juce::ValueTree& t) { return t.getProperty(ids::panCentre, 0.0); }
 bool isPan3d(const juce::ValueTree& t) { return t.getProperty(ids::pan3d, false); }
+bool isObject(const juce::ValueTree& t) { return t.getProperty(ids::admObject, false); }
 double getAzimuth(const juce::ValueTree& t) { return t.getProperty(ids::panAzimuth, 0.0); }
 double getElevation(const juce::ValueTree& t) { return t.getProperty(ids::panElevation, 0.0); }
 double getDistance(const juce::ValueTree& t) { return t.getProperty(ids::panDistance, 1.0); }
@@ -361,6 +362,10 @@ void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um)
 void setPan3d(juce::ValueTree t, bool on, juce::UndoManager* um)
 {
     t.setProperty(ids::pan3d, on, um);
+}
+void setObject(juce::ValueTree t, bool on, juce::UndoManager* um)
+{
+    t.setProperty(ids::admObject, on, um);
 }
 void setAzimuth(juce::ValueTree t, double degrees, juce::UndoManager* um)
 {

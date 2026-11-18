@@ -89,6 +89,7 @@ enum class SurroundRendering : int
     foldDown,    ///< the ITU fold-down to stereo
     virtualizer, ///< the advanced virtualizer
     device,      ///< the device's surround channels, in its order
+    renderer,    ///< an external renderer's: the bed's channels, then each ADM object's
 };
 
 /** A plain copy of the telemetry, taken on the message thread once per UI frame. */

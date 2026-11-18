@@ -493,6 +493,7 @@ public:
         case 3: return "Now: the classic stereo fold-down.";
         case 4: return juce::String("Now: the Advanced Virtualizer, for ") + (preferences_.getVirtualizerSpeakers() ? "speakers." : "headphones.");
         case 5: return "Now: the surround channels go to the device's virtualizer.";
+        case 6: return "Now: an external renderer's outputs (see the Renderer tab): the bed's channels, then the objects'.";
         default: return {};
         }
     }
@@ -830,11 +831,161 @@ std::unique_ptr<juce::Component> createControlSurfacesPage(Preferences& preferen
 }
 
 //==================================================================================================
+/** The Renderer tab: an external renderer given the object tracks (outputs of their own) and their
+    positions (ADM-OSC). */
+class RendererPage final : public juce::Component, private juce::ChangeListener, private juce::Timer
+{
+public:
+    RendererPage(Preferences& preferences, std::function<juce::String()> status)
+        : preferences_(preferences)
+        , status_(std::move(status))
+    {
+        outputs_.setButtonText("Objects on outputs of their own");
+        osc_.setButtonText("Send the objects' positions as ADM-OSC");
+        for (auto* toggle : {&outputs_, &osc_})
+        {
+            styleToggle(*toggle);
+            addAndMakeVisible(*toggle);
+        }
+        outputs_.onClick = [this] { apply(); };
+        osc_.onClick = [this] { apply(); };
+        outputsText_.setText("The bed plays as it is on the first outputs, one per channel, then each object track's channel(s) in the "
+                             "session's order (a stereo track has two): for a renderer fed through the sound card, Dante, MADI or a "
+                             "virtual audio device. Objects are tracks with Track > ADM Object on; they leave the bed while this is on.",
+                             juce::dontSendNotification);
+        oscText_.setText("ADM-OSC over UDP as the objects move (/adm/obj/n/aed or /xyz, /w, /gain; all of them with /name once a "
+                         "second), numbered as on the outputs. SPAT Revolution, L-ISA, d&b Soundscape and Holophonix read it. The Dolby "
+                         "Atmos Renderer takes positions from Dolby's own plug-ins instead: for it, send the bed and objects to its "
+                         "inputs, or export an ADM BWF file.",
+                         juce::dontSendNotification);
+        for (auto* label : {&outputsText_, &oscText_, &hostLabel_, &portLabel_, &rateLabel_, &coordinatesLabel_, &statusLabel_})
+            addAndMakeVisible(styleDescription(*label));
+        hostLabel_.setText("Host", juce::dontSendNotification);
+        portLabel_.setText("Port", juce::dontSendNotification);
+        rateLabel_.setText("Rate", juce::dontSendNotification);
+        coordinatesLabel_.setText("Coordinates", juce::dontSendNotification);
+
+        for (auto* editor : {&host_, &port_})
+        {
+            editor->setColour(juce::TextEditor::backgroundColourId, theme::colour::meterBackground);
+            editor->setColour(juce::TextEditor::textColourId, theme::colour::textPrimary);
+            editor->setColour(juce::TextEditor::outlineColourId, theme::colour::outline);
+            editor->onReturnKey = [this] { apply(); };
+            editor->onFocusLost = [this] { apply(); };
+            addAndMakeVisible(*editor);
+        }
+        port_.setInputRestrictions(5, "0123456789");
+        host_.setTooltip("The renderer's address: 127.0.0.1 for one on this computer");
+        for (const int hz : {25, 30, 50, 60, 100})
+            rate_.addItem(juce::String(hz) + " times a second", hz);
+        rate_.onChange = [this] { apply(); };
+        coordinates_.addItem("Polar (azimuth, elevation, distance)", 1);
+        coordinates_.addItem("Cartesian (x, y, z: ITU-R BS.2127)", 2);
+        coordinates_.onChange = [this] { apply(); };
+        addAndMakeVisible(rate_);
+        addAndMakeVisible(coordinates_);
+
+        preferences_.addChangeListener(this);
+        update();
+        startTimerHz(4);
+    }
+
+    ~RendererPage() override { preferences_.removeChangeListener(this); }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(theme::colour::panel);
+        g.setColour(theme::colour::textSecondary);
+        g.setFont(theme::label(11.0f));
+        g.drawText("EXTERNAL RENDERER", getLocalBounds().reduced(24, 0).removeFromTop(40), juce::Justification::bottomLeft, false);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(24, 0).withTrimmedTop(48);
+        outputs_.setBounds(area.removeFromTop(24));
+        outputsText_.setBounds(area.removeFromTop(48).withTrimmedLeft(30));
+        area.removeFromTop(10);
+        osc_.setBounds(area.removeFromTop(24));
+        oscText_.setBounds(area.removeFromTop(48).withTrimmedLeft(30));
+        area.removeFromTop(4);
+        const auto row = [&area](juce::Label& label, juce::Component& control, int width)
+        {
+            auto r = area.removeFromTop(26).withTrimmedLeft(30);
+            label.setBounds(r.removeFromLeft(90));
+            control.setBounds(r.removeFromLeft(width));
+            area.removeFromTop(6);
+        };
+        row(hostLabel_, host_, 220);
+        row(portLabel_, port_, 90);
+        row(rateLabel_, rate_, 220);
+        row(coordinatesLabel_, coordinates_, 300);
+        area.removeFromTop(8);
+        statusLabel_.setBounds(area.removeFromTop(40));
+    }
+
+    juce::ToggleButton outputs_, osc_;
+    juce::TextEditor host_, port_;
+    juce::ComboBox rate_, coordinates_;
+    juce::Label statusLabel_;
+
+private:
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { update(); }
+    void timerCallback() override
+    {
+        const auto text = status_ ? status_() : juce::String();
+        if (text != statusLabel_.getText())
+            statusLabel_.setText(text, juce::dontSendNotification);
+    }
+
+    void update()
+    {
+        const auto r = preferences_.getExternalRenderer();
+        outputs_.setToggleState(r.objectOutputs, juce::dontSendNotification);
+        osc_.setToggleState(r.osc, juce::dontSendNotification);
+        if (!host_.hasKeyboardFocus(true))
+            host_.setText(r.host, juce::dontSendNotification);
+        if (!port_.hasKeyboardFocus(true))
+            port_.setText(juce::String(r.port), juce::dontSendNotification);
+        rate_.setSelectedId(r.rate, juce::dontSendNotification);
+        if (rate_.getSelectedId() == 0)
+            rate_.setText(juce::String(r.rate) + " times a second", juce::dontSendNotification);
+        coordinates_.setSelectedId(r.cartesian ? 2 : 1, juce::dontSendNotification);
+        for (juce::Component* c : std::initializer_list<juce::Component*>{&host_, &port_, &rate_, &coordinates_})
+            c->setEnabled(r.osc);
+    }
+
+    void apply()
+    {
+        auto r = preferences_.getExternalRenderer();
+        r.objectOutputs = outputs_.getToggleState();
+        r.osc = osc_.getToggleState();
+        r.host = host_.getText();
+        r.port = port_.getText().getIntValue();
+        if (rate_.getSelectedId() > 0)
+            r.rate = rate_.getSelectedId();
+        r.cartesian = coordinates_.getSelectedId() == 2;
+        preferences_.setExternalRenderer(r);
+        update();
+    }
+
+    Preferences& preferences_;
+    std::function<juce::String()> status_;
+    juce::Label outputsText_, oscText_, hostLabel_, portLabel_, rateLabel_, coordinatesLabel_;
+};
+
+std::unique_ptr<juce::Component> createRendererPage(Preferences& preferences, std::function<juce::String()> status)
+{
+    return std::make_unique<RendererPage>(preferences, std::move(status));
+}
+
+//==================================================================================================
 class PreferencesWindow::Content final : public juce::Component
 {
 public:
     Content(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
-            std::function<void()> showTips, std::function<int()> surroundRendering, std::function<juce::String(int)> surfaceStatus)
+            std::function<void()> showTips, std::function<int()> surroundRendering, std::function<juce::String(int)> surfaceStatus,
+            std::function<juce::String()> rendererStatus)
     {
         using namespace theme;
         tabs_.setTabBarDepth(34);
@@ -852,6 +1003,7 @@ public:
         tabs_.addTab("Surround", colour::panelHeader, new SurroundPage(preferences, devices, std::move(surroundRendering)), true);
         tabs_.addTab("Keyboard", colour::panelHeader, new KeyboardPage(commands, std::move(showTips)), true);
         tabs_.addTab("Control Surfaces", colour::panelHeader, new ControlSurfacesPage(preferences, std::move(surfaceStatus)), true);
+        tabs_.addTab("Renderer", colour::panelHeader, new RendererPage(preferences, std::move(rendererStatus)), true);
         addAndMakeVisible(tabs_);
         setSize(kWidth, kHeight);
     }
@@ -864,7 +1016,7 @@ public:
 
 PreferencesWindow::PreferencesWindow(Preferences& preferences, juce::AudioDeviceManager& devices, juce::ApplicationCommandManager& commands,
                                      std::function<void()> showEditingTips, std::function<int()> surroundRendering,
-                                     std::function<juce::String(int)> surfaceStatus)
+                                     std::function<juce::String(int)> surfaceStatus, std::function<juce::String()> rendererStatus)
     : juce::DocumentWindow("Preferences", theme::colour::panel, juce::DocumentWindow::closeButton)
     , preferences_(preferences)
     , devices_(devices)
@@ -872,6 +1024,7 @@ PreferencesWindow::PreferencesWindow(Preferences& preferences, juce::AudioDevice
     , showEditingTips_(std::move(showEditingTips))
     , surroundRendering_(std::move(surroundRendering))
     , surfaceStatus_(std::move(surfaceStatus))
+    , rendererStatus_(std::move(rendererStatus))
 {
     setUsingNativeTitleBar(false);
     setTitleBarHeight(30);
@@ -900,7 +1053,8 @@ void PreferencesWindow::refreshTheme()
 {
     const auto tab = getCurrentTab();
     setBackgroundColour(theme::colour::panel);
-    auto content = std::make_unique<Content>(preferences_, devices_, commands_, showEditingTips_, surroundRendering_, surfaceStatus_);
+    auto content = std::make_unique<Content>(preferences_, devices_, commands_, showEditingTips_, surroundRendering_, surfaceStatus_,
+                                             rendererStatus_);
     content_ = content.get();
     setContentOwned(content.release(), false);
     content_->tabs_.setCurrentTabIndex(static_cast<int>(tab));

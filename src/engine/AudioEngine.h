@@ -313,6 +313,11 @@ private:
         position at `faderTime` (automation, modulators). */
     ChannelMatrix spatialMatrix(const RenderTrack& track, double faderTime, int numIn, int numOut,
                                 std::array<double, kMaxChannels>& diffuse) noexcept;
+    /** Where a 3D-panned track is this block (azimuth, elevation, distance, size): its settings, its
+        automation or a modulator. Publishes the moving values for the UI. */
+    std::array<double, 4> spatialPosition(const RenderTrack& track, double faderTime) noexcept;
+    /** The external renderer's outputs: the bed on the first outputs, then each object's channels. */
+    void writeRendererOutputs(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept;
     [[nodiscard]] int masterChannels() const noexcept;
     /** The stereo fold-down of `numChannels` channels of `source` into `stereo` (two channels). */
     static void foldDown(const juce::AudioBuffer<Sample>& source, int numChannels, const ChannelMatrix& matrix,

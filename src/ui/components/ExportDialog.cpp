@@ -30,10 +30,12 @@ ExportDialog::ExportDialog(session::Project& project, session::Exporter& exporte
     format_.addItem("WAV", 1);
     format_.addItem("FLAC", 2);
     format_.addItem("MP3 (LAME)", 3);
+    format_.addItem("ADM BWF (Dolby Atmos: bed + objects)", 4);
     format_.setSelectedId(1, juce::dontSendNotification);
     format_.onChange = [this]
     {
         updateQualityChoices();
+        updateForFormat();
         if (file_ != juce::File())
             file_ = file_.withFileExtension(session::Exporter::getFileExtension(getFormat()));
         destination_.setText(file_.getFullPathName(), juce::dontSendNotification);
@@ -86,9 +88,14 @@ ExportDialog::ExportDialog(session::Project& project, session::Exporter& exporte
                                                            &stems_, &destination_, &chooseButton_, &exportButton_, &cancelButton_})
         addAndMakeVisible(c);
     addChildComponent(progressBar_);
+    styleLabel(admHint_, {});
+    admHint_.setFont(theme::sans(11.5f));
+    admHint_.setJustificationType(juce::Justification::topLeft);
+    addChildComponent(admHint_);
 
     updateQualityChoices();
-    setSize(520, 420);
+    updateForFormat();
+    setSize(520, 440);
 }
 
 ExportDialog::~ExportDialog()
@@ -115,8 +122,33 @@ session::ExportSettings::Format ExportDialog::getFormat() const
     {
     case 2: return session::ExportSettings::Format::flac;
     case 3: return session::ExportSettings::Format::mp3;
+    case 4: return session::ExportSettings::Format::admBwf;
     default: return session::ExportSettings::Format::wav;
     }
+}
+
+void ExportDialog::updateForFormat()
+{
+    const bool adm = getFormat() == session::ExportSettings::Format::admBwf;
+    mix_.setVisible(!adm);
+    stems_.setVisible(!adm);
+    admHint_.setVisible(adm);
+    if (adm)
+    {
+        // An ADM BWF file is rendered offline: each object needs its own channels.
+        mode_.setSelectedId(1, juce::dontSendNotification);
+        int objects = 0;
+        for (const auto& t : project_.getSession().getAllTracks())
+            if (session::track::isObject(t) && session::track::isPan3d(t) && session::Session::isEffectivelyActive(t))
+                ++objects;
+        const auto master = project_.getSession().getMasterFormat();
+        admHint_.setText("One BW64 file (ITU-R BS.2076): the bed (" + session::getDisplayName(master) + ", every track that is not an object) and "
+                             + (objects == 0 ? juce::String("no objects yet (Track > ADM Object on 3D-panned tracks)")
+                                             : juce::String(objects) + (objects == 1 ? " object track" : " object tracks"))
+                             + ", each with its movement. Rendered offline.",
+                         juce::dontSendNotification);
+    }
+    mode_.setItemEnabled(2, !adm && !deviceActions::usesHardwareInserts(project_.getSession()));
 }
 
 void ExportDialog::updateQualityChoices()
@@ -125,6 +157,7 @@ void ExportDialog::updateQualityChoices()
     switch (getFormat())
     {
     case session::ExportSettings::Format::wav:
+    case session::ExportSettings::Format::admBwf:
         quality_.addItem("16-bit", 16);
         quality_.addItem("24-bit", 24);
         quality_.addItem("32-bit float", 32);
@@ -248,7 +281,9 @@ void ExportDialog::resized()
     row(rangeLabel_, range_);
     row(tailLabel_, tail_);
     row(modeLabel_, mode_);
-    auto toggles = area.removeFromTop(26);
+    auto toggles = area.removeFromTop(36);
+    admHint_.setBounds(toggles.withTrimmedLeft(90));
+    toggles = toggles.removeFromTop(26);
     mix_.setBounds(toggles.removeFromLeft(200));
     stems_.setBounds(toggles);
     area.removeFromTop(10);

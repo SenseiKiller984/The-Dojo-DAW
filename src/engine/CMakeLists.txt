@@ -31,8 +31,12 @@ add_library(dojo_engine STATIC
     dsp/SurroundVirtualizer.h
     dsp/TestToneGenerator.cpp
     dsp/TestToneGenerator.h
+    io/AdmMetadata.cpp
+    io/AdmMetadata.h
     io/AudioDeviceHost.cpp
     io/AudioDeviceHost.h
+    io/Bw64Writer.cpp
+    io/Bw64Writer.h
     io/LameMp3Format.cpp
     io/LameMp3Format.h)
 add_library(dojo::engine ALIAS dojo_engine)
