@@ -119,8 +119,10 @@ TEST_CASE("The 3D panner view: top, side, rear and perspective views; dragging p
     {
         view.setProjection(projection);
         juce::Image image(juce::Image::ARGB, 400, 400, true);
-        juce::Graphics g(image);
-        view.paint(g);
+        {
+            juce::Graphics g(image); // (on Windows the drawing lands in the image when its context ends: Direct2D)
+            view.paint(g);
+        }
         CHECK(image.getPixelAt(static_cast<int>(view.getSourcePoint().x), static_cast<int>(view.getSourcePoint().y)).getAlpha() > 0);
     }
     CHECK(moves >= 4);
