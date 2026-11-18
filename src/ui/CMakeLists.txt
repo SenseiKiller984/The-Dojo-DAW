@@ -48,6 +48,7 @@ add_library(dojo_ui STATIC
     components/LevelMeter.cpp
     components/LevelMeter.h
     components/SurroundPanner.cpp
+    components/SpatialPannerView.cpp
     components/SurroundPanner.h
     components/InlineValueEditor.cpp
     components/InlineValueEditor.h

@@ -742,6 +742,14 @@ juce::String ArrangerView::describeTarget(const juce::ValueTree& lane) const
         return "Volume";
     if (target == session::automation::panTarget())
         return "Pan";
+    if (target == session::automation::azimuthTarget())
+        return "3D Azimuth";
+    if (target == session::automation::elevationTarget())
+        return "3D Elevation";
+    if (target == session::automation::distanceTarget())
+        return "3D Distance";
+    if (target == session::automation::sizeTarget())
+        return "3D Size";
 
     std::uint32_t id = 0;
     if (session::automation::parseSendTarget(target, id))
@@ -783,6 +791,12 @@ juce::String ArrangerView::describeValue(const juce::ValueTree& lane, double val
     }
     if (target == session::automation::panTarget())
         return formatPan(value * 2.0 - 1.0);
+    if (target == session::automation::azimuthTarget() || target == session::automation::elevationTarget())
+        return juce::String(session::automation::spatialFromNormalised(target, value), 1) + juce::String::fromUTF8("\xc2\xb0");
+    if (target == session::automation::distanceTarget())
+        return juce::String(value, 2);
+    if (target == session::automation::sizeTarget())
+        return juce::String(value * 100.0, 0) + " %";
     if (session::automation::parseParameterTarget(target, id, index))
         if (auto node = project_.getDevices().findNode(id))
         {
@@ -799,6 +813,14 @@ double ArrangerView::currentValueFor(const juce::ValueTree& t, const juce::Strin
         return engine::gainToAutomation(juce::Decibels::decibelsToGain(session::track::getVolumeDb(t), session::kMinusInfinityDb));
     if (target == session::automation::panTarget())
         return (session::track::getPan(t) + 1.0) * 0.5;
+    if (target == session::automation::azimuthTarget())
+        return session::automation::spatialToNormalised(target, session::track::getAzimuth(t));
+    if (target == session::automation::elevationTarget())
+        return session::automation::spatialToNormalised(target, session::track::getElevation(t));
+    if (target == session::automation::distanceTarget())
+        return session::track::getDistance(t);
+    if (target == session::automation::sizeTarget())
+        return session::track::getSize(t);
 
     std::uint32_t id = 0;
     int index = 0;
@@ -3258,6 +3280,15 @@ void ArrangerView::addAutomationMenuItems(juce::PopupMenu& menu, const juce::Val
 
     menu.addItem("Volume", addLane(session::automation::volumeTarget()));
     menu.addItem("Pan", addLane(session::automation::panTarget()));
+    if (session::track::isPan3d(trackTree))
+    {
+        juce::PopupMenu spatial;
+        spatial.addItem("Azimuth", addLane(session::automation::azimuthTarget()));
+        spatial.addItem("Elevation", addLane(session::automation::elevationTarget()));
+        spatial.addItem("Distance", addLane(session::automation::distanceTarget()));
+        spatial.addItem("Size", addLane(session::automation::sizeTarget()));
+        menu.addSubMenu("3D Panner", spatial);
+    }
 
     for (const auto& s : session::Session::getSends(trackTree))
         if (const auto bus = session_.findTrack(session::send::getTarget(s)); bus.isValid())
@@ -3477,6 +3508,39 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
                                            }
                                        }));
         menu.addSubMenu("Format", formats);
+    }
+
+    // The 3D panner: a mono or stereo track into a surround or 3D bus or master.
+    {
+        const auto destination = session_.getDestination(t);
+        const auto destinationFormat = destination.isValid() ? session::track::getFormat(destination) : session_.getMasterFormat();
+        const bool canPan3d = (kind == session::TrackKind::audio || kind == session::TrackKind::instrument || kind == session::TrackKind::bus)
+                              && !session::isMultichannel(session::track::getFormat(t)) && session::isMultichannel(destinationFormat);
+        if (canPan3d)
+        {
+            const bool on = session::track::isPan3d(t);
+            menu.addItem("3D Panner", true, on, withTracks(idsOf(selection), [on](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+                                                           {
+                                                               self.session_.beginTransaction(on ? "3D Panner Off" : "3D Panner On");
+                                                               for (auto tree : trees)
+                                                                   session::track::setPan3d(tree, !on, &self.session_.getUndoManager());
+                                                           }));
+            menu.addItem("Open 3D Panner...", [safe, trackId]
+                         {
+                             if (safe == nullptr)
+                                 return;
+                             auto tree = safe->session_.findTrack(trackId);
+                             if (!tree.isValid())
+                                 return;
+                             if (!session::track::isPan3d(tree))
+                             {
+                                 safe->session_.beginTransaction("3D Panner On");
+                                 session::track::setPan3d(tree, true, &safe->session_.getUndoManager());
+                             }
+                             if (safe->onOpenSpatialPanner)
+                                 safe->onOpenSpatialPanner(tree);
+                         });
+        }
     }
 
     // MIDI tracks: the instrument track their MIDI plays.

@@ -221,6 +221,33 @@ ChannelStrip::ChannelStrip(session::Session& session, EditorState& editor, juce:
     };
     addChildComponent(surround_);
 
+    // The 3D panner: "3D" switches the track to it; the compact view (the room from above) places
+    // it, and a double-click opens the full panner.
+    threeD_.setTooltip("3D panner: place the track anywhere in the room (azimuth, elevation, distance, size) instead of on the "
+                       "surround pad");
+    threeD_.setWantsKeyboardFocus(false);
+    threeD_.onClick = [this]
+    {
+        const bool on = !session::track::isPan3d(track_);
+        session_.beginTransaction(on ? "3D Panner On" : "3D Panner Off");
+        session::track::setPan3d(track_, on, &session_.getUndoManager());
+    };
+    addChildComponent(threeD_);
+    spatial_.onDragStart = [this] { session_.beginTransaction("3D Panner"); };
+    spatial_.onMove = [this](const SpatialPosition& p)
+    {
+        auto* um = &session_.getUndoManager();
+        session::track::setAzimuth(track_, p.azimuth, um);
+        session::track::setElevation(track_, p.elevation, um);
+        session::track::setDistance(track_, p.distance, um);
+    };
+    spatial_.onOpen = [this]
+    {
+        if (onOpenSpatialPanner)
+            onOpenSpatialPanner(track_);
+    };
+    addChildComponent(spatial_);
+
     rebuildRouting();
     rebuildSends();
 
@@ -421,15 +448,22 @@ void ChannelStrip::updateSurroundMode()
     // A mono or stereo signal into a surround destination is placed with the surround panner; a
     // multichannel track keeps the pan knob (as a balance).
     const bool surround = panAllowed_ && getDestinationChannels() > 2 && !session::isMultichannel(session::track::getFormat(track_));
+    const bool spatial = surround && session::track::isPan3d(track_);
     if (surround)
     {
         const auto destination = session_.getDestination(track_);
-        surround_.setLayout(session::getLayout(destination.isValid() ? session::track::getFormat(destination) : session_.getMasterFormat()));
+        const auto layout = session::getLayout(destination.isValid() ? session::track::getFormat(destination) : session_.getMasterFormat());
+        surround_.setLayout(layout);
+        spatial_.setLayout(layout);
     }
-    if (surround == surroundMode_ && surround_.isVisible() == surround)
+    threeD_.setToggleState(spatial, juce::dontSendNotification);
+    threeD_.setColour(juce::TextButton::buttonOnColourId, theme::colour::accent);
+    if (surround == surroundMode_ && surround_.isVisible() == (surround && !spatial) && spatial_.isVisible() == spatial)
         return;
     surroundMode_ = surround;
-    surround_.setVisible(surround);
+    surround_.setVisible(surround && !spatial);
+    spatial_.setVisible(spatial);
+    threeD_.setVisible(surround);
     pan_.setVisible(panAllowed_ && !surround);
     resized();
 }
@@ -438,6 +472,8 @@ void ChannelStrip::syncFromModel()
 {
     updateSurroundMode();
     surround_.setPosition(session::track::getPan(track_), session::track::getPanFrontRear(track_), session::track::getPanCentre(track_));
+    spatial_.setPosition({session::track::getAzimuth(track_), session::track::getElevation(track_), session::track::getDistance(track_),
+                          session::track::getSize(track_)});
     arm_.setToggleState(session::track::isArmed(track_), juce::dontSendNotification);
     const auto monitor = session::track::getMonitor(track_);
     monitor_.setButtonText(monitor == engine::MonitorMode::off ? "OFF" : monitor == engine::MonitorMode::always ? "IN" : "AUTO");
@@ -489,6 +525,24 @@ void ChannelStrip::showMovingValues(float volumeGain, float pan)
         movingPan_ = panMoves;
         repaint(readoutArea_);
     }
+}
+
+void ChannelStrip::showMovingSpatial(const std::array<float, 4>& moving)
+{
+    if (!spatial_.isVisible())
+        return;
+    SpatialPosition live{session::track::getAzimuth(track_), session::track::getElevation(track_), session::track::getDistance(track_),
+                         session::track::getSize(track_)};
+    bool moves = false;
+    for (std::size_t k = 0; k < 4; ++k)
+        if (!std::isnan(moving[k]))
+        {
+            (k == 0 ? live.azimuth : k == 1 ? live.elevation : k == 2 ? live.distance : live.size) = static_cast<double>(moving[k]);
+            moves = true;
+        }
+    if (moves || movingSpatial_)
+        spatial_.setLivePosition(moves ? std::optional<SpatialPosition>(live) : std::nullopt);
+    movingSpatial_ = moves;
 }
 
 void ChannelStrip::pushLevels(float peakLeft, float peakRight, double elapsedSeconds)
@@ -598,9 +652,17 @@ void ChannelStrip::resized()
     area.removeFromTop(2);
 
     if (surroundMode_)
-        surround_.setBounds(area.removeFromTop(58).reduced(2, 0));
+    {
+        auto pad = area.removeFromTop(58).reduced(2, 0);
+        surround_.setBounds(pad);
+        spatial_.setBounds(pad);
+        threeD_.setBounds(pad.removeFromTop(13).removeFromRight(22));
+        threeD_.toFront(false);
+    }
     else
+    {
         pan_.setBounds(area.removeFromTop(34).withSizeKeepingCentre(30, 30));
+    }
 
     auto buttons = area.removeFromTop(20);
     const int buttonWidth = (buttons.getWidth() - 3 * 2) / (arm_.isVisible() ? 4 : 3);
@@ -938,12 +1000,49 @@ void MixerPanel::rebuildStrips()
                                                         if (onShowDevices)
                                                             onShowDevices();
                                                     });
+        strip->onOpenSpatialPanner = [this](const juce::ValueTree& track) { openSpatialPanner(track); };
         stripHolder_.addAndMakeVisible(*strip);
         strips_.push_back(std::move(strip));
     }
 
+    // Panner windows of tracks that are gone close.
+    for (auto it = pannerWindows_.begin(); it != pannerWindows_.end();)
+        it = session.findTrack(it->first).isValid() ? std::next(it) : pannerWindows_.erase(it);
+
     layoutStrips();
     repaint();
+}
+
+void MixerPanel::openSpatialPanner(const juce::ValueTree& track)
+{
+    auto& session = project_.getSession();
+    const auto id = session::track::getId(track);
+    auto& window = pannerWindows_[id];
+    if (window == nullptr)
+    {
+        const auto destination = session.getDestination(track);
+        const auto layout = session::getLayout(destination.isValid() ? session::track::getFormat(destination) : session.getMasterFormat());
+        window = std::make_unique<SpatialPannerWindow>(session, track, layout);
+        if (shortcuts_ != nullptr)
+            window->addKeyListener(shortcuts_);
+        juce::Component::SafePointer<MixerPanel> safe(this);
+        window->onClose = [safe, id]
+        {
+            // (not from inside the window's own callback)
+            juce::MessageManager::callAsync([safe, id]
+                                            {
+                                                if (safe != nullptr)
+                                                    safe->pannerWindows_.erase(id);
+                                            });
+        };
+    }
+    window->toFront(true);
+}
+
+SpatialPannerWindow* MixerPanel::getSpatialPannerWindow(std::uint32_t trackId) const
+{
+    const auto it = pannerWindows_.find(trackId);
+    return it != pannerWindows_.end() ? it->second.get() : nullptr;
 }
 
 void MixerPanel::scrollToTrack(const juce::ValueTree& track)
@@ -1006,6 +1105,16 @@ void MixerPanel::updateMeters(const engine::TelemetrySnapshot& telemetry, double
         const auto peaks = slot >= 0 ? controller_.collectTrackPeaks(slot) : engine::ChannelPeaks{};
         // Faders and pans follow an LFO or automation as the engine applies them.
         strip->showMovingValues(controller_.getEngine().getMovingVolume(slot), controller_.getEngine().getMovingPan(slot));
+        std::array<float, 4> spatial{};
+        for (int k = 0; k < 4; ++k)
+            spatial[static_cast<std::size_t>(k)] = controller_.getEngine().getMovingSpatial(slot, k);
+        strip->showMovingSpatial(spatial);
+        if (auto* window = getSpatialPannerWindow(session::track::getId(t)))
+        {
+            const auto destinationLayout = session::getLayout(destination.isValid() ? session::track::getFormat(destination) : session.getMasterFormat());
+            window->getEditor().setDestinationLayout(destinationLayout);
+            window->getEditor().showLive(spatial, telemetry.playheadSeconds);
+        }
         if (channels > 2)
             strip->pushLevels(peaks.peak.data(), channels, elapsedSeconds);
         else

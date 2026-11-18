@@ -282,6 +282,11 @@ TrackFormat getFormat(const juce::ValueTree& t)
 }
 double getPanFrontRear(const juce::ValueTree& t) { return t.getProperty(ids::panFrontRear, -1.0); }
 double getPanCentre(const juce::ValueTree& t) { return t.getProperty(ids::panCentre, 0.0); }
+bool isPan3d(const juce::ValueTree& t) { return t.getProperty(ids::pan3d, false); }
+double getAzimuth(const juce::ValueTree& t) { return t.getProperty(ids::panAzimuth, 0.0); }
+double getElevation(const juce::ValueTree& t) { return t.getProperty(ids::panElevation, 0.0); }
+double getDistance(const juce::ValueTree& t) { return t.getProperty(ids::panDistance, 1.0); }
+double getSize(const juce::ValueTree& t) { return t.getProperty(ids::panSize, 0.0); }
 bool isActive(const juce::ValueTree& t) { return t.getProperty(ids::active, true); }
 std::uint32_t getMidiTarget(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::midiTarget, 0))); }
 std::uint32_t getVca(const juce::ValueTree& t) { return static_cast<std::uint32_t>(static_cast<int>(t.getProperty(ids::vca, 0))); }
@@ -352,6 +357,29 @@ void setPanFrontRear(juce::ValueTree t, double frontRear, juce::UndoManager* um)
 void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um)
 {
     t.setProperty(ids::panCentre, juce::jlimit(0.0, 1.0, centre), um);
+}
+void setPan3d(juce::ValueTree t, bool on, juce::UndoManager* um)
+{
+    t.setProperty(ids::pan3d, on, um);
+}
+void setAzimuth(juce::ValueTree t, double degrees, juce::UndoManager* um)
+{
+    double wrapped = std::fmod(degrees + 180.0, 360.0);
+    if (wrapped < 0.0)
+        wrapped += 360.0;
+    t.setProperty(ids::panAzimuth, wrapped - 180.0, um);
+}
+void setElevation(juce::ValueTree t, double degrees, juce::UndoManager* um)
+{
+    t.setProperty(ids::panElevation, juce::jlimit(-90.0, 90.0, degrees), um);
+}
+void setDistance(juce::ValueTree t, double distance, juce::UndoManager* um)
+{
+    t.setProperty(ids::panDistance, juce::jlimit(0.0, 1.0, distance), um);
+}
+void setSize(juce::ValueTree t, double size, juce::UndoManager* um)
+{
+    t.setProperty(ids::panSize, juce::jlimit(0.0, 1.0, size), um);
 }
 void setActive(juce::ValueTree t, bool active, juce::UndoManager* um)
 {
@@ -820,6 +848,31 @@ void setVisible(juce::ValueTree lane, bool visible, juce::UndoManager* um) { lan
 
 juce::String volumeTarget() { return "volume"; }
 juce::String panTarget() { return "pan"; }
+juce::String azimuthTarget() { return "azimuth"; }
+juce::String elevationTarget() { return "elevation"; }
+juce::String distanceTarget() { return "distance"; }
+juce::String sizeTarget() { return "size"; }
+bool isSpatialTarget(const juce::String& target)
+{
+    return target == azimuthTarget() || target == elevationTarget() || target == distanceTarget() || target == sizeTarget();
+}
+double spatialToNormalised(const juce::String& target, double value)
+{
+    if (target == azimuthTarget())
+        return juce::jlimit(0.0, 1.0, (value + 180.0) / 360.0);
+    if (target == elevationTarget())
+        return juce::jlimit(0.0, 1.0, (value + 90.0) / 180.0);
+    return juce::jlimit(0.0, 1.0, value);
+}
+double spatialFromNormalised(const juce::String& target, double normalised)
+{
+    normalised = juce::jlimit(0.0, 1.0, normalised);
+    if (target == azimuthTarget())
+        return normalised * 360.0 - 180.0;
+    if (target == elevationTarget())
+        return normalised * 180.0 - 90.0;
+    return normalised;
+}
 juce::String sendTarget(std::uint32_t sendId) { return "send:" + juce::String(static_cast<int>(sendId)); }
 juce::String parameterTarget(std::uint32_t deviceId, int parameterIndex)
 {

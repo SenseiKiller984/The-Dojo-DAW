@@ -60,6 +60,9 @@ struct EngineTelemetry
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks)> trackVolumes{};
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxTracks)> trackPans{};
     std::atomic<float> masterVolume{0.0f}; ///< likewise for the master fader (linear; NaN = its own)
+    /** The 3D panner's azimuth, elevation (degrees), distance and size as the engine applies them
+        while automation or a modulator moves them; NaN when they are the track's own. By slot. */
+    std::array<std::array<std::atomic<float>, 4>, static_cast<std::size_t>(kMaxTracks)> trackSpatial{};
 
     /** Master peaks per channel of the master's layout, max since last read. */
     std::array<std::atomic<float>, static_cast<std::size_t>(kMaxChannels)> masterPeaks{};

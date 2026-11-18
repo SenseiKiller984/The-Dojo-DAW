@@ -833,6 +833,16 @@ std::vector<LfoEditor::Candidate> LfoEditor::getCandidates() const
         if (!master)
         {
             result.push_back({trackId, session::automation::panTarget(), 0.5 * (session::track::getPan(owner) + 1.0), ownerName + " > Pan"});
+            if (session::track::isPan3d(owner))
+            {
+                using namespace session::automation;
+                result.push_back({trackId, azimuthTarget(), spatialToNormalised(azimuthTarget(), session::track::getAzimuth(owner)),
+                                  ownerName + " > 3D Azimuth"});
+                result.push_back({trackId, elevationTarget(), spatialToNormalised(elevationTarget(), session::track::getElevation(owner)),
+                                  ownerName + " > 3D Elevation"});
+                result.push_back({trackId, distanceTarget(), session::track::getDistance(owner), ownerName + " > 3D Distance"});
+                result.push_back({trackId, sizeTarget(), session::track::getSize(owner), ownerName + " > 3D Size"});
+            }
             for (const auto& send : session::Session::getSends(owner))
             {
                 const auto bus = session.findTrack(session::send::getTarget(send));
@@ -933,6 +943,14 @@ juce::String LfoEditor::describe(const juce::ValueTree& mapping) const
         return ownerName + " > Volume";
     if (target == session::automation::panTarget())
         return ownerName + " > Pan";
+    if (target == session::automation::azimuthTarget())
+        return ownerName + " > 3D Azimuth";
+    if (target == session::automation::elevationTarget())
+        return ownerName + " > 3D Elevation";
+    if (target == session::automation::distanceTarget())
+        return ownerName + " > 3D Distance";
+    if (target == session::automation::sizeTarget())
+        return ownerName + " > 3D Size";
     if (std::uint32_t sendId = 0; session::automation::parseSendTarget(target, sendId))
         for (const auto& send : session::Session::getSends(track))
             if (session::send::getId(send) == sendId)

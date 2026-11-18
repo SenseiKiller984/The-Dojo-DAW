@@ -1,5 +1,7 @@
 #include "engine/AudioEngine.h"
 
+#include "engine/SpatialPanner.h"
+
 #include "core/ModulationSource.h"
 
 #include "core/rt/AtomicUtils.h"
@@ -63,6 +65,9 @@ AudioEngine::AudioEngine(int numWorkerThreads)
         v.store(std::numeric_limits<float>::quiet_NaN());
     for (auto& p : telemetry_.trackPans)
         p.store(std::numeric_limits<float>::quiet_NaN());
+    for (auto& position : telemetry_.trackSpatial)
+        for (auto& value : position)
+            value.store(std::numeric_limits<float>::quiet_NaN());
     telemetry_.masterVolume.store(std::numeric_limits<float>::quiet_NaN());
 }
 
@@ -1279,6 +1284,8 @@ void AudioEngine::clearModulation() noexcept
     constexpr double none = std::numeric_limits<double>::quiet_NaN();
     modulatedVolume_.fill(none);
     modulatedPan_.fill(none);
+    for (auto& position : modulatedSpatial_)
+        position.fill(none);
     for (auto& sends : modulatedSends_)
         sends.fill(none);
     modulatedMaster_ = none;
@@ -1322,6 +1329,16 @@ void AudioEngine::applyModulators(int numSamples) noexcept
                         bypassed ? none : automationToGain(mapped);
                 break;
             case ModulationTarget::Kind::masterVolume: modulatedMaster_ = bypassed ? none : automationToGain(mapped); break;
+            case ModulationTarget::Kind::azimuth:
+            case ModulationTarget::Kind::elevation:
+            case ModulationTarget::Kind::distance:
+            case ModulationTarget::Kind::size:
+                if (slotValid)
+                {
+                    const auto which = static_cast<std::size_t>(static_cast<int>(target.kind) - static_cast<int>(ModulationTarget::Kind::azimuth));
+                    modulatedSpatial_[static_cast<std::size_t>(target.slot)][which] = bypassed ? none : mapped;
+                }
+                break;
             }
         }
     }
@@ -1355,7 +1372,7 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
 
     if (track.isWide())
     {
-        applyWideFader(track, slot, volume, pan);
+        applyWideFader(track, slot, volume, pan, faderTime);
         return;
     }
 
@@ -1383,7 +1400,62 @@ void AudioEngine::applyFader(const RenderTrack& track, SlotState& slot) noexcept
     rt::atomicStoreMax(telemetry_.surfacePeaks[static_cast<std::size_t>(track.slot)], static_cast<float>(std::max(peakLeft, peakRight)));
 }
 
-void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan) noexcept
+ChannelMatrix AudioEngine::spatialMatrix(const RenderTrack& track, double faderTime, int numIn, int numOut,
+                                         std::array<double, kMaxChannels>& diffuse) noexcept
+{
+    // Where it is: its own settings, its automation (normalised lanes), a modulator over both.
+    std::array<double, 4> position{track.azimuth, track.elevation, track.distance, track.size};
+    const std::array<const AutomationCurve*, 4> lanes{&track.azimuthAutomation, &track.elevationAutomation,
+                                                      &track.distanceAutomation, &track.sizeAutomation};
+    const auto& modulated = modulatedSpatial_[static_cast<std::size_t>(track.slot)];
+    const auto fromNormalised = [](std::size_t which, double v)
+    { return which == 0 ? v * 360.0 - 180.0 : (which == 1 ? v * 180.0 - 90.0 : v); };
+    for (std::size_t k = 0; k < 4; ++k)
+    {
+        bool moves = false;
+        if (!lanes[k]->isEmpty())
+        {
+            position[k] = fromNormalised(k, lanes[k]->valueAt(faderTime));
+            moves = true;
+        }
+        if (!std::isnan(modulated[k]))
+        {
+            position[k] = fromNormalised(k, modulated[k]);
+            moves = true;
+        }
+        telemetry_.trackSpatial[static_cast<std::size_t>(track.slot)][k].store(
+            moves ? static_cast<float>(position[k]) : std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
+    }
+
+    // Each input from its direction (a stereo track's sides 30 degrees either side), spread as its
+    // size and distance say; its size's share of the power is played diffuse (decorrelated).
+    const double size = std::clamp(position[3], 0.0, 1.0);
+    const double spread = SpatialPanner::effectiveSpread(size, position[2]);
+    const double direct = std::sqrt(1.0 - size);
+    const bool stereo = numIn >= 2 && !track.mono;
+    ChannelMatrix m;
+    m.numInputs = numIn;
+    m.numOutputs = numOut;
+    diffuse.fill(0.0);
+    for (int i = 0; i < numIn; ++i)
+    {
+        const double azimuth = position[0] + (stereo ? (i == 0 ? 30.0 : -30.0) : 0.0);
+        const auto gains = track.spatialPanner->spreadGains(azimuth, position[1], spread);
+        const double share = stereo ? 1.0 : 1.0 / numIn; // (a mono track's two channels are one signal)
+        for (int o = 0; o < numOut; ++o)
+        {
+            const auto oi = static_cast<std::size_t>(o);
+            m.gain[oi][static_cast<std::size_t>(i)] = gains[oi] * direct * share;
+            diffuse[oi] += gains[oi] * gains[oi] / numIn; // (the inputs' average power)
+        }
+    }
+    const double diffuseAmount = std::sqrt(size);
+    for (int o = 0; o < numOut; ++o)
+        diffuse[static_cast<std::size_t>(o)] = std::sqrt(diffuse[static_cast<std::size_t>(o)]) * diffuseAmount;
+    return m;
+}
+
+void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan, double faderTime) noexcept
 {
     // Multichannel: the fader is a matrix from the track's channels to its destination's (surround
     // panner or conversion by speaker), with volume, phase and mute folded in. It ramps towards the
@@ -1392,11 +1464,17 @@ void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, doub
     const int numIn = std::min(track.layout.numChannels, slot.main.getNumChannels());
     const int numOut = std::min(track.outputLayout.numChannels, slot.out.getNumChannels());
 
-    auto target = outputMatrix(track.layout, track.outputLayout, pan, track.panFrontRear, track.panCentre);
+    std::array<double, kMaxChannels> diffuseTarget{};
+    const bool spatial = track.pan3d && track.spatialPanner != nullptr;
+    auto target = spatial ? spatialMatrix(track, faderTime, numIn, numOut, diffuseTarget)
+                          : outputMatrix(track.layout, track.outputLayout, pan, track.panFrontRear, track.panCentre);
     const double scale = track.audible ? volume * (track.phaseInverted ? -1.0 : 1.0) : 0.0;
     for (int o = 0; o < numOut; ++o)
+    {
         for (int i = 0; i < numIn; ++i)
             target.gain[static_cast<std::size_t>(o)][static_cast<std::size_t>(i)] *= scale;
+        diffuseTarget[static_cast<std::size_t>(o)] *= scale;
+    }
 
     if (!slot.matrixValid || slot.matrix.numInputs != numIn || slot.matrix.numOutputs != numOut)
     {
@@ -1455,6 +1533,37 @@ void AudioEngine::applyWideFader(const RenderTrack& track, SlotState& slot, doub
         }
     }
     slot.matrix = end;
+
+    // The 3D panner's diffuse part: the track's signal (one mix of its inputs) through each output's
+    // own decorrelation filter, its gain ramping across the block.
+    const auto audible = [](double g) { return std::abs(g) > 1.0e-12; };
+    const bool diffuseActive = std::any_of(diffuseTarget.begin(), diffuseTarget.begin() + numOut, audible)
+                               || std::any_of(slot.diffuse.begin(), slot.diffuse.begin() + numOut, audible);
+    if (spatial && diffuseActive && track.decorrelator != nullptr && slot.groupScratch.getNumChannels() >= 2
+        && track.decorrelator->getNumChannels() >= numOut)
+    {
+        Sample* mix = slot.groupScratch.getWritePointer(0);
+        Sample* filtered = slot.groupScratch.getWritePointer(1);
+        const double inputGain = track.mono ? 1.0 / numIn : 1.0;
+        std::fill_n(mix, numSamples, 0.0);
+        for (int i = 0; i < numIn; ++i)
+            juce::FloatVectorOperations::addWithMultiply(mix, slot.main.getReadPointer(i), inputGain, numSamples);
+        for (int o = 0; o < numOut; ++o)
+        {
+            const auto oi = static_cast<std::size_t>(o);
+            const double g0 = slot.diffuse[oi];
+            const double g1 = diffuseTarget[oi];
+            if (!audible(g0) && !audible(g1))
+                continue;
+            track.decorrelator->process(o, mix, filtered, numSamples);
+            Sample* destination = slot.out.getWritePointer(o);
+            const double delta = (g1 - g0) / numSamples;
+            for (int k = 0; k < numSamples; ++k)
+                destination[k] += filtered[k] * (g0 + delta * (k + 1));
+        }
+    }
+    for (int o = 0; o < numOut; ++o)
+        slot.diffuse[static_cast<std::size_t>(o)] = spatial ? diffuseTarget[static_cast<std::size_t>(o)] : 0.0;
 
     const auto meterIndex = static_cast<std::size_t>(track.slot) * kMaxChannels;
     for (int o = 0; o < numOut; ++o)

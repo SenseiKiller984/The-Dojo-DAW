@@ -174,6 +174,8 @@ MainComponent::MainComponent(AppServices& services)
     { (void)controller_.getEngine().getLiveMidiQueue().push(message, trackId); };
     clipList_.getPlayheadSeconds = [this] { return arranger_.getPlayheadSeconds(); };
     arranger_.onVideoImported = [this] { showVideoWindow(true); };
+    arranger_.onOpenSpatialPanner = [this](const juce::ValueTree& track) { mixer_.openSpatialPanner(track); };
+    mixer_.setShortcuts(services_.commands.getKeyMappings());
     browser_.onFileActivated = [this](const juce::File& file)
     {
         importAudioFiles({file.getFullPathName()});

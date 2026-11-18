@@ -4,12 +4,15 @@
 #include "session/Project.h"
 #include "ui/components/InlineValueEditor.h"
 #include "ui/components/LevelMeter.h"
+#include "ui/components/SpatialPannerView.h"
 #include "ui/components/SurroundPanner.h"
 #include "ui/EditorState.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -39,6 +42,14 @@ public:
     /** Shown instead of the pan knob when a mono or stereo track feeds a surround bus or master. */
     [[nodiscard]] SurroundPanner& getSurroundPanner() noexcept { return surround_; }
     [[nodiscard]] bool isSurroundPanning() const noexcept { return surroundMode_; }
+    /** With the 3D panner on, the compact 3D panner (the room from above) replaces the surround pad;
+        "3D" in the pad's corner switches between them, and a double-click opens the full panner. */
+    [[nodiscard]] SpatialPannerView& getSpatialPanner() noexcept { return spatial_; }
+    [[nodiscard]] juce::TextButton& get3dButton() noexcept { return threeD_; }
+    std::function<void(const juce::ValueTree& track)> onOpenSpatialPanner;
+    /** The 3D panner's position as the engine applies it while automation or an LFO moves it
+        (azimuth, elevation, distance, size; NaN where it is the track's own). */
+    void showMovingSpatial(const std::array<float, 4>& moving);
     /** The fader gain (linear) and pan the engine applies while an LFO or automation moves them
         (NaN: the track's own settings). The controls follow without editing the session. */
     void showMovingValues(float volumeGain, float pan);
@@ -94,7 +105,10 @@ private:
 
     juce::Slider pan_;
     SurroundPanner surround_;
+    SpatialPannerView spatial_{true};
+    juce::TextButton threeD_{"3D"};
     bool surroundMode_ = false;
+    bool movingSpatial_ = false;
     bool panAllowed_ = true;
     juce::TextButton mute_;
     juce::TextButton solo_;
@@ -176,6 +190,11 @@ public:
 
     /** Brings `track`'s strip as close to the left as possible. */
     void scrollToTrack(const juce::ValueTree& track);
+    /** Opens (or brings forward) `track`'s 3D panner window. */
+    void openSpatialPanner(const juce::ValueTree& track);
+    /** The application's shortcuts (Space plays ...), also in the panner windows. */
+    void setShortcuts(juce::KeyListener* shortcuts) noexcept { shortcuts_ = shortcuts; }
+    [[nodiscard]] SpatialPannerWindow* getSpatialPannerWindow(std::uint32_t trackId) const;
     [[nodiscard]] int getScrollX() const { return viewport_.getViewPositionX(); }
 
 private:
@@ -195,6 +214,8 @@ private:
     juce::Component stripHolder_;
     std::vector<std::unique_ptr<ChannelStrip>> strips_;
     MasterStrip master_;
+    std::map<std::uint32_t, std::unique_ptr<SpatialPannerWindow>> pannerWindows_;
+    juce::KeyListener* shortcuts_ = nullptr;
 };
 
 } // namespace dojo::ui

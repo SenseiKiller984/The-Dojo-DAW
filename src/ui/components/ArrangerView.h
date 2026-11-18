@@ -85,6 +85,8 @@ public:
     std::function<void(int commandId)> onCommand;
     /** A video was imported (dropped): show the video window. */
     std::function<void()> onVideoImported;
+    /** "Open 3D Panner..." in a track's menu (provided by MainComponent: the mixer owns the windows). */
+    std::function<void(const juce::ValueTree& track)> onOpenSpatialPanner;
 
     /** The decoder for video clip thumbnails (none: video clips show their name only). */
     void setVideoFrames(video::FrameServer* frames);

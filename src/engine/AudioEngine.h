@@ -139,6 +139,14 @@ public:
                                               : std::numeric_limits<float>::quiet_NaN();
     }
     [[nodiscard]] float getMovingMasterVolume() const noexcept { return telemetry_.masterVolume.load(std::memory_order_relaxed); }
+    /** The 3D panner's position while automation or a modulator moves it: azimuth, elevation
+        (degrees), distance, size (`which` 0..3); NaN when it is the track's own. */
+    [[nodiscard]] float getMovingSpatial(int slot, int which) const noexcept
+    {
+        return slot >= 0 && slot < kMaxTracks && which >= 0 && which < 4
+                   ? telemetry_.trackSpatial[static_cast<std::size_t>(slot)][static_cast<std::size_t>(which)].load(std::memory_order_relaxed)
+                   : std::numeric_limits<float>::quiet_NaN();
+    }
 
     [[nodiscard]] std::uint64_t getAppliedGraphSerial() const noexcept
     {
@@ -233,6 +241,7 @@ private:
         ChannelMatrix matrixTarget;             ///< ... the one it ramps to
         int rampRemaining = 0;                  ///< samples left in that (linear) ramp
         bool matrixValid = false;
+        std::array<double, kMaxChannels> diffuse{}; ///< the 3D panner's diffuse gains (ramped per block)
     };
 
     class PlayHead final : public juce::AudioPlayHead
@@ -299,7 +308,11 @@ private:
         linked instance per channel group (companions take over the primary's parameters). */
     void runChain(const std::vector<RenderDevice>& chain, juce::AudioBuffer<Sample>& buffer, int numChannels,
                   const ChannelGroups& groups, juce::MidiBuffer& midi, juce::AudioBuffer<Sample>* groupScratch) noexcept;
-    void applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan) noexcept;
+    void applyWideFader(const RenderTrack& track, SlotState& slot, double volume, double pan, double faderTime) noexcept;
+    /** The 3D panner's matrix (direct part) and its diffuse gains per output, for the track's
+        position at `faderTime` (automation, modulators). */
+    ChannelMatrix spatialMatrix(const RenderTrack& track, double faderTime, int numIn, int numOut,
+                                std::array<double, kMaxChannels>& diffuse) noexcept;
     [[nodiscard]] int masterChannels() const noexcept;
     /** The stereo fold-down of `numChannels` channels of `source` into `stereo` (two channels). */
     static void foldDown(const juce::AudioBuffer<Sample>& source, int numChannels, const ChannelMatrix& matrix,
@@ -380,6 +393,7 @@ private:
     // What the modulators set this block (NaN: not modulated), by slot.
     std::array<double, kMaxTracks> modulatedVolume_{};
     std::array<double, kMaxTracks> modulatedPan_{};
+    std::array<std::array<double, 4>, kMaxTracks> modulatedSpatial_{}; ///< 3D panner (normalised; NaN = none)
     std::array<std::array<double, kMaxModulatedSends>, kMaxTracks> modulatedSends_{};
     double modulatedMaster_ = 0.0;
 

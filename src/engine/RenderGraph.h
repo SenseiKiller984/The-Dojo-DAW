@@ -27,6 +27,8 @@ namespace dojo::engine
 
 class ProcessorNode;
 class ClipStretcher;
+class SpatialPanner;
+class Decorrelator;
 class StreamedAudio;
 
 /** Upper bound on simultaneously rendered tracks. Per-track engine state (buffers, gain smoothing,
@@ -255,6 +257,17 @@ struct RenderTrack
     ChannelGroups outputGroups; ///< ... of `outputLayout` (a Master Fader's post-fader devices)
     double panFrontRear = -1.0; ///< surround panner (see surroundPanMatrix)
     double panCentre = 0.0;
+    /** The 3D panner (a mono or stereo track into a multichannel destination): VBAP gains from
+        `spatialPanner` (for outputLayout) for its position, the diffuse part (size) through
+        `decorrelator` (one filter per output channel, this track's own, kept across graphs). */
+    bool pan3d = false;
+    double azimuth = 0.0;   ///< degrees, -180..180, positive to the left
+    double elevation = 0.0; ///< degrees, -90..90
+    double distance = 1.0;  ///< 0 (at the listener) .. 1 (at the speakers)
+    double size = 0.0;      ///< 0 (a point) .. 1 (all around, diffuse)
+    AutomationCurve azimuthAutomation, elevationAutomation, distanceAutomation, sizeAutomation; ///< normalised lanes
+    const SpatialPanner* spatialPanner = nullptr;
+    Decorrelator* decorrelator = nullptr;
     /** Needs a wide slot (layout or outputLayout has more than two channels). */
     [[nodiscard]] bool isWide() const noexcept { return layout.isMultichannel() || outputLayout.isMultichannel(); }
 
@@ -336,6 +349,10 @@ struct ModulationTarget
         pan,          ///< a track's pan (0 = left .. 1 = right)
         send,         ///< a send level (normalised like volume automation)
         masterVolume, ///< the master fader
+        azimuth,      ///< the 3D panner (normalised like their automation lanes)
+        elevation,
+        distance,
+        size,
     };
 
     Kind kind = Kind::parameter;

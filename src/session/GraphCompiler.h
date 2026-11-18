@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/RenderGraph.h"
+#include "engine/SpatialPanner.h"
 #include "session/AudioAssetCache.h"
 #include "session/DeviceManager.h"
 #include "session/Session.h"
@@ -68,6 +69,10 @@ public:
 private:
     /** A stable slot for a track; `wide` tracks (multichannel signals) get one of the wide slots. */
     int assignSlot(std::uint32_t trackId, std::vector<bool>& used);
+    /** The 3D panner for a destination layout (one per layout, shared by the graphs). */
+    engine::SpatialPanner* pannerFor(const engine::ChannelLayout& layout, engine::RenderGraph& graph);
+    /** A track's decorrelation filters (its own, kept from graph to graph). */
+    engine::Decorrelator* decorrelatorFor(std::uint32_t trackId, int numChannels, engine::RenderGraph& graph);
     std::shared_ptr<engine::ClipStretcher> getStretcher(std::uint32_t clipId, int numChannels);
 
     std::map<std::uint32_t, int> slots_;
@@ -79,6 +84,14 @@ private:
     };
     std::array<SlotRoom, static_cast<std::size_t>(engine::kMaxTracks)> room_{};
     std::map<std::uint32_t, std::shared_ptr<engine::ClipStretcher>> stretchers_;
+    std::map<std::vector<int>, std::shared_ptr<engine::SpatialPanner>> panners_;
+    struct DecorrelatorEntry
+    {
+        std::shared_ptr<engine::Decorrelator> filters;
+        int channels = 0;
+        double sampleRate = 0.0;
+    };
+    std::map<std::uint32_t, DecorrelatorEntry> decorrelators_;
     double sampleRate_ = 48000.0;
     int maxBlock_ = 2048;
     int totalLatency_ = 0;

@@ -28,7 +28,8 @@ using engine::TrackKind;
                       volumeDb, pan, muted, soloed, phaseInverted, output, input, inputStereo,
                       monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation,
                       format (mono|stereo|3.1|5.1|7.1|5.1.4|7.1.4|9.1.6|dolbyDigital|dts), panFrontRear, panCentre,
-                      showTakes, audition (the take lane played instead of the comp)
+                      showTakes, audition (the take lane played instead of the comp), pan3d, panAzimuth,
+                      panElevation, panDistance, panSize (the 3D panner)
             CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, gainBypassed, stretch,
                         pitch, sourceChannel, editLocked, timeLocked, rating (1..5), groups (clip group ids,
                         outermost first), looped, loopLength, syncPoint (seconds from the start), userNamed,
@@ -115,6 +116,11 @@ inline const juce::Identifier editLocked {"editLocked"};
 inline const juce::Identifier masterFormat {"masterFormat"};
 inline const juce::Identifier panFrontRear {"panFrontRear"};
 inline const juce::Identifier panCentre {"panCentre"};
+inline const juce::Identifier pan3d        {"pan3d"};
+inline const juce::Identifier panAzimuth   {"panAzimuth"};
+inline const juce::Identifier panElevation {"panElevation"};
+inline const juce::Identifier panDistance  {"panDistance"};
+inline const juce::Identifier panSize      {"panSize"};
 inline const juce::Identifier timeLocked {"timeLocked"};
 inline const juce::Identifier rating {"rating"};
 inline const juce::Identifier clipGroups {"groups"};
@@ -290,6 +296,18 @@ TrackFormat getFormat(const juce::ValueTree& t);
 double getPanFrontRear(const juce::ValueTree& t);
 /** Surround panner: how much of the centred front signal plays from the centre speaker (0..1). */
 double getPanCentre(const juce::ValueTree& t);
+/**
+    The 3D panner: a mono or stereo track feeding a surround or 3D bus or master is placed anywhere
+    in the room (3D VBAP, see engine::SpatialPanner) instead of on the surround pad. Its position:
+    azimuth in degrees (-180..180, positive to the left, 0 ahead), elevation (-90..90), distance (0 at
+    the listener .. 1 at the speakers, the default) and size (0: a point .. 1: all around, diffuse).
+    A stereo track's two sides sit 30 degrees either side of its azimuth.
+*/
+bool isPan3d(const juce::ValueTree& t);
+double getAzimuth(const juce::ValueTree& t);
+double getElevation(const juce::ValueTree& t);
+double getDistance(const juce::ValueTree& t);
+double getSize(const juce::ValueTree& t);
 /** Inactive tracks are not played or processed at all (their devices use no CPU). */
 bool isActive(const juce::ValueTree& t);
 /** MIDI tracks: the instrument track their MIDI goes to (0 = none). */
@@ -322,6 +340,11 @@ void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um);
 void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um);
 void setPanFrontRear(juce::ValueTree t, double frontRear, juce::UndoManager* um);
 void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um);
+void setPan3d(juce::ValueTree t, bool on, juce::UndoManager* um);
+void setAzimuth(juce::ValueTree t, double degrees, juce::UndoManager* um); ///< (wrapped into -180..180)
+void setElevation(juce::ValueTree t, double degrees, juce::UndoManager* um);
+void setDistance(juce::ValueTree t, double distance, juce::UndoManager* um);
+void setSize(juce::ValueTree t, double size, juce::UndoManager* um);
 void setActive(juce::ValueTree t, bool active, juce::UndoManager* um);
 void setMidiTarget(juce::ValueTree t, std::uint32_t instrumentTrackId, juce::UndoManager* um);
 void setVca(juce::ValueTree t, std::uint32_t vcaTrackId, juce::UndoManager* um);
@@ -515,7 +538,8 @@ std::uint32_t getSourceDevice(const juce::ValueTree& s);
 std::pair<int, int> getSourceChannels(const juce::ValueTree& s);
 } // namespace send
 
-/** AUTOMATION accessors. Targets: "volume", "pan", "send:<sendId>", "param:<deviceId>:<index>". */
+/** AUTOMATION accessors. Targets: "volume", "pan", "send:<sendId>", "param:<deviceId>:<index>",
+    and the 3D panner's "azimuth", "elevation", "distance", "size". */
 namespace automation
 {
 juce::String getTarget(const juce::ValueTree& lane);
@@ -524,6 +548,16 @@ void setVisible(juce::ValueTree lane, bool visible, juce::UndoManager* um);
 
 juce::String volumeTarget();
 juce::String panTarget();
+juce::String azimuthTarget();
+juce::String elevationTarget();
+juce::String distanceTarget();
+juce::String sizeTarget();
+/** One of the 3D panner's four targets. */
+bool isSpatialTarget(const juce::String& target);
+/** A 3D panner value and its lane's 0..1: azimuth -180..180 and elevation -90..90 (degrees) span the
+    lane; distance and size are 0..1 as they are. */
+double spatialToNormalised(const juce::String& target, double value);
+double spatialFromNormalised(const juce::String& target, double normalised);
 juce::String sendTarget(std::uint32_t sendId);
 juce::String parameterTarget(std::uint32_t deviceId, int parameterIndex);
 

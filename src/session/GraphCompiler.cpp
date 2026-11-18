@@ -2,6 +2,7 @@
 
 #include "core/ModulationSource.h"
 
+#include "engine/SpatialPanner.h"
 #include "engine/dsp/ClipStretcher.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -157,6 +158,34 @@ int GraphBuilder::getSlot(std::uint32_t trackId) const
 {
     const auto it = slots_.find(trackId);
     return it != slots_.end() ? it->second : -1;
+}
+
+engine::SpatialPanner* GraphBuilder::pannerFor(const engine::ChannelLayout& layout, engine::RenderGraph& graph)
+{
+    std::vector<int> key;
+    for (int c = 0; c < layout.numChannels; ++c)
+        key.push_back(static_cast<int>(layout.speakers[static_cast<std::size_t>(c)]));
+    auto& panner = panners_[key];
+    if (panner == nullptr)
+        panner = std::make_shared<engine::SpatialPanner>(layout);
+    graph.keepAlive.push_back(panner);
+    return panner.get();
+}
+
+engine::Decorrelator* GraphBuilder::decorrelatorFor(std::uint32_t trackId, int numChannels, engine::RenderGraph& graph)
+{
+    // Each track keeps its own filters (and their state) from graph to graph; new ones only when
+    // its channels or the sample rate change (the old ones stay with the graph still playing them).
+    auto& entry = decorrelators_[trackId];
+    if (entry.filters == nullptr || entry.channels != numChannels || std::abs(entry.sampleRate - sampleRate_) > 1.0e-9)
+    {
+        entry.filters = std::make_shared<engine::Decorrelator>();
+        entry.filters->prepare(sampleRate_, numChannels);
+        entry.channels = numChannels;
+        entry.sampleRate = sampleRate_;
+    }
+    graph.keepAlive.push_back(entry.filters);
+    return entry.filters.get();
 }
 
 void GraphBuilder::setRenderFormat(double sampleRate, int maximumBlockSize)
@@ -561,6 +590,18 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         rt.panFrontRear = track::getPanFrontRear(t);
         rt.panCentre = track::getPanCentre(t);
 
+        // The 3D panner: a mono or stereo track placed in a multichannel destination.
+        if (track::isPan3d(t) && rt.layout.numChannels <= 2 && rt.outputLayout.isMultichannel())
+        {
+            rt.pan3d = true;
+            rt.azimuth = track::getAzimuth(t);
+            rt.elevation = track::getElevation(t);
+            rt.distance = track::getDistance(t);
+            rt.size = track::getSize(t);
+            rt.spatialPanner = pannerFor(rt.outputLayout, *graph);
+            rt.decorrelator = decorrelatorFor(rt.trackId, rt.outputLayout.numChannels, *graph);
+        }
+
         // Devices.
         for (std::size_t d = 0; d < chainNodes[i].size(); ++d)
         {
@@ -600,6 +641,18 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
             else if (target == automation::panTarget())
             {
                 rt.panAutomation = automation::toCurve(lane);
+            }
+            else if (automation::isSpatialTarget(target))
+            {
+                auto curve = automation::toCurve(lane);
+                if (target == automation::azimuthTarget())
+                    rt.azimuthAutomation = std::move(curve);
+                else if (target == automation::elevationTarget())
+                    rt.elevationAutomation = std::move(curve);
+                else if (target == automation::distanceTarget())
+                    rt.distanceAutomation = std::move(curve);
+                else
+                    rt.sizeAutomation = std::move(curve);
             }
             else if (automation::parseParameterTarget(target, id, parameterIndex))
             {
@@ -1003,6 +1056,19 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                         resolved = true;
                     }
                 }
+                else if (automation::isSpatialTarget(target))
+                {
+                    if (index >= 0)
+                    {
+                        using Kind = engine::ModulationTarget::Kind;
+                        t.kind = target == automation::azimuthTarget()     ? Kind::azimuth
+                                 : target == automation::elevationTarget() ? Kind::elevation
+                                 : target == automation::distanceTarget()  ? Kind::distance
+                                                                           : Kind::size;
+                        t.slot = graph->tracks[static_cast<std::size_t>(index)].slot;
+                        resolved = true;
+                    }
+                }
                 else if (std::uint32_t sendId = 0; automation::parseSendTarget(target, sendId))
                 {
                     // Sends are rendered by the bus they feed.
@@ -1235,6 +1301,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         }
     for (auto it = stretchers_.begin(); it != stretchers_.end();)
         it = liveClips.count(it->first) == 0 ? stretchers_.erase(it) : std::next(it);
+    for (auto it = decorrelators_.begin(); it != decorrelators_.end();)
+        it = liveIds.count(it->first) == 0 ? decorrelators_.erase(it) : std::next(it);
 
     // --- Room in the engine's slots --------------------------------------------------------------
     // A slot holds its track's own channels, its destination's (the fader delivers those) and, for
