@@ -71,12 +71,18 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 **Surround monitoring** (*Options > Preferences > Surround*): how a surround master plays on stereo headphones or speakers. The meters always show every channel.
 - **Standard**: the channels as they are, one output per channel. On a stereo device you hear only the front left and right.
 - **Classic Fold-Down** (the default, what earlier versions did): an output per channel when the device has enough; otherwise the ITU-R BS.775 stereo fold-down (centre and surrounds at -3 dB, the LFE left out).
-- **Advanced Surround Virtualizer**: binaural rendering of every speaker at its standard place (L/R at ±30°, C at 0°, surrounds at ±110° in 5.1 and ±90° in 7.1, rears at ±150°, wides at ±60°, 2 m away in a 5 × 6 m room). It plays on outputs 1 and 2, also on a device with more outputs. The 3D beds' height speakers play at their azimuths.
-  - Each speaker reaches each ear four ways: directly, and as first reflections off the floor, the nearest side wall and the front or back wall.
-  - Every path uses the Brown–Duda spherical-head model:
-    - The interaural time difference follows Woodworth's formula (0.26 ms for the front speakers, 0.66 ms at the side), as a fractional delay.
+- **Advanced Surround Virtualizer**: binaural rendering of every speaker at its standard place, 2 m away in a room 5 m wide, 6 m long and 2.7 m high. It plays on outputs 1 and 2, also on a device with more outputs.
+  - Ear level: L/R at ±30°, C at 0°, surrounds at ±110° in 5.1 and ±90° in 7.1, rears at ±150°, wides at ±60°.
+  - Heights: the top layer of 5.1.4, 7.1.4 and 9.1.6 plays 30° up (as the ADM common definitions place it). Ltf/Rtf are at ±30° in 5.1.4 and ±45° otherwise, Ltm/Rtm at ±90°, and Ltr/Rtr at ±110° in 5.1.4 and ±135° otherwise.
+  - Each speaker reaches each ear five ways, each path from its own direction in 3D: directly, and as first reflections off the floor, the ceiling, the nearest side wall and the front or back wall. A top speaker's ceiling reflection arrives first and steeply from above (about 1.9 ms after the direct sound); its floor reflection arrives late, from far below.
+  - Every path uses the Brown–Duda spherical-head model, with the angle to each ear taken in 3D:
+    - The interaural time difference follows Woodworth's formula (0.26 ms for the front speakers, 0.66 ms at the side, 0.49 ms for a top speaker at the side), as a fractional delay. A source above is less lateral.
     - The head shadow is a first-order filter: up to +6 dB of treble at the near ear, about -20 dB in the head's shadow.
-  - Sources behind get a pinna cue (a high shelf, down to -8 dB at 4 kHz), and a short four-line feedback-delay-network reverberation (0.35 s) puts the sound outside the head.
+  - A pinna model gives each path the spectral cues for its elevation and front/back:
+    - **Elevation:** the first pinna notch rises with elevation, from 4 kHz straight below through 6.9 kHz at ear level and 8.3 kHz at the top layer to 12 kHz overhead. It is 12 dB deep, fading towards the zenith. A source above also gets Blauert's overhead band at 8 kHz, raised by up to 4 dB.
+    - **Behind:** sources behind get a high shelf, down to -8 dB at 4 kHz.
+    - **Level:** the notch and the overhead band are made power-neutral, so a top speaker is heard above the bed at the bed's level.
+  - A short four-line feedback-delay-network reverberation (0.35 s) puts the sound outside the head.
   - The LFE plays on both sides below 120 Hz. A full mix plays at the fold-down's level.
   - **Headphones** or **Speakers**: for speakers, a recursive crosstalk canceller (for speakers at ±30°, band-limited to 250 Hz – 6 kHz) keeps each ear's signal to that ear.
   - **Room** (0–100 %): 0 % is anechoic (closer, inside the head); more gives more reflections and reverberation.

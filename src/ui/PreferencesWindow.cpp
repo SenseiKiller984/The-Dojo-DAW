@@ -382,9 +382,10 @@ public:
              "An output per channel when the device has enough, otherwise the ITU-R BS.775 stereo fold-down: centre and "
              "surrounds into left and right at -3 dB, the LFE left out. What The Dojo always did."},
             {"Advanced Surround Virtualizer",
-             "Every speaker becomes a virtual source around your head: interaural time and level differences of a "
-             "spherical head model (Brown-Duda), a pinna cue for sources behind, first reflections of a room and a short "
-             "reverberation. On speakers, crosstalk cancellation keeps each ear's signal to that ear."},
+             "Every speaker, the heights of 5.1.4, 7.1.4 and 9.1.6 included, becomes a virtual source around and above "
+             "your head: interaural time and level differences of a spherical head model (Brown-Duda) in 3D, pinna notches "
+             "that rise with elevation (4-12 kHz), a cue for sources behind, first reflections from the floor, the ceiling "
+             "and the walls, and a short reverberation. On speakers, crosstalk cancellation keeps each ear's signal to that ear."},
             {"Device 3D Virtualizer",
              "Sends the surround channels to the device, in its own channel order, so that its built-in virtualizer renders "
              "them: a 7.1 gaming headset, a USB surround card, an AV receiver, or the system's spatial sound (Windows Sonic, "
@@ -460,7 +461,7 @@ public:
         for (std::size_t i = 0; i < options_.size(); ++i)
         {
             options_[i].button.setBounds(area.removeFromTop(24));
-            options_[i].text.setBounds(area.removeFromTop(i == 3 ? 46 : 32).withTrimmedLeft(30));
+            options_[i].text.setBounds(area.removeFromTop(i == 2 || i == 3 ? 46 : 32).withTrimmedLeft(30));
             if (i == 2)
             {
                 auto indent = area.removeFromTop(24).withTrimmedLeft(30);

@@ -252,7 +252,8 @@ TEST_CASE("Virtualizer: each speaker reaches the ears with its time and level di
 
 TEST_CASE("Virtualizer: a full mix is as loud as the fold-down; the room adds reflections", "[surround][virtualizer]")
 {
-    for (const auto& layout : {engine::ChannelLayout::surround51(), engine::ChannelLayout::surround71(), engine::ChannelLayout::dolbyDigital()})
+    for (const auto& layout : {engine::ChannelLayout::surround51(), engine::ChannelLayout::surround71(), engine::ChannelLayout::dolbyDigital(),
+                               engine::ChannelLayout::surround514(), engine::ChannelLayout::surround714(), engine::ChannelLayout::surround916()})
     {
         SurroundVirtualizer v;
         v.prepare(kRate);

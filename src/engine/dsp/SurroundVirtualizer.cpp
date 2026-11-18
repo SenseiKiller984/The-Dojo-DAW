@@ -2,17 +2,30 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 
 namespace dojo::engine::dsp
 {
 namespace
 {
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kSpeakerDistance = 2.0; ///< metres from the listener
-constexpr double kEarHeight = 1.2;       ///< above the floor
-constexpr double kRoomWidth = 5.0;       ///< side walls at +-2.5 m
-constexpr double kRoomLength = 6.0;      ///< front and back walls at +-3 m
-constexpr double kLateSeconds = 0.35;    ///< T60 of the late reverberation
+constexpr double kLateSeconds = 0.35; ///< T60 of the late reverberation
+constexpr double kLineSeconds = 0.016; ///< the paths' delay lines (the longest path is ~11 ms)
+
+// The pinna model.
+constexpr double kNotchQ = 4.0;
+constexpr double kNotchDepth = 12.0;       ///< dB, up to 30 degrees of elevation
+constexpr double kOverheadFrequency = 8000.0;
+constexpr double kOverheadQ = 2.5;
+constexpr double kOverheadGain = 4.0;      ///< dB, straight above
+constexpr double kRearShelfFrequency = 4000.0;
+constexpr double kRearShelfGain = -8.0;    ///< dB, straight behind
+
+// The reflections' levels (relative to the direct sound at the same distance).
+constexpr double kFloorReflection = 0.45;
+constexpr double kCeilingReflection = 0.4;
+constexpr double kSideReflection = 0.55;
+constexpr double kEndReflection = 0.45;
 constexpr std::array<double, 4> kLateDelaysMs{23.1, 29.3, 37.9, 43.7};
 
 int nextPowerOfTwo(int n)
@@ -70,6 +83,40 @@ void setHighShelf(Biquad& f, double frequency, double gainDb, double sampleRate)
     f.a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cosw) / a0;
     f.a2 = ((a + 1.0) - (a - 1.0) * cosw - root) / a0;
 }
+
+template <typename Biquad>
+void setPeak(Biquad& f, double frequency, double gainDb, double q, double sampleRate)
+{
+    const double a = std::pow(10.0, gainDb / 40.0);
+    const double w0 = 2.0 * kPi * frequency / sampleRate;
+    const double cosw = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    const double a0 = 1.0 + alpha / a;
+    f.b0 = (1.0 + alpha * a) / a0;
+    f.b1 = -2.0 * cosw / a0;
+    f.b2 = (1.0 - alpha * a) / a0;
+    f.a1 = -2.0 * cosw / a0;
+    f.a2 = (1.0 - alpha / a) / a0;
+}
+
+/** A biquad's gain (linear) at `frequency`. */
+template <typename Biquad>
+double gainOf(const Biquad& f, double frequency, double sampleRate)
+{
+    const std::complex<double> z = std::polar(1.0, -2.0 * kPi * frequency / sampleRate); // (z^-1)
+    return std::abs((f.b0 + f.b1 * z + f.b2 * z * z) / (1.0 + f.a1 * z + f.a2 * z * z));
+}
+
+/** A direction (degrees; azimuth positive to the right) as a unit vector: x right, y ahead, z up. */
+struct Point
+{
+    double x = 0.0, y = 0.0, z = 0.0;
+};
+Point pointOf(double azimuth, double elevation, double distance)
+{
+    const double horizontal = distance * std::cos(radians(elevation));
+    return {horizontal * std::sin(radians(azimuth)), horizontal * std::cos(radians(azimuth)), distance * std::sin(radians(elevation))};
+}
 } // namespace
 
 // --- The head model ----------------------------------------------------------------------------------
@@ -98,11 +145,21 @@ double SurroundVirtualizer::azimuthOf(Speaker speaker, bool sevenOne) noexcept
     return 0.0;
 }
 
+double SurroundVirtualizer::elevationOf(Speaker speaker) noexcept
+{
+    return isHeight(speaker) ? 30.0 : 0.0;
+}
+
 double SurroundVirtualizer::incidence(double azimuthDegrees, bool rightEar) noexcept
 {
-    double difference = azimuthDegrees - (rightEar ? 90.0 : -90.0);
-    difference = std::fmod(difference + 540.0, 360.0) - 180.0; // -180 .. 180
-    return radians(std::abs(difference));
+    return incidence(azimuthDegrees, 0.0, rightEar);
+}
+
+double SurroundVirtualizer::incidence(double azimuthDegrees, double elevationDegrees, bool rightEar) noexcept
+{
+    // The ears are at the ends of the x axis: the cosine of the angle is the direction's x.
+    const double towardsRight = std::sin(radians(azimuthDegrees)) * std::cos(radians(elevationDegrees));
+    return std::acos(std::clamp(rightEar ? towardsRight : -towardsRight, -1.0, 1.0));
 }
 
 double SurroundVirtualizer::earDelay(double theta) noexcept
@@ -137,15 +194,136 @@ void SurroundVirtualizer::setHeadShadow(EarPath& path, double theta) const noexc
     path.a1 = (beta - k) / (k + beta);
 }
 
+void SurroundVirtualizer::setDelay(EarPath& path, double delay) const noexcept
+{
+    // Third-order Lagrange between the samples delay-1 .. delay+2 back.
+    path.delay = delay;
+    const auto whole = static_cast<int>(delay);
+    const double t = delay - whole + 1.0;
+    path.back = whole - 1;
+    path.taps = {-(t - 1.0) * (t - 2.0) * (t - 3.0) / 6.0, t * (t - 2.0) * (t - 3.0) / 2.0,
+                 -t * (t - 1.0) * (t - 3.0) / 2.0, t * (t - 1.0) * (t - 2.0) / 6.0};
+}
+
+// --- The pinna and the room ------------------------------------------------------------------------------
+
+SurroundVirtualizer::PinnaCue SurroundVirtualizer::pinnaCue(double azimuthDegrees, double elevationDegrees) noexcept
+{
+    const double elevation = std::clamp(elevationDegrees, -90.0, 90.0);
+    PinnaCue cue;
+    cue.notchFrequency = 4000.0 * std::pow(3.0, (elevation + 90.0) / 180.0);
+    cue.notchDepth = kNotchDepth * std::clamp((90.0 - elevation) / 60.0, 0.0, 1.0);
+    cue.overheadGain = kOverheadGain * std::max(0.0, std::sin(radians(elevation)));
+    const double behind = -std::cos(radians(azimuthDegrees)) * std::cos(radians(elevation));
+    cue.rearShelf = kRearShelfGain * std::max(0.0, behind);
+    return cue;
+}
+
+void SurroundVirtualizer::setPinna(Path& path, double azimuth, double elevation) const noexcept
+{
+    const auto cue = pinnaCue(azimuth, elevation);
+    const double nyquistMargin = 0.45 * sampleRate_;
+    const auto turnOn = [](bool& on, bool wanted, Biquad& filter)
+    {
+        if (wanted && !on)
+            filter.clear(); // (its state is from another direction, or stale)
+        on = wanted;
+    };
+    turnOn(path.hasNotch, cue.notchDepth > 0.05 && cue.notchFrequency < nyquistMargin, path.notch);
+    if (path.hasNotch)
+        setPeak(path.notch, cue.notchFrequency, -cue.notchDepth, kNotchQ, sampleRate_);
+    turnOn(path.hasOverhead, cue.overheadGain > 0.05 && kOverheadFrequency < nyquistMargin, path.overhead);
+    if (path.hasOverhead)
+        setPeak(path.overhead, kOverheadFrequency, cue.overheadGain, kOverheadQ, sampleRate_);
+    turnOn(path.hasShelf, cue.rearShelf < -0.05, path.shelf);
+    if (path.hasShelf)
+        setHighShelf(path.shelf, kRearShelfFrequency, cue.rearShelf, sampleRate_);
+
+    // The notch and the overhead band's power over the audio band (white), made up.
+    path.makeup = 1.0;
+    if (path.hasNotch || path.hasOverhead)
+    {
+        constexpr int kSteps = 128;
+        const double top = std::min(20000.0, nyquistMargin);
+        double power = 0.0;
+        for (int i = 0; i < kSteps; ++i)
+        {
+            const double frequency = 20.0 + (top - 20.0) * (i + 0.5) / kSteps;
+            const double g = (path.hasNotch ? gainOf(path.notch, frequency, sampleRate_) : 1.0)
+                             * (path.hasOverhead ? gainOf(path.overhead, frequency, sampleRate_) : 1.0);
+            power += g * g;
+        }
+        path.makeup = 1.0 / std::sqrt(power / kSteps);
+    }
+}
+
+double SurroundVirtualizer::pinnaGain(double azimuthDegrees, double elevationDegrees, double frequency, double sampleRate) noexcept
+{
+    SurroundVirtualizer v;
+    v.sampleRate_ = sampleRate;
+    Path path;
+    v.setPinna(path, azimuthDegrees, elevationDegrees);
+    double gain = path.makeup;
+    if (path.hasNotch)
+        gain *= gainOf(path.notch, frequency, sampleRate);
+    if (path.hasOverhead)
+        gain *= gainOf(path.overhead, frequency, sampleRate);
+    if (path.hasShelf)
+        gain *= gainOf(path.shelf, frequency, sampleRate);
+    return 20.0 * std::log10(gain);
+}
+
+std::array<SurroundVirtualizer::Arrival, SurroundVirtualizer::kPaths> SurroundVirtualizer::arrivals(double azimuthDegrees, double elevationDegrees,
+                                                                                                    double room) noexcept
+{
+    // Image sources: the speaker mirrored in each surface (the listener's head at the origin).
+    const auto p = pointOf(azimuthDegrees, elevationDegrees, kSpeakerDistance);
+    const double floorZ = -kEarHeight;
+    const double ceilingZ = kRoomHeight - kEarHeight;
+    const double sideX = p.x >= 0.0 ? kRoomWidth / 2.0 : -kRoomWidth / 2.0;
+    const double endY = p.y >= 0.0 ? kRoomLength / 2.0 : -kRoomLength / 2.0;
+    const std::array<std::pair<Point, double>, kPaths> images{{
+        {p, 1.0},
+        {{p.x, p.y, 2.0 * floorZ - p.z}, kFloorReflection},
+        {{p.x, p.y, 2.0 * ceilingZ - p.z}, kCeilingReflection},
+        {{2.0 * sideX - p.x, p.y, p.z}, kSideReflection},
+        {{p.x, 2.0 * endY - p.y, p.z}, kEndReflection},
+    }};
+    const double scale = std::clamp(room, 0.0, 1.0);
+    std::array<Arrival, kPaths> result{};
+    for (std::size_t i = 0; i < images.size(); ++i)
+    {
+        const auto& [q, reflection] = images[i];
+        auto& a = result[i];
+        a.distance = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z);
+        a.azimuth = degrees(std::atan2(q.x, q.y));
+        a.elevation = degrees(std::atan2(q.z, std::hypot(q.x, q.y)));
+        // (spherical spreading, relative to the direct sound)
+        a.gain = i == 0 ? 1.0 : scale * reflection * kSpeakerDistance / a.distance;
+    }
+    return result;
+}
+
+void SurroundVirtualizer::clear(Path& path) noexcept
+{
+    std::fill(path.line.begin(), path.line.end(), 0.0);
+    path.notch.clear();
+    path.overhead.clear();
+    path.shelf.clear();
+    for (auto& ear : path.ears)
+        ear.x1 = ear.y1 = 0.0;
+}
+
 // --- Set-up ------------------------------------------------------------------------------------------
 
 void SurroundVirtualizer::prepare(double sampleRate)
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    const int size = nextPowerOfTwo(static_cast<int>(0.025 * sampleRate_) + 8); // (the longest path is ~13 ms)
+    const int size = nextPowerOfTwo(static_cast<int>(kLineSeconds * sampleRate_) + 8);
     mask_ = size - 1;
     for (auto& s : sources_)
-        s.line.assign(static_cast<std::size_t>(size), 0.0);
+        for (auto& path : s.paths)
+            path.line.assign(static_cast<std::size_t>(size), 0.0);
     for (std::size_t i = 0; i < late_.size(); ++i)
     {
         lateLength_[i] = std::max(8, static_cast<int>(kLateDelaysMs[i] * 0.001 * sampleRate_));
@@ -163,13 +341,10 @@ void SurroundVirtualizer::reset() noexcept
 {
     for (auto& s : sources_)
     {
-        std::fill(s.line.begin(), s.line.end(), 0.0);
-        s.pinna.clear();
         s.lfeLow1.clear();
         s.lfeLow2.clear();
-        for (auto& ears : s.paths)
-            for (auto& p : ears)
-                p.x1 = p.y1 = 0.0;
+        for (auto& path : s.paths)
+            clear(path);
     }
     for (auto& line : late_)
         std::fill(line.begin(), line.end(), 0.0);
@@ -196,48 +371,45 @@ void SurroundVirtualizer::configure(const ChannelLayout& layout, Output output, 
     {
         auto& s = sources_[static_cast<std::size_t>(c)];
         s.active = c < layout.numChannels;
-        if (!s.active)
-            continue;
-        const auto speaker = layout.speakers[static_cast<std::size_t>(c)];
-        s.lfe = speaker == Speaker::lfe;
-        if (s.lfe)
+        const auto speaker = s.active ? layout.speakers[static_cast<std::size_t>(c)] : Speaker::lfe;
+        s.lfe = s.active && speaker == Speaker::lfe;
+        if (!s.active || s.lfe)
         {
-            setLowPass(s.lfeLow1, 120.0, 0.7071, sampleRate_);
-            setLowPass(s.lfeLow2, 120.0, 0.7071, sampleRate_);
+            for (auto& path : s.paths)
+                path.gain = 0.0;
+            if (s.lfe)
+            {
+                setLowPass(s.lfeLow1, 120.0, 0.7071, sampleRate_);
+                setLowPass(s.lfeLow2, 120.0, 0.7071, sampleRate_);
+            }
             continue;
         }
 
-        const double azimuth = azimuthOf(speaker, sevenOne);
-        setHighShelf(s.pinna, 4000.0, -8.0 * std::max(0.0, -std::cos(radians(azimuth))), sampleRate_);
-
-        // The direct sound and three first reflections (image sources), each to both ears.
-        const double x = kSpeakerDistance * std::sin(radians(azimuth));
-        const double y = kSpeakerDistance * std::cos(radians(azimuth));
-        struct Image
+        // The direct sound and four first reflections, each from its own direction, to both ears.
+        const auto ways = arrivals(azimuthOf(speaker, sevenOne), elevationOf(speaker), room_);
+        for (std::size_t p = 0; p < ways.size(); ++p)
         {
-            double azimuth, distance, gain;
-        };
-        const double floorDistance = std::hypot(kSpeakerDistance, 2.0 * kEarHeight);
-        const double sideX = x >= 0.0 ? kRoomWidth - x : -kRoomWidth - x;
-        const double endY = y >= 0.0 ? kRoomLength - y : -kRoomLength - y;
-        const std::array<Image, kPaths> images{{
-            {azimuth, kSpeakerDistance, 1.0},
-            {azimuth, floorDistance, room_ * 0.45 * kSpeakerDistance / floorDistance},
-            {degrees(std::atan2(sideX, y)), std::hypot(sideX, y), room_ * 0.55 * kSpeakerDistance / std::hypot(sideX, y)},
-            {degrees(std::atan2(x, endY)), std::hypot(x, endY), room_ * 0.45 * kSpeakerDistance / std::hypot(x, endY)},
-        }};
-        for (std::size_t p = 0; p < images.size(); ++p)
-        {
-            const double extra = (images[p].distance - kSpeakerDistance) / kSpeedOfSound;
+            auto& path = s.paths[p];
+            const bool wasRendered = path.gain > 0.0;
+            path.gain = ways[p].gain;
+            if (!(path.gain > 0.0))
+                continue;
+            if (!wasRendered && !changed)
+                clear(path); // (its line stopped being written; a change resets everything below)
+            setPinna(path, ways[p].azimuth, ways[p].elevation);
+            path.level = path.gain * path.makeup;
+            const double extra = (ways[p].distance - kSpeakerDistance) / kSpeedOfSound;
             for (int ear = 0; ear < 2; ++ear)
             {
-                auto& path = s.paths[p][static_cast<std::size_t>(ear)];
-                const double theta = incidence(images[p].azimuth, ear == 1);
-                path.delay = 2.0 + (extra + earDelay(theta)) * sampleRate_;
-                path.gain = images[p].gain;
-                setHeadShadow(path, theta);
+                auto& earPath = path.ears[static_cast<std::size_t>(ear)];
+                const double theta = incidence(ways[p].azimuth, ways[p].elevation, ear == 1);
+                double delay = 2.0 + (extra + earDelay(theta)) * sampleRate_;
+                if (mask_ > 8)
+                    delay = std::min(delay, static_cast<double>(mask_ - 4)); // (cannot happen in this room)
+                setDelay(earPath, delay);
+                setHeadShadow(earPath, theta);
             }
-            binauralPower += images[p].gain * images[p].gain;
+            binauralPower += path.gain * path.gain;
         }
     }
 
@@ -269,23 +441,10 @@ void SurroundVirtualizer::configure(const ChannelLayout& layout, Output output, 
 
 // --- Processing ----------------------------------------------------------------------------------------
 
-double SurroundVirtualizer::readDelayed(const std::vector<double>& line, int write, double delay) const noexcept
-{
-    // Third-order Lagrange between the samples delay-1 .. delay+2 back.
-    const auto whole = static_cast<int>(delay);
-    const double t = delay - whole + 1.0;
-    const auto sample = [&](int back) { return line[static_cast<std::size_t>((write - back) & mask_)]; };
-    const double h0 = -(t - 1.0) * (t - 2.0) * (t - 3.0) / 6.0;
-    const double h1 = t * (t - 2.0) * (t - 3.0) / 2.0;
-    const double h2 = -t * (t - 1.0) * (t - 3.0) / 2.0;
-    const double h3 = t * (t - 1.0) * (t - 2.0) / 6.0;
-    return h0 * sample(whole - 1) + h1 * sample(whole) + h2 * sample(whole + 1) + h3 * sample(whole + 2);
-}
-
 void SurroundVirtualizer::process(const Sample* const* in, int numChannels, Sample* left, Sample* right, int numSamples) noexcept
 {
     const int channels = std::min({numChannels, layout_.numChannels, kMaxSources});
-    if (sources_[0].line.empty())
+    if (sources_[0].paths[0].line.empty())
         return; // (not prepared)
 
     for (int n = 0; n < numSamples; ++n)
@@ -303,21 +462,32 @@ void SurroundVirtualizer::process(const Sample* const* in, int numChannels, Samp
                 lfe += s.lfeLow2.process(s.lfeLow1.process(x));
                 continue;
             }
-            const double shaped = s.pinna.process(x);
-            s.line[static_cast<std::size_t>(write_)] = shaped;
-            lateIn += shaped;
-            for (auto& pathPair : s.paths)
+            lateIn += x;
+            for (auto& path : s.paths)
+            {
+                if (!(path.gain > 0.0))
+                    continue; // (a reflection, with no room)
+                double shaped = x;
+                if (path.hasShelf)
+                    shaped = path.shelf.process(shaped);
+                if (path.hasNotch)
+                    shaped = path.notch.process(shaped);
+                if (path.hasOverhead)
+                    shaped = path.overhead.process(shaped);
+                auto* line = path.line.data();
+                line[write_] = shaped;
                 for (int ear = 0; ear < 2; ++ear)
                 {
-                    auto& p = pathPair[static_cast<std::size_t>(ear)];
-                    if (!(p.gain > 0.0))
-                        continue; // (a reflection, with no room)
-                    const double delayed = readDelayed(s.line, write_, p.delay);
-                    const double y = p.b0 * delayed + p.b1 * p.x1 - p.a1 * p.y1;
-                    p.x1 = delayed;
-                    p.y1 = y;
-                    ears[ear] += p.gain * y;
+                    auto& e = path.ears[static_cast<std::size_t>(ear)];
+                    const int from = write_ - e.back;
+                    const double delayed = e.taps[0] * line[from & mask_] + e.taps[1] * line[(from - 1) & mask_]
+                                           + e.taps[2] * line[(from - 2) & mask_] + e.taps[3] * line[(from - 3) & mask_];
+                    const double y = e.b0 * delayed + e.b1 * e.x1 - e.a1 * e.y1;
+                    e.x1 = delayed;
+                    e.y1 = y;
+                    ears[ear] += path.level * y;
                 }
+            }
         }
         write_ = (write_ + 1) & mask_;
 

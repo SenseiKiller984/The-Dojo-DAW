@@ -55,6 +55,7 @@ add_executable(dojo_tests
     WarpTests.cpp
     TakeLaneTests.cpp
     NoteExpressionTests.cpp
+    HeightBinauralTests.cpp
     ImmersiveBedTests.cpp
     SpatialPannerTests.cpp
     SpatialPannerUiTests.cpp
