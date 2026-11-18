@@ -21,8 +21,12 @@ namespace dojo::ui
                   Shift-click to add to the selection, right-click for more
       keyboard    Delete removes the selection, Ctrl+A selects all, Q quantises, Up/Down transpose
                   (Shift: an octave), Left/Right move by one grid step
-      lower lane  velocity bars (drag to set), or a controller lane (CC 1/7/10/11/64, pitch bend):
-                  click/drag to draw values, right-click to delete a point
+      lower lane  velocity bars (drag to set), or a controller lane (CC 1/7/10/11/64, pitch bend,
+                  channel pressure): click/drag to draw values, right-click to delete a point
+      note        Note Expression (MPE): three lanes, pitch, pressure and slide, each note's curve
+      expression  under the note itself. Drag to draw on the selected notes (none selected: the
+                  notes under the mouse), Shift-drag for a straight ramp, right-click (drag) to
+                  erase, double-click to clear. Pitch bends also show on the notes in the grid.
       piano keys  click a key to hear its note through the track's instrument for as long as the
                   mouse is held (further right on the key = louder); drag up and down to play others
       scroll bars move left and right in time, and up and down in pitch (also the mouse wheel:
@@ -37,8 +41,17 @@ public:
 
     void setClip(const juce::ValueTree& midiClip);
     void setPlayhead(double seconds);
-    /** 0..127 = CC number, 128 = pitch bend, -1 = velocity. */
+    /** 0..127 = CC number, 128 = pitch bend, 129 = channel pressure, -1 = velocity,
+        kNoteExpressionLane = the per-note expression lanes. */
     void setLowerLane(int controller);
+    static constexpr int kNoteExpressionLane = 1000;
+    /** Note Expression: where a kind's lane is (component coordinates; empty in other modes). */
+    [[nodiscard]] juce::Rectangle<int> getExpressionLaneArea(session::note::Expression kind) const;
+    /** The note grid (component coordinates). */
+    [[nodiscard]] juce::Rectangle<int> getGridArea() const { return gridArea(); }
+    [[nodiscard]] float getBeatX(double beat) const { return beatToX(beat); }
+    /** The pitch lane shows +-this many semitones (2, 12, 24 or 48; clicking its name steps through them). */
+    [[nodiscard]] double getPitchLaneRange() const noexcept { return pitchLaneRange_; }
     void quantiseSelection(double strength, bool ends);
     void zoomToFit();
     /** Grid of the piano roll in beats (also the length of drawn notes). */
@@ -75,6 +88,7 @@ private:
         resize,
         lane,
         keyboard,
+        expression,
     };
 
     struct NoteSnapshot
@@ -101,6 +115,16 @@ private:
     [[nodiscard]] bool isSelected(const juce::ValueTree& note) const;
     void select(const juce::ValueTree& note, bool add);
     void editLane(const juce::MouseEvent& e, bool erase);
+    [[nodiscard]] bool isExpressionMode() const noexcept { return lowerLane_ == kNoteExpressionLane; }
+    [[nodiscard]] int lowerHeight() const noexcept;
+    /** The expression lane at `y` (and its area), if any. */
+    [[nodiscard]] bool expressionLaneAt(float y, session::note::Expression& kind) const;
+    [[nodiscard]] double expressionValueAt(session::note::Expression kind, float y) const;
+    [[nodiscard]] float expressionY(session::note::Expression kind, double value) const;
+    /** The notes an expression gesture at `beat` changes: the selection, else the notes there. */
+    [[nodiscard]] std::vector<juce::ValueTree> expressionTargets(double beat) const;
+    void drawExpression(const juce::MouseEvent& e, bool erase);
+    void paintExpressionLanes(juce::Graphics& g, juce::Colour trackColour) const;
     void deleteSelection();
     void moveSelection(double beats, int semitones);
     void startPreview(int pitch, float velocity);
@@ -136,6 +160,14 @@ private:
     bool dragChanged_ = false;
     juce::Point<float> dragStart_;
     std::vector<NoteSnapshot> dragNotes_;
+
+    // Drawing note expression: the lane, the notes, where the stroke was last.
+    session::note::Expression dragKind_ = session::note::Expression::pitch;
+    std::vector<juce::ValueTree> dragTargets_;
+    double dragLastBeat_ = 0.0;
+    double dragAnchorBeat_ = 0.0;
+    double dragAnchorValue_ = 0.0;
+    double pitchLaneRange_ = 12.0;
 };
 
 /**

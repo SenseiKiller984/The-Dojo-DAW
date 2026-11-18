@@ -148,6 +148,7 @@ void DojoApplication::initialise(const juce::String&)
     }
 
     recorder_ = std::make_unique<session::Recorder>(*project_, *controller_);
+    recorder_->setMpeInput(preferences_->getMpeInput(), preferences_->getMpeBendRange());
     exporter_ = std::make_unique<session::Exporter>(*project_, *controller_);
     preview_ = std::make_unique<engine::PreviewService>(*engine_, project_->getAssets().getFormatManager());
 
@@ -232,6 +233,8 @@ void DojoApplication::changeListenerCallback(juce::ChangeBroadcaster* source)
     {
         if (controller_ != nullptr)
             controller_->setStopAtEnd(preferences_->getStopAtEnd());
+        if (recorder_ != nullptr)
+            recorder_->setMpeInput(preferences_->getMpeInput(), preferences_->getMpeBendRange());
         applySurroundMonitoring();
         return;
     }

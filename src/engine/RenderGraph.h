@@ -101,9 +101,25 @@ struct RenderNote
     int note = 60;
     float velocity = 0.8f;
     int channel = 1;
+    /** Its expression curves (MPE clips): ranges of RenderMidiClip::expression. */
+    std::uint32_t pitchFirst = 0, pitchCount = 0;
+    std::uint32_t pressureFirst = 0, pressureCount = 0;
+    std::uint32_t slideFirst = 0, slideCount = 0;
 };
 
-/** A continuous controller value at a beat. controller 0..127 = CC; 128 = pitch bend (value 0..1). */
+/** A point of a note's expression curve: beats from the note's start; pitch in semitones, pressure
+    and slide 0..1. */
+struct RenderExpressionPoint
+{
+    double beat = 0.0;
+    float value = 0.0f;
+};
+
+/** MPE: the per-note pitch bend range (semitones either way) member channels are sent with. */
+inline constexpr double kMpePitchBendRange = 48.0;
+
+/** A continuous controller value at a beat. controller 0..127 = CC; 128 = pitch bend (value 0..1);
+    129 = channel pressure (aftertouch). */
 struct RenderControl
 {
     double beat = 0.0;
@@ -121,6 +137,11 @@ struct RenderMidiClip
     double loopLength = 0.0;       ///< looped: the first loopLength seconds repeat (0 = not looped)
     std::vector<RenderNote> notes; ///< sorted by startBeat
     std::vector<RenderControl> controls; ///< sorted by beat
+    /** MPE (the clip's notes have per-note expression): each note plays on a member channel of its
+        own (2..16, assigned by the compiler), its expression sent there as pitch bend (+-48
+        semitones), channel pressure and polyphonic aftertouch, and CC 74 (slide). */
+    bool mpe = false;
+    std::vector<RenderExpressionPoint> expression;
 };
 
 /** Automation of one processor parameter. */

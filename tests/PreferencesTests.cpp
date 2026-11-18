@@ -68,6 +68,8 @@ TEST_CASE("Preferences: defaults, persistence and change notifications", "[ui][p
         CHECK_FALSE(preferences.getStopAtEnd());
         CHECK(preferences.getThemeName() == ui::theme::getDefaultThemeName());
         CHECK(preferences.getKeyMappings() == nullptr);
+        CHECK(preferences.getMpeInput());
+        CHECK(preferences.getMpeBendRange() == 48.0);
 
         struct Counter : juce::ChangeListener
         {
@@ -79,6 +81,8 @@ TEST_CASE("Preferences: defaults, persistence and change notifications", "[ui][p
         preferences.setReturnViewToStart(true);
         preferences.setStopAtEnd(true);
         preferences.setThemeName("Sakura Night");
+        preferences.setMpeInput(false);
+        preferences.setMpeBendRange(24.0);
         REQUIRE(test::pumpMessagesUntil([&] { return counter.count > 0; }));
 
         juce::XmlElement mappings("KEYMAPPINGS");
@@ -95,6 +99,11 @@ TEST_CASE("Preferences: defaults, persistence and change notifications", "[ui][p
     CHECK(preferences.getThemeName() == "Sakura Night");
     REQUIRE(preferences.getKeyMappings() != nullptr);
     CHECK(preferences.getKeyMappings()->hasTagName("KEYMAPPINGS"));
+    CHECK_FALSE(preferences.getMpeInput());
+    CHECK(preferences.getMpeBendRange() == 24.0);
+    // A bend range other than 2, 12, 24 or 48 reads as the MPE default.
+    settings->setValue("prefMpeBendRange", 30.0);
+    CHECK(preferences.getMpeBendRange() == 48.0);
 
     // Unknown theme names fall back to the default.
     preferences.setThemeName("No Such Theme");

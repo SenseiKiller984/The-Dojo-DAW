@@ -7,6 +7,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <cmath>
 #include <set>
@@ -94,6 +95,34 @@ void mapClipChannels(engine::RenderClip& clip, const engine::ChannelLayout& trac
         const int source = clip.sourceChannel >= 0 ? (fileChannelFor(1, track, o) >= 0 ? std::min(clip.sourceChannel, clip.numChannels - 1) : -1)
                                                    : fileChannelFor(clip.numChannels, track, o);
         clip.channelMap[static_cast<std::size_t>(o)] = static_cast<std::int8_t>(source);
+    }
+}
+
+/**
+    MPE (lower zone): each note gets a member channel (2..16) of its own, so its expression moves it
+    alone. Notes take the free channel used longest ago, so a channel is reused as late as possible
+    (a released note may still ring on it); with more than 15 notes at once, the channel whose note
+    ends first is shared.
+*/
+void assignMpeChannels(std::vector<engine::RenderNote>& notes)
+{
+    constexpr std::size_t kMembers = 15;
+    std::array<double, kMembers> busyUntil{}, lastStart{};
+    busyUntil.fill(-1.0e300);
+    lastStart.fill(-1.0e300);
+    for (auto& n : notes) // (sorted by start)
+    {
+        std::size_t pick = kMembers;
+        for (std::size_t i = 0; i < kMembers; ++i)
+            if (busyUntil[i] <= n.startBeat + 1.0e-9 && (pick == kMembers || lastStart[i] < lastStart[pick]))
+                pick = i;
+        if (pick == kMembers)
+            for (std::size_t i = 0; i < kMembers; ++i)
+                if (pick == kMembers || busyUntil[i] < busyUntil[pick])
+                    pick = i;
+        busyUntil[pick] = std::max(busyUntil[pick], n.endBeat);
+        lastStart[pick] = n.startBeat;
+        n.channel = 2 + static_cast<int>(pick);
     }
 }
 
@@ -697,6 +726,9 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 mc.rate = trackSpeed;
                 mc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
 
+                // Per-note expression makes the clip MPE: every note on a channel of its own.
+                mc.mpe = std::any_of(c.begin(), c.end(), [](const juce::ValueTree& n) { return n.hasType(ids::note) && note::hasExpression(n); });
+
                 for (const auto& n : c)
                 {
                     if (n.hasType(ids::note))
@@ -707,6 +739,19 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                         rn.note = juce::jlimit(0, 127, note::getNote(n) + transpose);
                         rn.velocity = note::getVelocity(n);
                         rn.channel = note::getChannel(n);
+                        if (mc.mpe)
+                        {
+                            const auto addCurve = [&mc, &n](note::Expression kind, std::uint32_t& firstPoint, std::uint32_t& numPoints)
+                            {
+                                firstPoint = static_cast<std::uint32_t>(mc.expression.size());
+                                for (const auto& point : note::getExpression(n, kind))
+                                    mc.expression.push_back({point.beat, static_cast<float>(point.value)});
+                                numPoints = static_cast<std::uint32_t>(mc.expression.size()) - firstPoint;
+                            };
+                            addCurve(note::Expression::pitch, rn.pitchFirst, rn.pitchCount);
+                            addCurve(note::Expression::pressure, rn.pressureFirst, rn.pressureCount);
+                            addCurve(note::Expression::slide, rn.slideFirst, rn.slideCount);
+                        }
                         mc.notes.push_back(rn);
                     }
                     else if (n.hasType(ids::control))
@@ -724,6 +769,8 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                           [](const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
                 std::sort(mc.controls.begin(), mc.controls.end(),
                           [](const auto& a, const auto& b) { return a.beat < b.beat; });
+                if (mc.mpe)
+                    assignMpeChannels(mc.notes);
                 rt.midiClips.push_back(std::move(mc));
             }
 

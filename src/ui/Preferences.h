@@ -46,6 +46,15 @@ public:
     [[nodiscard]] bool getStopAtEnd() const;
     void setStopAtEnd(bool enabled);
 
+    /** MPE controllers: notes played one per MIDI channel 2..16 (an MPE controller's lower zone)
+        record their own pitch bend, pressure and slide as the notes' expression curves. On by
+        default. Off: those channels' messages record as the clip's controllers. */
+    [[nodiscard]] bool getMpeInput() const;
+    void setMpeInput(bool enabled);
+    /** The MPE controller's per-note pitch bend range in semitones (2, 12, 24 or 48, the MPE default). */
+    [[nodiscard]] double getMpeBendRange() const;
+    void setMpeBendRange(double semitones);
+
     /** Surround monitoring. Classic fold-down by default (what earlier versions did). */
     [[nodiscard]] SurroundMode getSurroundMode() const;
     void setSurroundMode(SurroundMode mode);

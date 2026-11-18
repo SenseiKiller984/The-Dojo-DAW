@@ -54,6 +54,7 @@ add_executable(dojo_tests
     ControlSurfaceTests.cpp
     WarpTests.cpp
     TakeLaneTests.cpp
+    NoteExpressionTests.cpp
     SpscQueueTests.cpp
     StudioDeviceTests.cpp
     ConsoleLookTests.cpp

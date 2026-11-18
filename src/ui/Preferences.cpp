@@ -16,6 +16,8 @@ constexpr const char* kKeyMappingsKey = "prefKeyMappings";
 constexpr const char* kSurroundModeKey = "prefSurroundMode";
 constexpr const char* kVirtualizerSpeakersKey = "prefVirtualizerSpeakers";
 constexpr const char* kVirtualizerRoomKey = "prefVirtualizerRoom";
+constexpr const char* kMpeInputKey = "prefMpeInput";
+constexpr const char* kMpeBendRangeKey = "prefMpeBendRange";
 } // namespace
 
 Preferences::Preferences(juce::PropertiesFile& settings)
@@ -46,6 +48,36 @@ void Preferences::setStopAtEnd(bool enabled)
     if (enabled == getStopAtEnd())
         return;
     settings_.setValue(kStopAtEndKey, enabled);
+    changed();
+}
+
+bool Preferences::getMpeInput() const
+{
+    return settings_.getBoolValue(kMpeInputKey, true);
+}
+
+void Preferences::setMpeInput(bool enabled)
+{
+    if (enabled == getMpeInput())
+        return;
+    settings_.setValue(kMpeInputKey, enabled);
+    changed();
+}
+
+double Preferences::getMpeBendRange() const
+{
+    const double value = settings_.getDoubleValue(kMpeBendRangeKey, 48.0);
+    for (const double range : {2.0, 12.0, 24.0, 48.0})
+        if (std::abs(value - range) < 0.5)
+            return range;
+    return 48.0;
+}
+
+void Preferences::setMpeBendRange(double semitones)
+{
+    if (std::abs(semitones - getMpeBendRange()) < 0.5 && settings_.containsKey(kMpeBendRangeKey))
+        return;
+    settings_.setValue(kMpeBendRangeKey, semitones);
     changed();
 }
 

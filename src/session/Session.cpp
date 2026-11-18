@@ -658,6 +658,101 @@ void setVelocity(juce::ValueTree n, float velocity, juce::UndoManager* um)
 {
     n.setProperty(ids::velocity, juce::jlimit(0.01, 1.0, static_cast<double>(velocity)), um);
 }
+
+namespace
+{
+const juce::Identifier& expressionId(Expression kind)
+{
+    return kind == Expression::pitch ? ids::notePitch : kind == Expression::pressure ? ids::notePressure : ids::noteSlide;
+}
+} // namespace
+
+std::pair<double, double> getExpressionRange(Expression kind)
+{
+    return kind == Expression::pitch ? std::pair<double, double>{-kExpressionPitchRange, kExpressionPitchRange} : std::pair<double, double>{0.0, 1.0};
+}
+
+std::vector<ExpressionPoint> getExpression(const juce::ValueTree& n, Expression kind)
+{
+    std::vector<ExpressionPoint> points;
+    const auto text = n.getProperty(expressionId(kind)).toString();
+    if (text.isEmpty())
+        return points;
+    for (const auto& item : juce::StringArray::fromTokens(text, ";", {}))
+        if (item.containsChar(':'))
+            points.push_back({item.upToFirstOccurrenceOf(":", false, false).getDoubleValue(),
+                              item.fromFirstOccurrenceOf(":", false, false).getDoubleValue()});
+    return points;
+}
+
+void setExpression(juce::ValueTree n, Expression kind, std::vector<ExpressionPoint> points, juce::UndoManager* um)
+{
+    std::stable_sort(points.begin(), points.end(), [](const ExpressionPoint& a, const ExpressionPoint& b) { return a.beat < b.beat; });
+    const auto [low, high] = getExpressionRange(kind);
+    juce::StringArray items;
+    for (const auto& point : points)
+        items.add(juce::String(std::max(0.0, point.beat), 5) + ":" + juce::String(juce::jlimit(low, high, point.value), 4));
+    if (items.isEmpty())
+        n.removeProperty(expressionId(kind), um);
+    else
+        n.setProperty(expressionId(kind), items.joinIntoString(";"), um);
+}
+
+bool hasExpression(const juce::ValueTree& n, Expression kind) { return n.hasProperty(expressionId(kind)); }
+bool hasExpression(const juce::ValueTree& n)
+{
+    return hasExpression(n, Expression::pitch) || hasExpression(n, Expression::pressure) || hasExpression(n, Expression::slide);
+}
+
+double expressionAt(const std::vector<ExpressionPoint>& points, double beat)
+{
+    if (points.empty())
+        return 0.0;
+    if (beat <= points.front().beat)
+        return points.front().value;
+    for (std::size_t i = 1; i < points.size(); ++i)
+        if (beat < points[i].beat)
+        {
+            const auto& a = points[i - 1];
+            const auto& b = points[i];
+            const double span = b.beat - a.beat;
+            return span > 1.0e-12 ? a.value + (b.value - a.value) * (beat - a.beat) / span : b.value;
+        }
+    return points.back().value;
+}
+
+std::vector<ExpressionPoint> thinExpression(const std::vector<ExpressionPoint>& points, double tolerance)
+{
+    if (points.size() <= 2)
+        return points;
+    std::vector<ExpressionPoint> kept{points.front()};
+    std::size_t anchor = 0; // (the last point kept)
+    for (std::size_t i = 1; i + 1 < points.size(); ++i)
+    {
+        // Point i goes if the line from the last kept point to the next one passes within
+        // `tolerance` of it and of every point dropped since. (A jump, two points at one beat,
+        // is a corner: both stay.)
+        const auto& a = points[anchor];
+        const auto& c = points[i + 1];
+        const double span = c.beat - a.beat;
+        bool needed = false;
+        for (std::size_t j = anchor + 1; j <= i && !needed; ++j)
+        {
+            const auto& b = points[j];
+            if (span <= 1.0e-12)
+                needed = std::abs(b.value - a.value) > tolerance && std::abs(b.value - c.value) > tolerance;
+            else
+                needed = std::abs(a.value + (c.value - a.value) * (b.beat - a.beat) / span - b.value) > tolerance;
+        }
+        if (needed)
+        {
+            kept.push_back(points[i]);
+            anchor = i;
+        }
+    }
+    kept.push_back(points.back());
+    return kept;
+}
 } // namespace note
 
 //==================================================================================================
@@ -2317,7 +2412,7 @@ juce::ValueTree Session::addControl(juce::ValueTree midiClipTree, int controller
         return {};
 
     juce::ValueTree c(ids::control);
-    c.setProperty(ids::controller, juce::jlimit(0, 128, controller), nullptr);
+    c.setProperty(ids::controller, juce::jlimit(0, 129, controller), nullptr); // (128 pitch bend, 129 channel pressure)
     c.setProperty(ids::beat, beat, nullptr);
     c.setProperty(ids::value, juce::jlimit(0.0, 1.0, static_cast<double>(value)), nullptr);
     c.setProperty(ids::channel, juce::jlimit(1, 16, channel), nullptr);

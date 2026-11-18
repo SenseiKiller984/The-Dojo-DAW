@@ -22,6 +22,9 @@ constexpr double kMasterGainRampSeconds = 0.050;
 constexpr double kTrackGainRampSeconds = 0.030;
 constexpr double kLoadSmoothingCoefficient = 0.1; // one-pole, ~10-block time constant
 constexpr int kMidiBufferBytes = 16384;
+/** MPE expression is sent at most this often (samples: ~2.7 ms at 48 kHz, as often as MPE
+    controllers send), or 8 times a block for larger blocks. */
+constexpr int kExpressionStepSamples = 128;
 
 void clearOutputs(float* const* outputs, int numOutputs, int offset, int numSamples) noexcept
 {
@@ -861,6 +864,27 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
         return std::clamp(offset, 0, numSamples - 1);
     };
 
+    // MPE: a note's curve at `beat` (beats from its start), and the values sent for it.
+    const auto curveAt = [](const RenderMidiClip& clip, std::uint32_t first, std::uint32_t count, double beat) noexcept
+    {
+        if (count == 0 || first + count > clip.expression.size())
+            return 0.0;
+        const auto* points = clip.expression.data() + first;
+        if (beat <= points[0].beat)
+            return static_cast<double>(points[0].value);
+        for (std::uint32_t i = 1; i < count; ++i)
+            if (beat < points[i].beat)
+            {
+                const double span = points[i].beat - points[i - 1].beat;
+                const double a = points[i - 1].value, b = points[i].value;
+                return span > 1.0e-12 ? a + (b - a) * (beat - points[i - 1].beat) / span : b;
+            }
+        return static_cast<double>(points[count - 1].value);
+    };
+    const auto bendValue = [](double semitones) noexcept
+    { return juce::jlimit(0, 16383, 8192 + juce::roundToInt(semitones / kMpePitchBendRange * 8192.0)); };
+    const auto sevenBit = [](double value) noexcept { return juce::jlimit(0, 127, juce::roundToInt(value * 127.0)); };
+
     // One clip (or one iteration of a looped one) from clipStart to clipEnd.
     const auto schedule = [&](const RenderMidiClip& clip, double clipStart, double clipEnd)
     {
@@ -888,6 +912,8 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
                                    clipEndsInBlock && offBeat >= endBeat - 1.0e-9 ? numSamples - 1 : offsetOf(timeOf(offBeat)));
         }
 
+        // Note-ons. MPE: the note's channel gets its starting expression first (pitch bend,
+        // pressure, slide), poly aftertouch just after it (a note-on resets its key pressure).
         for (const auto& note : clip.notes)
         {
             if (note.startBeat >= endBeat)
@@ -895,8 +921,67 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
             if (note.startBeat < beginBeat || note.startBeat < clip.contentStartBeat)
                 continue;
 
-            slot.midi.addEvent(juce::MidiMessage::noteOn(note.channel, note.note, note.velocity),
-                               offsetOf(timeOf(note.startBeat)));
+            const int offset = offsetOf(timeOf(note.startBeat));
+            int pressure = 0;
+            if (clip.mpe)
+            {
+                pressure = sevenBit(curveAt(clip, note.pressureFirst, note.pressureCount, 0.0));
+                slot.midi.addEvent(juce::MidiMessage::pitchWheel(note.channel, bendValue(curveAt(clip, note.pitchFirst, note.pitchCount, 0.0))), offset);
+                slot.midi.addEvent(juce::MidiMessage::channelPressureChange(note.channel, pressure), offset);
+                slot.midi.addEvent(juce::MidiMessage::controllerEvent(note.channel, 74, sevenBit(curveAt(clip, note.slideFirst, note.slideCount, 0.0))),
+                                   offset);
+            }
+            slot.midi.addEvent(juce::MidiMessage::noteOn(note.channel, note.note, note.velocity), offset);
+            if (clip.mpe && pressure > 0)
+                slot.midi.addEvent(juce::MidiMessage::aftertouchChange(note.channel, note.note, pressure), offset);
+        }
+
+        // MPE: the curves, every step (aligned to the timeline, at most ~8 a block), where they
+        // changed since the step before.
+        if (clip.mpe)
+        {
+            const double stepSeconds = std::max(kExpressionStepSamples, numSamples / 8) * secondsPerSample_;
+            for (const auto& note : clip.notes)
+            {
+                if (note.startBeat >= endBeat)
+                    break;
+                if (note.pitchCount + note.pressureCount + note.slideCount == 0 || note.startBeat < clip.contentStartBeat)
+                    continue;
+                const double onSeconds = timeOf(note.startBeat);
+                const double offSeconds = timeOf(std::min(note.endBeat, clipEndBeat));
+                const double from = std::max(t0, onSeconds);
+                const double to = std::min(t1, offSeconds);
+                for (auto k = static_cast<long long>(std::floor(from / stepSeconds)) + 1; static_cast<double>(k) * stepSeconds < to; ++k)
+                {
+                    const double at = static_cast<double>(k) * stepSeconds;
+                    if (at <= onSeconds)
+                        continue;
+                    const double beat = beatAt(at) - note.startBeat;
+                    const double before = std::max(0.0, beatAt(at - stepSeconds) - note.startBeat);
+                    const int offset = offsetOf(at);
+                    if (note.pitchCount > 0)
+                    {
+                        const int value = bendValue(curveAt(clip, note.pitchFirst, note.pitchCount, beat));
+                        if (value != bendValue(curveAt(clip, note.pitchFirst, note.pitchCount, before)))
+                            slot.midi.addEvent(juce::MidiMessage::pitchWheel(note.channel, value), offset);
+                    }
+                    if (note.pressureCount > 0)
+                    {
+                        const int value = sevenBit(curveAt(clip, note.pressureFirst, note.pressureCount, beat));
+                        if (value != sevenBit(curveAt(clip, note.pressureFirst, note.pressureCount, before)))
+                        {
+                            slot.midi.addEvent(juce::MidiMessage::channelPressureChange(note.channel, value), offset);
+                            slot.midi.addEvent(juce::MidiMessage::aftertouchChange(note.channel, note.note, value), offset);
+                        }
+                    }
+                    if (note.slideCount > 0)
+                    {
+                        const int value = sevenBit(curveAt(clip, note.slideFirst, note.slideCount, beat));
+                        if (value != sevenBit(curveAt(clip, note.slideFirst, note.slideCount, before)))
+                            slot.midi.addEvent(juce::MidiMessage::controllerEvent(note.channel, 74, value), offset);
+                    }
+                }
+            }
         }
 
         for (const auto& control : clip.controls)
@@ -911,6 +996,8 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
                 slot.midi.addEvent(juce::MidiMessage::pitchWheel(control.channel,
                                                                  juce::jlimit(0, 16383, juce::roundToInt(control.value * 16383.0f))),
                                    offset);
+            else if (control.controller == 129)
+                slot.midi.addEvent(juce::MidiMessage::channelPressureChange(control.channel, sevenBit(control.value)), offset);
             else
                 slot.midi.addEvent(juce::MidiMessage::controllerEvent(control.channel, control.controller,
                                                                       juce::jlimit(0, 127, juce::roundToInt(control.value * 127.0f))),

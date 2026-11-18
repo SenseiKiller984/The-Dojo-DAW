@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <tuple>
 
@@ -54,6 +55,12 @@ double Recorder::getMidiLatencySeconds() const
     const double rate = status.sampleRate > 0.0 ? status.sampleRate : 48000.0;
     const int samples = status.outputLatencySamples + project_.getCompiler().getTotalLatency();
     return samples / rate * project_.getSession().getSpeed();
+}
+
+void Recorder::setMpeInput(bool enabled, double bendRange) noexcept
+{
+    mpeInput_ = enabled;
+    mpeBendRange_ = juce::jlimit(1.0, note::kExpressionPitchRange, bendRange);
 }
 
 juce::String Recorder::start()
@@ -380,16 +387,20 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
     }
 
     // Pair note-ons with note-offs, pass by pass; notes still held at a pass's end end with it.
+    using Curves = std::array<std::vector<note::ExpressionPoint>, 3>; // pitch, pressure, slide
     struct Pending
     {
         double startBeat;
         float velocity;
+        Curves curves;             ///< per-note expression (beats from the note's start)
+        std::array<double, 3> initial{}; ///< what each was on its channel when the note started
     };
     struct Note
     {
         double startBeat, endBeat;
         int note, channel;
         float velocity;
+        Curves curves;
     };
     struct Control
     {
@@ -413,6 +424,49 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
         std::vector<Control> controls;
         const auto beatOf = [&](double seconds) { return std::max(0.0, (seconds - range.from) * beatsPerSecond); };
 
+        // MPE: on a member channel (2..16) holding exactly one note, pitch bend, channel pressure
+        // and CC 74 belong to that note; sent while no note is held there, they are how the next
+        // note there starts. Polyphonic aftertouch is always its note's pressure. Anything else
+        // (channel 1, chords on one channel) stays a controller of the clip.
+        std::array<std::array<double, 3>, 17> channelValue{}; // the last value of each kind per channel
+        const auto onlyNoteOn = [&held](int ch) -> Pending*
+        {
+            Pending* found = nullptr;
+            for (auto& [key, pending] : held)
+                if (key / 128 == ch)
+                {
+                    if (found != nullptr)
+                        return nullptr; // (more than one)
+                    found = &pending;
+                }
+            return found;
+        };
+        // A value arriving after a gap in the stream (20 ms) was held until then: the curve steps.
+        const double holdGap = 0.02 * beatsPerSecond;
+        const auto append = [holdGap](std::vector<note::ExpressionPoint>& curve, double at, double value, double initial)
+        {
+            if (curve.empty() && at > 1.0e-9)
+                curve.push_back({0.0, initial});
+            if (!curve.empty() && at - curve.back().beat > holdGap && std::abs(curve.back().value - value) > 1.0e-9)
+                curve.push_back({at, curve.back().value});
+            curve.push_back({at, value});
+        };
+        // An expression value on a channel: true if it went to a note (or waits for the next one).
+        const auto expression = [&](int ch, std::size_t kind, double value, double beat)
+        {
+            if (!mpeInput_ || ch < 2 || ch > 16)
+                return false;
+            channelValue[static_cast<std::size_t>(ch)][kind] = value;
+            const bool anyHeld = std::any_of(held.begin(), held.end(), [ch](const auto& entry) { return entry.first / 128 == ch; });
+            if (!anyHeld)
+                return true; // (the next note on this channel starts with it)
+            auto* pending = onlyNoteOn(ch);
+            if (pending == nullptr)
+                return false;
+            append(pending->curves[kind], std::max(0.0, beat - pending->startBeat), value, pending->initial[kind]);
+            return true;
+        };
+
         for (int i = 0; i < count; ++i)
         {
             const auto& e = capture_->midiEvents[static_cast<std::size_t>(i)];
@@ -434,7 +488,16 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
 
             if (message.isNoteOn())
             {
-                held[channel * 128 + message.getNoteNumber()] = {beat, message.getFloatVelocity()};
+                Pending pending{beat, message.getFloatVelocity(), {}, {}};
+                if (mpeInput_ && channel >= 2 && channel <= 16)
+                {
+                    // A member channel's values when the note starts are where its curves begin.
+                    pending.initial = channelValue[static_cast<std::size_t>(channel)];
+                    for (std::size_t kind = 0; kind < 3; ++kind)
+                        if (std::abs(pending.initial[kind]) > 1.0e-9)
+                            pending.curves[kind].push_back({0.0, pending.initial[kind]});
+                }
+                held[channel * 128 + message.getNoteNumber()] = std::move(pending);
             }
             else if (message.isNoteOff())
             {
@@ -442,24 +505,40 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
                 if (const auto it = held.find(key); it != held.end())
                 {
                     notes.push_back({it->second.startBeat, std::max(beat, it->second.startBeat + kMinNoteLength),
-                                     message.getNoteNumber(), channel, it->second.velocity});
+                                     message.getNoteNumber(), channel, it->second.velocity, std::move(it->second.curves)});
                     held.erase(it);
                 }
             }
-            else if (message.isController())
+            else if (message.isAftertouch())
             {
-                controls.push_back({beat, message.getControllerNumber(), channel, static_cast<float>(message.getControllerValue()) / 127.0f});
+                // Polyphonic key pressure: its note's pressure.
+                if (const auto it = held.find(channel * 128 + message.getNoteNumber()); it != held.end())
+                    append(it->second.curves[1], std::max(0.0, beat - it->second.startBeat), message.getAfterTouchValue() / 127.0, 0.0);
             }
             else if (message.isPitchWheel())
             {
-                controls.push_back({beat, 128, channel, static_cast<float>(message.getPitchWheelValue()) / 16383.0f});
+                const double semitones = (message.getPitchWheelValue() - 8192) / 8192.0 * mpeBendRange_;
+                if (!expression(channel, 0, semitones, beat))
+                    controls.push_back({beat, 128, channel, static_cast<float>(message.getPitchWheelValue()) / 16383.0f});
+            }
+            else if (message.isChannelPressure())
+            {
+                const double value = message.getChannelPressureValue() / 127.0;
+                if (!expression(channel, 1, value, beat))
+                    controls.push_back({beat, 129, channel, static_cast<float>(value)});
+            }
+            else if (message.isController())
+            {
+                const double value = message.getControllerValue() / 127.0;
+                if (message.getControllerNumber() != 74 || !expression(channel, 2, value, beat))
+                    controls.push_back({beat, message.getControllerNumber(), channel, static_cast<float>(value)});
             }
         }
 
         const double endBeat = (range.to - range.from) * beatsPerSecond;
-        for (const auto& [key, pending] : held)
+        for (auto& [key, pending] : held)
             notes.push_back({pending.startBeat, std::max(endBeat, pending.startBeat + kMinNoteLength), key % 128, key / 128,
-                             pending.velocity});
+                             pending.velocity, std::move(pending.curves)});
 
         // Keep the punch window: notes that start in it (ending by its end) and controllers in it.
         Take take;
@@ -471,7 +550,7 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
         const double toBeat = (take.to - range.from) * beatsPerSecond;
         for (const auto& n : notes)
             if (n.startBeat >= fromBeat && n.startBeat < toBeat)
-                take.notes.push_back({n.startBeat - fromBeat, std::min(n.endBeat, toBeat) - fromBeat, n.note, n.channel, n.velocity});
+                take.notes.push_back({n.startBeat - fromBeat, std::min(n.endBeat, toBeat) - fromBeat, n.note, n.channel, n.velocity, n.curves});
         for (const auto& c : controls)
             if (c.beat >= fromBeat && c.beat < toBeat)
                 take.controls.push_back({c.beat - fromBeat, c.controller, c.channel, c.value});
@@ -496,8 +575,16 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
 
         const auto fill = [&session](juce::ValueTree clipTree, const Take& take)
         {
+            constexpr note::Expression kinds[] = {note::Expression::pitch, note::Expression::pressure, note::Expression::slide};
+            constexpr double tolerances[] = {0.01, 0.5 / 127.0, 0.5 / 127.0}; // (a cent; half a MIDI step)
             for (const auto& n : take.notes)
-                session.addNote(clipTree, n.startBeat, n.endBeat - n.startBeat, n.note, n.velocity, n.channel);
+            {
+                auto noteTree = session.addNote(clipTree, n.startBeat, n.endBeat - n.startBeat, n.note, n.velocity, n.channel);
+                for (std::size_t kind = 0; kind < 3; ++kind)
+                    if (!n.curves[kind].empty())
+                        note::setExpression(noteTree, kinds[kind], note::thinExpression(n.curves[kind], tolerances[kind]),
+                                            &session.getUndoManager());
+            }
             for (const auto& c : take.controls)
                 session.addControl(clipTree, c.controller, c.beat, c.value, c.channel);
         };

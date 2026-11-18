@@ -32,7 +32,7 @@ void styleToggle(juce::ToggleButton& toggle)
 }
 
 //==================================================================================================
-/** Playback options. */
+/** Playback and MIDI input options. */
 class GeneralPage final : public juce::Component, private juce::ChangeListener
 {
 public:
@@ -48,16 +48,38 @@ public:
                                "empty bars. A loop still loops, and recording carries on past the end.",
                                juce::dontSendNotification);
 
-        for (auto* toggle : {&returnView_, &stopAtEnd_})
+        mpeInput_.setButtonText("MPE controllers");
+        mpeInputText_.setText("Notes played one per MIDI channel 2 to 16 (an MPE controller's lower zone) record their "
+                              "own pitch bend, pressure and slide as the notes' expression curves, to edit in the piano "
+                              "roll's Note Expression lanes. Turn this off for a keyboard that sends on channels 2 to 16 "
+                              "without being an MPE controller: its pitch bend and pressure then record as controllers.",
+                              juce::dontSendNotification);
+        mpeRangeLabel_.setText("Per-note pitch bend range", juce::dontSendNotification);
+        mpeRangeLabel_.setFont(theme::sans(13.0f));
+        mpeRangeLabel_.setColour(juce::Label::textColourId, theme::colour::textPrimary);
+        for (const auto& [id, text] : {std::pair{48, "48 semitones (the MPE default)"}, std::pair{24, "24 semitones"},
+                                       std::pair{12, "12 semitones"}, std::pair{2, "2 semitones"}})
+            mpeRange_.addItem(text, id);
+        mpeRange_.setTooltip("The bend range your MPE controller sends with (a full bend in either direction)");
+        addAndMakeVisible(mpeRangeLabel_);
+        addAndMakeVisible(mpeRange_);
+
+        for (auto* toggle : {&returnView_, &stopAtEnd_, &mpeInput_})
         {
             styleToggle(*toggle);
             addAndMakeVisible(*toggle);
         }
-        for (auto* label : {&returnViewText_, &stopAtEndText_})
+        for (auto* label : {&returnViewText_, &stopAtEndText_, &mpeInputText_})
             addAndMakeVisible(styleDescription(*label));
 
         returnView_.onClick = [this] { preferences_.setReturnViewToStart(returnView_.getToggleState()); };
         stopAtEnd_.onClick = [this] { preferences_.setStopAtEnd(stopAtEnd_.getToggleState()); };
+        mpeInput_.onClick = [this] { preferences_.setMpeInput(mpeInput_.getToggleState()); };
+        mpeRange_.onChange = [this]
+        {
+            if (mpeRange_.getSelectedId() > 0)
+                preferences_.setMpeBendRange(static_cast<double>(mpeRange_.getSelectedId()));
+        };
         preferences_.addChangeListener(this);
         update();
     }
@@ -70,6 +92,8 @@ public:
         g.setColour(theme::colour::textSecondary);
         g.setFont(theme::label(11.0f));
         g.drawText("PLAYBACK", getLocalBounds().reduced(24, 0).removeFromTop(48), juce::Justification::bottomLeft, false);
+        g.drawText("MIDI INPUT", getLocalBounds().reduced(24, 0).withY(midiHeadingTop_).withHeight(30), juce::Justification::bottomLeft,
+                   false);
     }
 
     void resized() override
@@ -81,6 +105,13 @@ public:
             text->setBounds(area.removeFromTop(40).withTrimmedLeft(30));
             area.removeFromTop(14);
         }
+        midiHeadingTop_ = area.getY();
+        area.removeFromTop(40);
+        mpeInput_.setBounds(area.removeFromTop(28));
+        mpeInputText_.setBounds(area.removeFromTop(58).withTrimmedLeft(30));
+        auto row = area.removeFromTop(28).withTrimmedLeft(30);
+        mpeRangeLabel_.setBounds(row.removeFromLeft(190));
+        mpeRange_.setBounds(row.removeFromLeft(260));
     }
 
 private:
@@ -90,11 +121,17 @@ private:
     {
         returnView_.setToggleState(preferences_.getReturnViewToStart(), juce::dontSendNotification);
         stopAtEnd_.setToggleState(preferences_.getStopAtEnd(), juce::dontSendNotification);
+        mpeInput_.setToggleState(preferences_.getMpeInput(), juce::dontSendNotification);
+        mpeRange_.setSelectedId(juce::roundToInt(preferences_.getMpeBendRange()), juce::dontSendNotification);
+        mpeRange_.setEnabled(preferences_.getMpeInput());
+        mpeRangeLabel_.setEnabled(preferences_.getMpeInput());
     }
 
     Preferences& preferences_;
-    juce::ToggleButton returnView_, stopAtEnd_;
-    juce::Label returnViewText_, stopAtEndText_;
+    juce::ToggleButton returnView_, stopAtEnd_, mpeInput_;
+    juce::Label returnViewText_, stopAtEndText_, mpeInputText_, mpeRangeLabel_;
+    juce::ComboBox mpeRange_;
+    int midiHeadingTop_ = 0;
 };
 
 //==================================================================================================

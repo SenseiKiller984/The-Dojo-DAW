@@ -109,7 +109,10 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Punch In / Punch Out** (the buttons next to the loop button, or the Transport menu) use the loop range. A take keeps only what lies between the punch points; red brackets in the ruler show them.
 - **Space** (or Stop) while recording ends the recording and keeps the take, as Record does.
 - Recording over earlier material keeps every take in **take lanes** (below). With *Record Takes to Lanes* off, a take replaces what was on its track where it lies. Either way one undo removes the recording whole.
-- MIDI keyboards are enabled automatically, also when plugged in while The Dojo runs. Armed instrument tracks play and record live MIDI (notes, controllers, pitch bend).
+- MIDI keyboards are enabled automatically, also when plugged in while The Dojo runs. Armed instrument tracks play and record live MIDI (notes, controllers, pitch bend, channel pressure, polyphonic aftertouch).
+- **MPE controllers** (Seaboard-, LinnStrument- or Osmose-style; the MPE lower zone, one note per channel 2–16): each note's own **pitch bend, pressure and slide** (CC 74) are recorded as that note's expression curves, ready to edit in the piano roll's Note Expression lanes. The values a channel had when its note started are where the note's curves begin.
+  - Set in *Preferences > General > MIDI Input*: **MPE controllers** on or off (on by default) and the controller's **per-note pitch bend range** (48 semitones, the MPE default, or 24, 12, 2). With it off, those channels' bends, pressure and slides record as controllers on their channels, for a keyboard that sends on channels 2–16 without being an MPE controller.
+  - Channel 1 (the zone's master channel) and chords played on one channel always record as ordinary controllers. Polyphonic aftertouch is always its note's pressure.
 - Recorded clips are placed with **latency compensation** (input + output + plug-in latency).
 
 **Take lanes and comping** (playlists)
@@ -181,7 +184,13 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Not available yet: Pro Tools-style **playlists** (alternate takes on a track and its playlist lanes), so there is no showing or hiding of playlist lanes by rating. Ratings are saved with each clip, ready for that.
 
 **MIDI sequencing**
-- **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend); **quantise** with strength and optional note ends.
+- **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend, channel pressure); **quantise** with strength and optional note ends.
+  - **Note Expression (MPE)** (the last entry of the lane menu): three lanes under the notes, **Pitch** (per-note bend in semitones), **Pressure** (polyphonic key pressure) and **Slide** (CC 74), each showing every note's own curve under the note. Each note's bend is also drawn over the note itself in the grid.
+    - **Drag** in a lane to draw the curve of the selected notes, or with none selected, of the notes playing where you draw. **Shift+drag** draws a straight ramp. **Right-drag** erases points. **Double-click** clears that curve. Pitch snaps to whole semitones near them.
+    - Click the pitch lane's name to change its scale: 12, 24, 48 or 2 semitones up and down.
+    - Right-click notes > *Note Expression* clears their pitch, pressure, slide or all.
+    - Curves belong to their notes (stored from the note's start): they move and quantise with them, and go with them when a clip is copied, duplicated or split. Every stroke is one undo step.
+  - **Playback**: a clip with note expression plays as **MPE**. Each note gets a member channel of its own (2–16, round robin, the least recently used free channel first) with its bend (±48 semitones), channel pressure plus polyphonic aftertouch, and CC 74, sent before the note starts and then every 128 samples while it changes. Drift and Meld (MPE on by default) and MPE plug-ins play each note's own curves; set a plug-in's per-note bend range to 48 semitones.
   - **Scroll bars** move left and right through the clip (and up and down through the notes); also Shift+wheel, and Ctrl+wheel zooms.
   - **Click a key** on the keyboard to hear its note through the track's instrument, for as long as you hold the mouse button: long samples and sustained synths keep sounding until you let go. Further right on a key plays louder; slide up or down to play other keys. It works with the transport stopped and the track not armed, also on edit-locked clips (MIDI tracks play through their instrument track), and nothing is recorded.
 - **Step sequencer** view of the same clip: rows are the Drum Rack's pads or Impulse's slots (or 16 notes), click or paint steps, right-click for velocity. Click a row's name to hear it while held.
@@ -402,7 +411,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Out-of-process scanning**: each plug-in is opened by a separate scanner process, so one that crashes or hangs is blacklisted instead of taking The Dojo down.
 
 **Preferences** (*Options > Preferences*, Ctrl+,)
-- **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on).
+- **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on). **MIDI Input**: *MPE controllers* and their *per-note pitch bend range* (see Recording).
 - **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop); Sour, inspired by an album cover's pastel pop-punk look (Sour Lavender: lavender, sticker pink, smiley yellow and lime; Sour Midnight: the same after dark, with a baby-blue playhead). Applied instantly, remembered.
 - **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
 - **Surround**: surround monitoring: Standard, Classic Fold-Down, the Advanced Surround Virtualizer (headphones or speakers, room) or the Device 3D Virtualizer (see *Surround monitoring* above).
@@ -496,7 +505,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Ctrl+G | Toggle snap |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in, out, to fit |
 | Ctrl+N / Ctrl+O / Ctrl+S | New, open, save |
-| Ctrl+, | Preferences (playback options, themes, audio, shortcuts) |
+| Ctrl+, | Preferences (playback and MIDI input options, themes, audio, shortcuts) |
 | Ctrl+Shift+A | Audio settings (device, inputs, MIDI inputs) |
 | F1 | Keyboard shortcuts (change them there) |
 | F11 | Full screen on-off (also *View > Full Screen*) |
@@ -614,7 +623,7 @@ third_party/  vendored LAME
 2. ✅ **Interactive baseline**: tracks, audio clips, arranger editing, mixer, undo, projects, audio settings
 3. ✅ **Recording & MIDI I/O**: audio input routing and monitoring, recording, MIDI hot-plug, latency compensation
 4. ✅ **Arranger depth**: busses, folders and routing, crossfades, time-stretch and pitch, multi-core graph, disk streaming
-5. ✅ **MIDI sequencing**: piano roll, quantise, CC lanes, step sequencer
+5. ✅ **MIDI sequencing**: piano roll, quantise, CC lanes, per-note MPE expression lanes, step sequencer
 6. ✅ **Native DSP**: compressor, limiter, reverb, parametric EQ, delay, speed and pitch
 7. ✅ **Instruments**: Drum Rack, Sampler, Impulse, Wavetable, Operator
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems

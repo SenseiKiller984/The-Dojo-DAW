@@ -14,6 +14,10 @@ namespace
 constexpr int kKeyboardWidth = 56;
 constexpr int kRulerHeight = 18;
 constexpr int kLaneHeight = 80;
+constexpr int kExpressionLaneHeight = 62; ///< each of the three note expression lanes
+constexpr int kExpressionGap = 4;
+constexpr session::note::Expression kExpressionKinds[] = {session::note::Expression::pitch, session::note::Expression::pressure,
+                                                         session::note::Expression::slide};
 constexpr int kToolbarHeight = 30;
 constexpr int kScrollBarSize = 12;
 constexpr float kResizeGrab = 6.0f;
@@ -130,7 +134,13 @@ void PianoRoll::setPlayhead(double seconds)
 void PianoRoll::setLowerLane(int controller)
 {
     lowerLane_ = controller;
+    resized(); // (the lanes' height changes with the mode)
     repaint();
+}
+
+int PianoRoll::lowerHeight() const noexcept
+{
+    return isExpressionMode() ? 3 * kExpressionLaneHeight + 2 * kExpressionGap : kLaneHeight;
 }
 
 double PianoRoll::gridBeats() const { return gridBeats_; }
@@ -142,16 +152,133 @@ double PianoRoll::contentEnd() const
 
 juce::Rectangle<int> PianoRoll::keyboardArea() const
 {
-    return {0, kRulerHeight, kKeyboardWidth, std::max(0, getHeight() - kRulerHeight - kLaneHeight - 4 - kScrollBarSize)};
+    return {0, kRulerHeight, kKeyboardWidth, std::max(0, getHeight() - kRulerHeight - lowerHeight() - 4 - kScrollBarSize)};
 }
 juce::Rectangle<int> PianoRoll::gridArea() const
 {
     return {kKeyboardWidth, kRulerHeight, std::max(0, getWidth() - kKeyboardWidth - kScrollBarSize),
-            std::max(0, getHeight() - kRulerHeight - kLaneHeight - 4 - kScrollBarSize)};
+            std::max(0, getHeight() - kRulerHeight - lowerHeight() - 4 - kScrollBarSize)};
 }
 juce::Rectangle<int> PianoRoll::laneArea() const
 {
-    return {kKeyboardWidth, getHeight() - kLaneHeight, std::max(0, getWidth() - kKeyboardWidth - kScrollBarSize), kLaneHeight};
+    return {kKeyboardWidth, getHeight() - lowerHeight(), std::max(0, getWidth() - kKeyboardWidth - kScrollBarSize), lowerHeight()};
+}
+
+juce::Rectangle<int> PianoRoll::getExpressionLaneArea(session::note::Expression kind) const
+{
+    if (!isExpressionMode())
+        return {};
+    const auto lane = laneArea();
+    const int index = kind == session::note::Expression::pitch ? 0 : kind == session::note::Expression::pressure ? 1 : 2;
+    return {lane.getX(), lane.getY() + index * (kExpressionLaneHeight + kExpressionGap), lane.getWidth(), kExpressionLaneHeight};
+}
+
+bool PianoRoll::expressionLaneAt(float y, session::note::Expression& kind) const
+{
+    for (const auto k : kExpressionKinds)
+    {
+        const auto area = getExpressionLaneArea(k);
+        if (y >= static_cast<float>(area.getY()) && y < static_cast<float>(area.getBottom()))
+        {
+            kind = k;
+            return true;
+        }
+    }
+    return false;
+}
+
+float PianoRoll::expressionY(session::note::Expression kind, double value) const
+{
+    const auto area = getExpressionLaneArea(kind).toFloat().reduced(0.0f, 5.0f);
+    if (kind == session::note::Expression::pitch)
+    {
+        const double v = juce::jlimit(-pitchLaneRange_, pitchLaneRange_, value) / pitchLaneRange_;
+        return area.getCentreY() - static_cast<float>(v) * area.getHeight() * 0.5f;
+    }
+    return area.getBottom() - static_cast<float>(juce::jlimit(0.0, 1.0, value)) * area.getHeight();
+}
+
+double PianoRoll::expressionValueAt(session::note::Expression kind, float y) const
+{
+    const auto area = getExpressionLaneArea(kind).toFloat().reduced(0.0f, 5.0f);
+    if (area.getHeight() <= 0.0f)
+        return 0.0;
+    if (kind == session::note::Expression::pitch)
+    {
+        const double v = static_cast<double>((area.getCentreY() - y) / (area.getHeight() * 0.5f)) * pitchLaneRange_;
+        // Near a whole semitone, exactly that (bends usually land on notes).
+        const double whole = std::round(v);
+        return juce::jlimit(-pitchLaneRange_, pitchLaneRange_, std::abs(v - whole) < 0.12 ? whole : v);
+    }
+    return juce::jlimit(0.0, 1.0, static_cast<double>((area.getBottom() - y) / area.getHeight()));
+}
+
+std::vector<juce::ValueTree> PianoRoll::expressionTargets(double beat) const
+{
+    if (!selection_.empty())
+        return selection_;
+    std::vector<juce::ValueTree> notes;
+    for (const auto& n : clip_)
+        if (n.hasType(session::ids::note) && session::note::getStart(n) <= beat && beat < session::note::getEnd(n))
+            notes.push_back(n);
+    return notes;
+}
+
+void PianoRoll::drawExpression(const juce::MouseEvent& e, bool erase)
+{
+    using session::note::ExpressionPoint;
+    const double beat = xToBeat(e.position.x);
+    const double value = expressionValueAt(dragKind_, e.position.y);
+    auto* um = &session_.getUndoManager();
+    const double resolution = 1.0 / 128.0; // (a point at most every 1/128 beat)
+
+    for (auto& n : dragTargets_)
+    {
+        if (!n.getParent().isValid())
+            continue;
+        const double start = session::note::getStart(n);
+        const double length = session::note::getLength(n);
+        auto points = session::note::getExpression(n, dragKind_);
+        const auto clampToNote = [length](double b) { return juce::jlimit(0.0, length, b); };
+        const auto removeBetween = [&points](double from, double to, bool inclusive)
+        {
+            points.erase(std::remove_if(points.begin(), points.end(), [from, to, inclusive](const ExpressionPoint& p)
+                                        { return inclusive ? (p.beat >= from && p.beat <= to) : (p.beat > from && p.beat < to); }),
+                         points.end());
+        };
+
+        if (erase)
+        {
+            const double tolerance = 6.0 / pixelsPerBeat_;
+            removeBetween(std::min(dragLastBeat_, beat) - start - tolerance, std::max(dragLastBeat_, beat) - start + tolerance, true);
+        }
+        else if (e.mods.isShiftDown())
+        {
+            // A straight ramp from where the stroke began.
+            const double a = clampToNote(dragAnchorBeat_ - start);
+            const double b = clampToNote(beat - start);
+            removeBetween(std::min(a, b) - resolution * 0.5, std::max(a, b) + resolution * 0.5, true);
+            if (points.empty() && std::min(a, b) > resolution)
+                points.push_back({0.0, 0.0});
+            points.push_back({a, dragAnchorValue_});
+            if (std::abs(b - a) > resolution * 0.5)
+                points.push_back({b, value});
+        }
+        else
+        {
+            // Freehand: the stroke replaces what was under it since the last point.
+            const double at = std::round(clampToNote(beat - start) / resolution) * resolution;
+            const double last = clampToNote(dragLastBeat_ - start);
+            // (the point drawn last is within half a step of `last`: it stays)
+            removeBetween(std::min(last, at) + resolution * 0.5, std::max(last, at) - resolution * 0.5, true);
+            removeBetween(at - resolution * 0.5, at + resolution * 0.5, true);
+            if (points.empty() && at > resolution)
+                points.push_back({0.0, 0.0}); // (the note starts unbent: the curve begins at the neutral value)
+            points.push_back({at, value});
+        }
+        session::note::setExpression(n, dragKind_, std::move(points), um);
+    }
+    dragLastBeat_ = beat;
 }
 
 float PianoRoll::beatToX(double beat) const
@@ -365,6 +492,23 @@ void PianoRoll::paint(juce::Graphics& g)
         g.fillRoundedRectangle(box, 2.0f);
         g.setColour(selected ? colour::textPrimary : colour::windowBackground.withAlpha(0.7f));
         g.drawRoundedRectangle(box, 2.0f, selected ? 1.5f : 1.0f);
+
+        // Its own pitch bend: a line from the middle of the note, a key per semitone.
+        if (session::note::hasExpression(n, session::note::Expression::pitch))
+        {
+            const auto points = session::note::getExpression(n, session::note::Expression::pitch);
+            const double start = session::note::getStart(n);
+            const double length = session::note::getLength(n);
+            const float centre = box.getCentreY();
+            juce::Path bend;
+            bend.startNewSubPath(box.getX(), centre - static_cast<float>(session::note::expressionAt(points, 0.0)) * keyHeight_);
+            for (const auto& point : points)
+                if (point.beat > 0.0 && point.beat < length)
+                    bend.lineTo(beatToX(start + point.beat), centre - static_cast<float>(point.value) * keyHeight_);
+            bend.lineTo(box.getRight(), centre - static_cast<float>(session::note::expressionAt(points, length)) * keyHeight_);
+            g.setColour(colour::textPrimary.withAlpha(selected ? 0.95f : 0.7f));
+            g.strokePath(bend, juce::PathStrokeType(selected ? 2.0f : 1.4f));
+        }
     }
 
     // Playhead.
@@ -402,9 +546,20 @@ void PianoRoll::paint(juce::Graphics& g)
     g.fillRect(lane.withX(0).withWidth(getWidth()));
     g.setColour(colour::outline);
     g.fillRect(0, lane.getY() - 4, getWidth(), 4);
+    if (isExpressionMode())
+    {
+        paintExpressionLanes(g, trackColour);
+        if (isLocked())
+        {
+            g.setColour(colour::textMuted);
+            g.setFont(sansBold(12.0f));
+            g.drawText("Edit-locked (Clip > Edit Unlock to change it)", grid.reduced(10, 6).removeFromTop(18), juce::Justification::topRight, true);
+        }
+        return;
+    }
     g.setColour(colour::textMuted);
     g.setFont(label(8.5f));
-    g.drawText(lowerLane_ < 0 ? "VELOCITY" : lowerLane_ == 128 ? "PITCH BEND" : "CC " + juce::String(lowerLane_),
+    g.drawText(lowerLane_ < 0 ? "VELOCITY" : lowerLane_ == 128 ? "PITCH BEND" : lowerLane_ == 129 ? "PRESSURE" : "CC " + juce::String(lowerLane_),
                juce::Rectangle<int>(0, lane.getY(), kKeyboardWidth, 16), juce::Justification::centred, false);
 
     g.saveState();
@@ -462,6 +617,80 @@ void PianoRoll::paint(juce::Graphics& g)
     }
 }
 
+void PianoRoll::paintExpressionLanes(juce::Graphics& g, juce::Colour trackColour) const
+{
+    using namespace theme;
+    using session::note::Expression;
+
+    for (const auto kind : kExpressionKinds)
+    {
+        const auto area = getExpressionLaneArea(kind);
+        g.setColour(colour::windowBackground.interpolatedWith(colour::panel, 0.5f));
+        g.fillRect(area);
+
+        // Its name on the left, and the scale.
+        const auto name = juce::Rectangle<int>(0, area.getY(), kKeyboardWidth, area.getHeight());
+        g.setColour(colour::textSecondary);
+        g.setFont(label(8.5f));
+        g.drawText(kind == Expression::pitch ? "PITCH" : kind == Expression::pressure ? "PRESSURE" : "SLIDE", name.withHeight(16),
+                   juce::Justification::centred, false);
+        g.setColour(colour::textMuted);
+        g.setFont(mono(8.5f));
+        g.drawText(kind == Expression::pitch ? juce::String::fromUTF8("\xc2\xb1") + juce::String(juce::roundToInt(pitchLaneRange_)) + " st"
+                                             : juce::String("0 - 127"),
+                   name.withTrimmedTop(16).withHeight(14), juce::Justification::centred, false);
+
+        g.saveState();
+        g.reduceClipRegion(area);
+        // Reference lines: no bend (and every octave), or the floor.
+        g.setColour(colour::gridBar);
+        if (kind == Expression::pitch)
+        {
+            g.drawHorizontalLine(juce::roundToInt(expressionY(kind, 0.0)), static_cast<float>(area.getX()), static_cast<float>(area.getRight()));
+            g.setColour(colour::gridBeat);
+            for (double st = 12.0; st < pitchLaneRange_ + 0.5; st += 12.0)
+                for (const double v : {st, -st})
+                    g.drawHorizontalLine(juce::roundToInt(expressionY(kind, v)), static_cast<float>(area.getX()), static_cast<float>(area.getRight()));
+        }
+
+        for (const auto& n : clip_)
+        {
+            if (!n.hasType(session::ids::note))
+                continue;
+            const double start = session::note::getStart(n);
+            const double length = session::note::getLength(n);
+            const float x0 = beatToX(start);
+            const float x1 = beatToX(start + length);
+            if (x1 < static_cast<float>(area.getX()) || x0 > static_cast<float>(area.getRight()))
+                continue;
+            const bool selected = isSelected(n);
+            const bool anySelected = !selection_.empty();
+
+            // The note's span, under it.
+            g.setColour(trackColour.withAlpha(selected ? 0.20f : 0.07f));
+            g.fillRect(juce::Rectangle<float>(x0, static_cast<float>(area.getY()), std::max(1.0f, x1 - x0), static_cast<float>(area.getHeight())));
+
+            const auto points = session::note::getExpression(n, kind);
+            if (points.empty() && !selected)
+                continue;
+            juce::Path curve;
+            curve.startNewSubPath(x0, expressionY(kind, session::note::expressionAt(points, 0.0)));
+            for (const auto& point : points)
+                if (point.beat > 0.0 && point.beat < length)
+                    curve.lineTo(beatToX(start + point.beat), expressionY(kind, point.value));
+            curve.lineTo(x1, expressionY(kind, session::note::expressionAt(points, length)));
+            const auto stroke = selected || !anySelected ? trackColour.brighter(0.35f) : trackColour.withAlpha(0.45f);
+            g.setColour(points.empty() ? stroke.withAlpha(0.35f) : stroke);
+            g.strokePath(curve, juce::PathStrokeType(selected ? 2.0f : 1.3f));
+            if (selected)
+                for (const auto& point : points)
+                    if (point.beat >= 0.0 && point.beat <= length)
+                        g.fillEllipse(juce::Rectangle<float>(4.5f, 4.5f).withCentre({beatToX(start + point.beat), expressionY(kind, point.value)}));
+        }
+        g.restoreState();
+    }
+}
+
 void PianoRoll::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
@@ -481,6 +710,34 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
     dragChanged_ = false;
     dragStart_ = e.position;
     dragNotes_.clear();
+
+    if (isExpressionMode())
+    {
+        session::note::Expression kind = session::note::Expression::pitch;
+        if (e.position.x < static_cast<float>(kKeyboardWidth) && expressionLaneAt(e.position.y, kind))
+        {
+            // The pitch lane's name steps through its scale.
+            if (kind == session::note::Expression::pitch)
+            {
+                pitchLaneRange_ = pitchLaneRange_ < 2.5 ? 12.0 : pitchLaneRange_ < 12.5 ? 24.0 : pitchLaneRange_ < 24.5 ? 48.0 : 2.0;
+                repaint();
+            }
+            return;
+        }
+        if (laneArea().contains(e.getPosition()) && expressionLaneAt(e.position.y, kind))
+        {
+            dragTargets_ = expressionTargets(xToBeat(e.position.x));
+            if (dragTargets_.empty())
+                return;
+            dragKind_ = kind;
+            dragLastBeat_ = dragAnchorBeat_ = xToBeat(e.position.x);
+            dragAnchorValue_ = expressionValueAt(kind, e.position.y);
+            session_.beginTransaction(e.mods.isPopupMenu() ? "Erase Note Expression" : "Draw Note Expression");
+            drag_ = Drag::expression;
+            drawExpression(e, e.mods.isPopupMenu());
+            return;
+        }
+    }
 
     if (laneArea().contains(e.getPosition()))
     {
@@ -525,6 +782,26 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
                                      session::note::setVelocity(n, v, &safe->session_.getUndoManager());
                              });
         menu.addSubMenu("Velocity", velocity, !selection_.empty());
+        juce::PopupMenu expression;
+        const auto clearExpression = [safe](std::vector<session::note::Expression> kinds)
+        {
+            return [safe, kinds]
+            {
+                if (safe == nullptr)
+                    return;
+                safe->session_.beginTransaction("Clear Note Expression");
+                for (auto& n : safe->selection_)
+                    for (const auto kind : kinds)
+                        session::note::setExpression(n, kind, {}, &safe->session_.getUndoManager());
+            };
+        };
+        const bool anyExpression = std::any_of(selection_.begin(), selection_.end(), [](const juce::ValueTree& n) { return session::note::hasExpression(n); });
+        expression.addItem("Clear Pitch", anyExpression, false, clearExpression({session::note::Expression::pitch}));
+        expression.addItem("Clear Pressure", anyExpression, false, clearExpression({session::note::Expression::pressure}));
+        expression.addItem("Clear Slide", anyExpression, false, clearExpression({session::note::Expression::slide}));
+        expression.addItem("Clear All", anyExpression, false,
+                           clearExpression({session::note::Expression::pitch, session::note::Expression::pressure, session::note::Expression::slide}));
+        menu.addSubMenu("Note Expression", expression, !selection_.empty());
         menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
         return;
     }
@@ -601,6 +878,11 @@ void PianoRoll::mouseDrag(const juce::MouseEvent& e)
         editLane(e, e.mods.isPopupMenu());
         return;
     }
+    if (drag_ == Drag::expression)
+    {
+        drawExpression(e, e.mods.isPopupMenu());
+        return;
+    }
     if (dragNotes_.empty() || (drag_ != Drag::move && drag_ != Drag::resize))
         return;
 
@@ -640,6 +922,7 @@ void PianoRoll::mouseUp(const juce::MouseEvent&)
     stopPreview(); // (the note sounds only while the key is held)
     drag_ = Drag::none;
     dragNotes_.clear();
+    dragTargets_.clear();
 }
 
 void PianoRoll::mouseMove(const juce::MouseEvent& e)
@@ -654,6 +937,19 @@ void PianoRoll::mouseDoubleClick(const juce::MouseEvent& e)
 {
     if (isLocked())
         return;
+    session::note::Expression kind = session::note::Expression::pitch;
+    if (isExpressionMode() && laneArea().contains(e.getPosition()) && expressionLaneAt(e.position.y, kind))
+    {
+        // Clears that curve of the notes there (or the selected ones).
+        const auto targets = expressionTargets(xToBeat(e.position.x));
+        if (!targets.empty())
+        {
+            session_.beginTransaction("Clear Note Expression");
+            for (auto n : targets)
+                session::note::setExpression(n, kind, {}, &session_.getUndoManager());
+        }
+        return;
+    }
     bool rightEdge = false;
     if (auto note = noteAt(e.position, rightEdge); note.isValid())
     {
@@ -1208,12 +1504,19 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     };
     addAndMakeVisible(gridBox_);
 
-    const std::array<std::pair<const char*, int>, 7> lanes{{{"Velocity", -1}, {"Mod Wheel (CC 1)", 1}, {"Volume (CC 7)", 7}, {"Pan (CC 10)", 10},
-                                                            {"Expression (CC 11)", 11}, {"Sustain (CC 64)", 64}, {"Pitch Bend", 128}}};
+    const std::array<std::pair<const char*, int>, 9> lanes{{{"Velocity", -1},
+                                                            {"Mod Wheel (CC 1)", 1},
+                                                            {"Volume (CC 7)", 7},
+                                                            {"Pan (CC 10)", 10},
+                                                            {"Expression (CC 11)", 11},
+                                                            {"Sustain (CC 64)", 64},
+                                                            {"Pitch Bend", 128},
+                                                            {"Channel Pressure", 129},
+                                                            {"Note Expression (MPE)", PianoRoll::kNoteExpressionLane}}};
     for (std::size_t i = 0; i < lanes.size(); ++i)
         laneBox_.addItem(lanes[i].first, static_cast<int>(i) + 1);
     laneBox_.setSelectedId(1, juce::dontSendNotification);
-    laneBox_.setTooltip("Lower lane: velocity or a controller");
+    laneBox_.setTooltip("Lower lane: velocity, a controller, or each note's own expression (MPE: pitch, pressure, slide)");
     laneBox_.onChange = [this, lanes] { pianoRoll_.setLowerLane(lanes[static_cast<std::size_t>(std::max(0, laneBox_.getSelectedId() - 1))].second); };
     addAndMakeVisible(laneBox_);
 

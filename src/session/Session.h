@@ -39,8 +39,10 @@ using engine::TrackKind;
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
                         (and rating, groups, looped, loopLength, syncPoint, userNamed)
             MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above)
-              NOTE        start, length (beats, relative to the clip content), note, velocity, channel
-              CC          controller (0..127, 128 = pitch bend), beat, value (0..1), channel
+              NOTE        start, length (beats, relative to the clip content), note, velocity, channel,
+                          mpePitch / mpePressure / mpeSlide (per-note expression: "beat:value;..." with
+                          beats from the note's start; pitch in semitones, pressure and slide 0..1)
+              CC          controller (0..127, 128 = pitch bend, 129 = channel pressure), beat, value (0..1), channel
             DEVICE      id, type, name, bypassed, state (base64), sidechain (track id), description
             SEND        id, target (bus track id), gainDb, preFader
             AUTOMATION  id, target ("volume", "pan", "send:<id>", "param:<deviceId>:<index>"), visible
@@ -161,6 +163,9 @@ inline const juce::Identifier stretch      {"stretch"};
 inline const juce::Identifier noteNumber   {"note"};
 inline const juce::Identifier velocity     {"velocity"};
 inline const juce::Identifier channel      {"channel"};
+inline const juce::Identifier notePitch    {"mpePitch"};
+inline const juce::Identifier notePressure {"mpePressure"};
+inline const juce::Identifier noteSlide    {"mpeSlide"};
 inline const juce::Identifier controller   {"controller"};
 inline const juce::Identifier beat         {"beat"};
 inline const juce::Identifier value        {"value"};
@@ -438,6 +443,40 @@ void setStart(juce::ValueTree n, double beat, juce::UndoManager* um);
 void setLength(juce::ValueTree n, double beats, juce::UndoManager* um);
 void setNote(juce::ValueTree n, int noteNumber, juce::UndoManager* um);
 void setVelocity(juce::ValueTree n, float velocity, juce::UndoManager* um);
+
+/**
+    Per-note expression (MPE): curves over a note, played on a MIDI channel of the note's own.
+      pitch     semitones from the note (-48..+48): its own pitch bend
+      pressure  0..1: polyphonic key pressure (aftertouch)
+      slide     0..1: the third dimension (CC 74, "timbre")
+    Points are in beats from the note's start, in time order. Between points the value moves in a
+    straight line; before the first and after the last it holds. A note without points has the
+    neutral value (no bend, no pressure, no slide).
+*/
+enum class Expression
+{
+    pitch,
+    pressure,
+    slide,
+};
+inline constexpr double kExpressionPitchRange = 48.0; ///< semitones either way (the MPE per-note default)
+struct ExpressionPoint
+{
+    double beat = 0.0;
+    double value = 0.0;
+};
+[[nodiscard]] std::vector<ExpressionPoint> getExpression(const juce::ValueTree& n, Expression kind);
+/** Sets a curve (sorted, the values kept in range, beats from 0; empty: none). */
+void setExpression(juce::ValueTree n, Expression kind, std::vector<ExpressionPoint> points, juce::UndoManager* um);
+[[nodiscard]] bool hasExpression(const juce::ValueTree& n);
+[[nodiscard]] bool hasExpression(const juce::ValueTree& n, Expression kind);
+/** The curve's value at `beat` (from the note's start); `points` empty: the neutral value (0). */
+[[nodiscard]] double expressionAt(const std::vector<ExpressionPoint>& points, double beat);
+/** The range of a kind's values: pitch -48..48, pressure and slide 0..1. */
+[[nodiscard]] std::pair<double, double> getExpressionRange(Expression kind);
+/** Drops points a straight line through their neighbours already gives (within `tolerance`):
+    recorded expression arrives as hundreds of small steps. */
+[[nodiscard]] std::vector<ExpressionPoint> thinExpression(const std::vector<ExpressionPoint>& points, double tolerance);
 } // namespace note
 
 /** DEVICE accessors. */

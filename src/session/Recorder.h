@@ -56,6 +56,14 @@ public:
     /** Where recordings of the current project go (created on demand). */
     [[nodiscard]] juce::File getRecordingsFolder() const;
 
+    /** MPE input (the preferences). On: pitch bend, channel pressure and CC 74 on a member channel
+        (2..16) that holds a single note become that note's expression curves, a full bend being
+        `bendRange` semitones (48, the MPE default). Off: they record as the clip's controllers on
+        their channels. Polyphonic aftertouch is its note's pressure either way. */
+    void setMpeInput(bool enabled, double bendRange) noexcept;
+    [[nodiscard]] bool getMpeInput() const noexcept { return mpeInput_; }
+    [[nodiscard]] double getMpeBendRange() const noexcept { return mpeBendRange_; }
+
     /** Latency (seconds of timeline) applied to recorded audio and MIDI. */
     [[nodiscard]] double getAudioLatencySeconds() const;
     [[nodiscard]] double getMidiLatencySeconds() const;
@@ -111,6 +119,8 @@ private:
     double loopStart_ = 0.0;
     double loopEnd_ = 0.0;
     int stopPasses_ = 0; ///< loop passes begun when Stop was pressed
+    bool mpeInput_ = true;
+    double mpeBendRange_ = 48.0;
 };
 
 } // namespace dojo::session
