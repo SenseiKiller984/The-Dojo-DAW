@@ -124,7 +124,7 @@ void LevelMeter::mouseDown(const juce::MouseEvent&)
 void LevelMeter::paint(juce::Graphics& g)
 {
     auto area = getLocalBounds().toFloat();
-    const float gap = numChannels_ > 2 ? 1.0f : 2.0f;
+    const float gap = numChannels_ > 8 ? 0.5f : (numChannels_ > 2 ? 1.0f : 2.0f);
     const auto n = static_cast<float>(numChannels_);
     const float channelWidth = (area.getWidth() - gap * (n - 1.0f)) / n;
 

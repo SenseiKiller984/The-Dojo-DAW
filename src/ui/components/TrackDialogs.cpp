@@ -61,7 +61,8 @@ NewTracksPanel::Row::Row()
     count.setText("1", juce::dontSendNotification);
     count.setInputRestrictions(2, "0123456789");
     count.setJustification(juce::Justification::centred);
-    // Ids follow session::getAllTrackFormats(): 1 Mono, 2 Stereo, 3 3.1, 4 5.1, 5 7.1, 6 Dolby Digital, 7 DTS.
+    // Ids follow session::getAllTrackFormats(): 1 Mono, 2 Stereo, 3 3.1, 4 5.1, 5 7.1, 6 5.1.4, 7 7.1.4, 8 9.1.6,
+    // 9 Dolby Digital, 10 DTS.
     const auto formats = session::getAllTrackFormats();
     for (std::size_t i = 0; i < formats.size(); ++i)
         format.addItem(session::getDisplayName(formats[i]), static_cast<int>(i) + 1);

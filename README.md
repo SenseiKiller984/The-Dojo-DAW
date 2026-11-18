@@ -30,32 +30,39 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Audio tracks and aux inputs (busses) are **mono or stereo**. A mono track plays its clips as one signal, or one chosen channel of each clip's file. It also records one input channel.
 
 **Surround (multichannel)**
-- Audio tracks, aux inputs, folders and the master can also be **3.1, 5.1, 7.1, Dolby Digital or DTS**. Each format has one channel per speaker, in this order:
+- Audio tracks, aux inputs, folders and the master can also be **3.1, 5.1, 7.1, the 3D (immersive) beds 5.1.4, 7.1.4 and 9.1.6, Dolby Digital or DTS**. Each format has one channel per speaker, in this order:
 
   | Format | Channels |
   | --- | --- |
   | 3.1 | L R C LFE |
   | 5.1 | L R C LFE Ls Rs (SMPTE/ITU) |
   | 7.1 | L R C LFE Ls Rs Lrs Rrs |
+  | 5.1.4 (10) | L R C LFE Ls Rs Ltf Rtf Ltr Rtr: 5.1 and four heights (top front and top rear pairs) |
+  | 7.1.4 (12) | L R C LFE Ls Rs Lrs Rrs Ltf Rtf Ltr Rtr: 7.1 and four heights |
+  | 9.1.6 (16) | L R C LFE Ls Rs Lrs Rrs Lw Rw Ltf Rtf Ltm Rtm Ltr Rtr: 7.1, the wides and six heights (top front, middle, rear) |
   | Dolby Digital | L C R Ls Rs LFE (5.1 in AC-3 order) |
   | DTS | L R Ls Rs C LFE (5.1 in DTS order) |
+
+- The speakers are where ITU-R BS.2051 (and the ADM common definitions) put them: L/R at ±30°, the surrounds at ±110° in 5.1 and 5.1.4 or at the sides (±90°) with rears at ±135° in the 7.x family, wides at ±60°, and the top layer 30° up, above the speakers it pairs with (±30° / ±110° in 5.1.4; ±45°, ±90° and ±135° in 7.1.4 and 9.1.6).
 
 - Choose the format in *Track > New*, or later in the track's right-click *Format* menu. The **master's format** is set in the master strip of the mixer.
 - A multichannel track plays multichannel files and records one input per channel (*In 3-8* for a 5.1 track on input 3).
 - Signals move between formats **by speaker**, so a Dolby Digital track's centre plays from a 5.1 master's centre:
-  - A track that feeds a smaller format is folded down (ITU style): the centre and surrounds go to the sides at -3 dB, and the LFE is dropped.
+  - A track that feeds a smaller format is folded down (ITU style): the centre and surrounds go to the sides at -3 dB, and the LFE is dropped. Each height goes into the ear-level speaker below it at -3 dB (top front into the front, top middle into the side surround, top rear into the rear, or the surround when there are no rears), and a wide into the front and the surround (-3 dB each). A smaller format feeding a larger one keeps its speakers; the others get nothing.
+  - Any number of tracks can play into a surround or 3D master or bus: each track's engine buffers grow to the channels it needs (16 for 9.1.6) when the graph changes, never on the audio thread.
   - How a surround master reaches your ears is set in **Preferences > Surround** (see *Surround monitoring* below).
 - **Surround panner**: a mono or stereo track that feeds a surround bus or master gets a panner pad in its mixer strip. Drag to place the track (left/right is its pan, up/down front to rear). Right-click to set how much of a centred signal plays from the centre speaker (dialogue: 100 %). Double-click to reset.
-- **Effects on multichannel tracks**: every device and plug-in runs as linked instances, one per channel group. The speaker pairs (L/R, Ls/Rs, Lrs/Rrs) run as stereo pairs; the centre and LFE run on their own. All instances follow the first one's settings.
-- Meters show one bar per channel, and the arranger draws every channel of a multichannel clip when the track is tall enough.
+- **Effects on multichannel tracks**: every device and plug-in runs as linked instances, one per channel group. The speaker pairs (L/R, Ls/Rs, Lrs/Rrs, Lw/Rw, Ltf/Rtf, Ltm/Rtm, Ltr/Rtr) run as stereo pairs; the centre and LFE run on their own. All instances follow the first one's settings.
+- Meters show one bar per channel (up to 16, wider strips for the 3D beds), and the arranger draws every channel of a multichannel clip when the track is tall enough. On the surround panner pad the top layer shows as hollow speakers.
 - **Export**:
-  - A surround master exports as a multichannel WAV or FLAC. Stems have their destination's channels.
-  - MP3 gets the stereo fold-down. (Surround monitoring never changes what is exported.)
+  - A surround master exports as a multichannel WAV or FLAC (FLAC holds up to 8 channels, so the 3D beds export as WAV). Stems have their destination's channels.
+  - WAV files of 3.1, 5.1 and 5.1.4 carry their WAV channel mask (their order is the WAV standard one). 7.1, 7.1.4, 9.1.6, Dolby Digital and DTS are written as discrete channels in the format's own order (above), because the WAV mask order differs (7.1's mask puts the rears before the sides) or has no wides and top middles.
+  - MP3 gets the stereo fold-down. Surround monitoring never changes what is exported: an export with the virtualizer (or any mode) on writes every channel as it is.
 
 **Surround monitoring** (*Options > Preferences > Surround*): how a surround master plays on stereo headphones or speakers. The meters always show every channel.
 - **Standard**: the channels as they are, one output per channel. On a stereo device you hear only the front left and right.
 - **Classic Fold-Down** (the default, what earlier versions did): an output per channel when the device has enough; otherwise the ITU-R BS.775 stereo fold-down (centre and surrounds at -3 dB, the LFE left out).
-- **Advanced Surround Virtualizer**: binaural rendering of every speaker at its standard place (L/R at ±30°, C at 0°, surrounds at ±110° in 5.1 and ±90° in 7.1, rears at ±150°, 2 m away in a 5 × 6 m room). It plays on outputs 1 and 2, also on a device with more outputs.
+- **Advanced Surround Virtualizer**: binaural rendering of every speaker at its standard place (L/R at ±30°, C at 0°, surrounds at ±110° in 5.1 and ±90° in 7.1, rears at ±150°, wides at ±60°, 2 m away in a 5 × 6 m room). It plays on outputs 1 and 2, also on a device with more outputs. The 3D beds' height speakers play at their azimuths.
   - Each speaker reaches each ear four ways: directly, and as first reflections off the floor, the nearest side wall and the front or back wall.
   - Every path uses the Brown–Duda spherical-head model:
     - The interaural time difference follows Woodworth's formula (0.26 ms for the front speakers, 0.66 ms at the side), as a fractional delay.
@@ -68,11 +75,12 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - Channel order: WAVE/WASAPI order (L R C LFE BL BR SL SR) for most drivers, ALSA's own (L R RL RR C LFE SL SR) on ALSA.
   - The tab shows how many outputs the current device has and has on; **Use All of Its Outputs** turns on outputs 1–8.
   - A stereo-only device gets the Advanced Virtualizer instead. Headsets often offer 7.1 only with their surround mode, or the system's spatial sound, switched on.
+  - A 3D bed reaches such a device as 7.1: its heights and wides folded into the layer below (as above).
 - The tab also says what plays right now (for example "the Advanced Virtualizer, for headphones").
 
 **Track menu**
 - **New...** (Ctrl+Shift+N) adds one or more tracks in one go. Each row is a count, a format (mono or stereo), a type and a name; + and - add and remove rows. The tracks go after the selected track (inside its folder) or at the end. The types:
-  - audio track, aux input (a bus), instrument track or folder (audio tracks, aux inputs and folders in any format: mono, stereo, 3.1, 5.1, 7.1, Dolby Digital or DTS);
+  - audio track, aux input (a bus), instrument track or folder (audio tracks, aux inputs and folders in any format: mono, stereo, 3.1, 5.1, 7.1, 5.1.4, 7.1.4, 9.1.6, Dolby Digital or DTS);
   - **MIDI track**: MIDI clips (and live MIDI when armed) that play the instrument track picked in its menu (*MIDI Output*). Muting it silences its notes; soloing the instrument keeps it playing.
   - **VCA Master**: no audio of its own. Its fader (and volume automation) scales its member tracks, its mute mutes them and its solo solos them; VCAs can be nested. Assign tracks with *VCA* in the track menu (it applies to the whole selection).
   - **Master Fader**: one last fader, with mute, volume automation and post-fader devices, on the main output or on a bus (*Controls* in its menu; one per path).
@@ -81,7 +89,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Duplicate...** (Alt+Shift+D) makes any number of copies of the selected tracks. You choose whether the copies get the clips, automation, devices (with their current settings) and sends. Each copy goes right after its source, or all of them after the last selected track. A folder is copied with its contents; routing inside it points at the copies.
 - **Delete** removes the selected tracks (undoable). Deleting a VCA Master coalesces it: its fader and automation are added into each member's own volume (and a muted VCA mutes them), so they sound exactly as before.
 - Duplicating a VCA member without *VCA assignment* bakes the VCA's gain into the copy the same way.
-- **Split into Mono** gives each selected stereo or multichannel audio track one mono track per channel ("Name.L", "Name.R", and for surround "Name.C", "Name.LFE", "Name.Ls" ...).
+- **Split into Mono** gives each selected stereo or multichannel audio track one mono track per channel ("Name.L", "Name.R", and for surround "Name.C", "Name.LFE", "Name.Ls" ..., for the 3D beds also "Name.Ltf", "Name.Lw" ...).
   - Each one is placed at its speaker: pan, front/rear, and the centre speaker for C.
   - Each plays and records that channel.
   - Each gets the source's devices, sends and automation; the source track stays.
@@ -628,7 +636,7 @@ third_party/  vendored LAME
 7. ✅ **Instruments**: Drum Rack, Sampler, Impulse, Wavetable, Operator
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems
 9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning
-10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) with a surround panner, video tracks and a Video window
+10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) and 3D beds (5.1.4, 7.1.4, 9.1.6) with a surround panner, video tracks and a Video window
 
 ## Licensing
 

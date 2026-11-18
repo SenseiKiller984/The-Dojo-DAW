@@ -28,6 +28,14 @@ Fold foldOf(Speaker speaker) noexcept
     case Speaker::rightSurround: return {1, {{{Speaker::right, kMinus3dB}, {}}}};
     case Speaker::leftRear:      return {1, {{{Speaker::leftSurround, kMinus3dB}, {}}}};
     case Speaker::rightRear:     return {1, {{{Speaker::rightSurround, kMinus3dB}, {}}}};
+    case Speaker::topFrontLeft:  return {1, {{{Speaker::left, kMinus3dB}, {}}}};
+    case Speaker::topFrontRight: return {1, {{{Speaker::right, kMinus3dB}, {}}}};
+    case Speaker::topMiddleLeft:  return {1, {{{Speaker::leftSurround, kMinus3dB}, {}}}};
+    case Speaker::topMiddleRight: return {1, {{{Speaker::rightSurround, kMinus3dB}, {}}}};
+    case Speaker::leftWide:
+    case Speaker::rightWide:
+    case Speaker::topRearLeft:
+    case Speaker::topRearRight:  // (route() picks their targets by what the layout has)
     case Speaker::lfe:           break;
     }
     return {};
@@ -43,6 +51,50 @@ void route(ChannelMatrix& matrix, const ChannelLayout& to, int input, Speaker sp
     }
     if (depth > 4)
         return;
+    switch (speaker)
+    {
+    case Speaker::leftWide:
+    case Speaker::rightWide:
+    {
+        // Between the front and the surround: into both (-3 dB each) where both exist.
+        const bool isLeft = speaker == Speaker::leftWide;
+        const auto front = isLeft ? Speaker::left : Speaker::right;
+        const auto surround = isLeft ? Speaker::leftSurround : Speaker::rightSurround;
+        if (to.has(front) && to.has(surround))
+        {
+            route(matrix, to, input, front, gain * kMinus3dB, depth + 1);
+            route(matrix, to, input, surround, gain * kMinus3dB, depth + 1);
+        }
+        else
+        {
+            route(matrix, to, input, front, gain * kMinus3dB, depth + 1);
+        }
+        return;
+    }
+    case Speaker::topRearLeft:
+    case Speaker::topRearRight:
+    {
+        // Into the rear below it, or the surround where there are no rears (5.1.4 -> 5.1).
+        const bool isLeft = speaker == Speaker::topRearLeft;
+        const auto rear = isLeft ? Speaker::leftRear : Speaker::rightRear;
+        const auto surround = isLeft ? Speaker::leftSurround : Speaker::rightSurround;
+        route(matrix, to, input, to.has(rear) ? rear : surround, gain * kMinus3dB, depth + 1);
+        return;
+    }
+    case Speaker::left:
+    case Speaker::right:
+    case Speaker::centre:
+    case Speaker::lfe:
+    case Speaker::leftSurround:
+    case Speaker::rightSurround:
+    case Speaker::leftRear:
+    case Speaker::rightRear:
+    case Speaker::topFrontLeft:
+    case Speaker::topFrontRight:
+    case Speaker::topMiddleLeft:
+    case Speaker::topMiddleRight:
+        break; // (one fold step, below)
+    }
     const auto fold = foldOf(speaker);
     for (int k = 0; k < fold.count; ++k)
         route(matrix, to, input, fold.targets[static_cast<std::size_t>(k)].first, gain * fold.targets[static_cast<std::size_t>(k)].second,
@@ -74,6 +126,14 @@ const char* shortName(Speaker speaker) noexcept
     case Speaker::rightSurround: return "Rs";
     case Speaker::leftRear:      return "Lrs";
     case Speaker::rightRear:     return "Rrs";
+    case Speaker::leftWide:      return "Lw";
+    case Speaker::rightWide:     return "Rw";
+    case Speaker::topFrontLeft:  return "Ltf";
+    case Speaker::topFrontRight: return "Rtf";
+    case Speaker::topMiddleLeft: return "Ltm";
+    case Speaker::topMiddleRight: return "Rtm";
+    case Speaker::topRearLeft:   return "Ltr";
+    case Speaker::topRearRight:  return "Rtr";
     }
     return "?";
 }
@@ -84,14 +144,28 @@ int sideOf(Speaker speaker) noexcept
     {
     case Speaker::left:
     case Speaker::leftSurround:
-    case Speaker::leftRear:      return -1;
+    case Speaker::leftRear:
+    case Speaker::leftWide:
+    case Speaker::topFrontLeft:
+    case Speaker::topMiddleLeft:
+    case Speaker::topRearLeft:   return -1;
     case Speaker::right:
     case Speaker::rightSurround:
-    case Speaker::rightRear:     return 1;
+    case Speaker::rightRear:
+    case Speaker::rightWide:
+    case Speaker::topFrontRight:
+    case Speaker::topMiddleRight:
+    case Speaker::topRearRight:  return 1;
     case Speaker::centre:
     case Speaker::lfe:           break;
     }
     return 0;
+}
+
+bool isHeight(Speaker speaker) noexcept
+{
+    return speaker == Speaker::topFrontLeft || speaker == Speaker::topFrontRight || speaker == Speaker::topMiddleLeft
+           || speaker == Speaker::topMiddleRight || speaker == Speaker::topRearLeft || speaker == Speaker::topRearRight;
 }
 
 ChannelLayout ChannelLayout::of(std::initializer_list<Speaker> list) noexcept
@@ -128,6 +202,62 @@ ChannelLayout ChannelLayout::dolbyDigital() noexcept
 ChannelLayout ChannelLayout::dts() noexcept
 {
     return of({Speaker::left, Speaker::right, Speaker::leftSurround, Speaker::rightSurround, Speaker::centre, Speaker::lfe});
+}
+
+ChannelLayout ChannelLayout::surround514() noexcept
+{
+    return of({Speaker::left, Speaker::right, Speaker::centre, Speaker::lfe, Speaker::leftSurround, Speaker::rightSurround,
+               Speaker::topFrontLeft, Speaker::topFrontRight, Speaker::topRearLeft, Speaker::topRearRight});
+}
+
+ChannelLayout ChannelLayout::surround714() noexcept
+{
+    return of({Speaker::left, Speaker::right, Speaker::centre, Speaker::lfe, Speaker::leftSurround, Speaker::rightSurround,
+               Speaker::leftRear, Speaker::rightRear, Speaker::topFrontLeft, Speaker::topFrontRight, Speaker::topRearLeft,
+               Speaker::topRearRight});
+}
+
+ChannelLayout ChannelLayout::surround916() noexcept
+{
+    return of({Speaker::left, Speaker::right, Speaker::centre, Speaker::lfe, Speaker::leftSurround, Speaker::rightSurround,
+               Speaker::leftRear, Speaker::rightRear, Speaker::leftWide, Speaker::rightWide, Speaker::topFrontLeft,
+               Speaker::topFrontRight, Speaker::topMiddleLeft, Speaker::topMiddleRight, Speaker::topRearLeft,
+               Speaker::topRearRight});
+}
+
+bool ChannelLayout::hasHeights() const noexcept
+{
+    for (int i = 0; i < numChannels; ++i)
+        if (isHeight(speakers[static_cast<std::size_t>(i)]))
+            return true;
+    return false;
+}
+
+SpeakerDirection directionOf(const ChannelLayout& layout, Speaker speaker) noexcept
+{
+    // The 7.x family (with rears) has its surrounds at the sides and its tops at +-45 / +-135.
+    const bool sevenFamily = layout.has(Speaker::leftRear) || layout.has(Speaker::rightRear);
+    const auto mirrored = [](SpeakerDirection d) { return SpeakerDirection{-d.azimuth, d.elevation}; };
+    switch (speaker)
+    {
+    case Speaker::left:           return {30.0, 0.0};
+    case Speaker::right:          return {-30.0, 0.0};
+    case Speaker::centre:         return {0.0, 0.0};
+    case Speaker::lfe:            return {0.0, -30.0};
+    case Speaker::leftSurround:   return {sevenFamily ? 90.0 : 110.0, 0.0};
+    case Speaker::rightSurround:  return mirrored(directionOf(layout, Speaker::leftSurround));
+    case Speaker::leftRear:       return {135.0, 0.0};
+    case Speaker::rightRear:      return {-135.0, 0.0};
+    case Speaker::leftWide:       return {60.0, 0.0};
+    case Speaker::rightWide:      return {-60.0, 0.0};
+    case Speaker::topFrontLeft:   return {sevenFamily ? 45.0 : 30.0, 30.0};
+    case Speaker::topFrontRight:  return mirrored(directionOf(layout, Speaker::topFrontLeft));
+    case Speaker::topMiddleLeft:  return {90.0, 30.0};
+    case Speaker::topMiddleRight: return {-90.0, 30.0};
+    case Speaker::topRearLeft:    return {sevenFamily ? 135.0 : 110.0, 30.0};
+    case Speaker::topRearRight:   return mirrored(directionOf(layout, Speaker::topRearLeft));
+    }
+    return {};
 }
 
 int ChannelLayout::indexOf(Speaker speaker) const noexcept
@@ -288,6 +418,10 @@ ChannelGroups channelGroupsOf(const ChannelLayout& layout) noexcept
     addPair(Speaker::left, Speaker::right);
     addPair(Speaker::leftSurround, Speaker::rightSurround);
     addPair(Speaker::leftRear, Speaker::rightRear);
+    addPair(Speaker::leftWide, Speaker::rightWide);
+    addPair(Speaker::topFrontLeft, Speaker::topFrontRight);
+    addPair(Speaker::topMiddleLeft, Speaker::topMiddleRight);
+    addPair(Speaker::topRearLeft, Speaker::topRearRight);
     for (int i = 0; i < layout.numChannels; ++i)
         if (!used[static_cast<std::size_t>(i)] && result.count < kMaxChannelGroups)
             result.groups[static_cast<std::size_t>(result.count++)] = {i, -1};

@@ -6,6 +6,8 @@
 #include "engine/Automation.h"
 #include "engine/ChannelLayout.h"
 
+#include <juce_audio_basics/juce_audio_basics.h>
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -35,10 +37,29 @@ inline constexpr int kMaxTracks = 256;
 /** Longest plug-in delay compensation per track, in samples (~170 ms at 48 kHz). */
 inline constexpr int kMaxCompensationSamples = 8192;
 
-/** Slots that carry up to kMaxChannels (the last ones): tracks that are multichannel themselves or
-    feed a multichannel bus or master. The others are stereo. */
-inline constexpr int kMaxWideSlots = 32;
-inline constexpr int kFirstWideSlot = kMaxTracks - kMaxWideSlots;
+/** A slot's latency-compensation ring when it has more than two channels starts this long (and
+    grows, a power of two up to kMaxCompensationSamples, as its delay needs). */
+inline constexpr int kMinWideDelaySamples = 1024;
+
+/**
+    Room for a slot's signal, allocated on the message thread for a slot that needs more than it has:
+    more channels (a multichannel track, or one feeding a multichannel bus or master: its fader
+    delivers the destination's channels) or a longer delay compensation ring. Every slot starts with
+    two channels and a kMaxCompensationSamples ring. The engine swaps these buffers into the slot when
+    it applies the graph that carries them (no allocation on the audio thread); the slot's old
+    buffers stay behind in that graph and are freed with it on the message thread. Slots never
+    shrink.
+*/
+struct SlotBuffers
+{
+    int slot = -1;
+    int channels = 2;     ///< main, pre, post, inputScratch, out and the delay ring
+    int delaySamples = 0; ///< the delay ring's length
+    juce::AudioBuffer<Sample> main, pre, post, inputScratch, delay, out, groupScratch;
+
+    /** Sizes every buffer (cleared) for `blockSize`-sample blocks. Message thread only. */
+    void allocate(int numChannels, int ringSamples, int blockSize);
+};
 
 enum class TrackKind : std::uint8_t
 {
@@ -226,6 +247,10 @@ struct RenderTrack
     /** The channels of its destination (the bus it feeds, or the master): the fader converts to these
         (surround panner, or by speaker). */
     ChannelLayout outputLayout = ChannelLayout::stereo();
+    /** Channels its slot must have: the most of its own, its destination's, and (a bus) what its
+        sends bring in. The engine skips a track whose slot has fewer (the graph's SlotBuffers give
+        them). */
+    int bufferChannels = 2;
     ChannelGroups groups;       ///< device channel groups of `layout`
     ChannelGroups outputGroups; ///< ... of `outputLayout` (a Master Fader's post-fader devices)
     double panFrontRear = -1.0; ///< surround panner (see surroundPanMatrix)
@@ -387,6 +412,10 @@ struct RenderGraph
     int masterVolumeLatency = 0; ///< after the master's devices (its fader and a main Master Fader)
 
     std::vector<std::shared_ptr<const void>> keepAlive; ///< owners of sample data, nodes, stretchers
+
+    /** Room the engine swaps into slots before it runs this graph (see SlotBuffers). Afterwards it
+        holds those slots' old buffers, freed with the graph. */
+    std::vector<SlotBuffers> slotBuffers;
 };
 
 /** Volume automation mapping, linear in dB: 0 -> -inf (silence), (0, 1] -> -60 dB .. +6 dB, so 0 dB

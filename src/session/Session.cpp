@@ -121,6 +121,9 @@ juce::String toString(TrackFormat format)
     case TrackFormat::surround71:   return "7.1";
     case TrackFormat::dolbyDigital: return "dolbyDigital";
     case TrackFormat::dts:          return "dts";
+    case TrackFormat::surround514:  return "5.1.4";
+    case TrackFormat::surround714:  return "7.1.4";
+    case TrackFormat::surround916:  return "9.1.6";
     case TrackFormat::stereo:       break;
     }
     return "stereo";
@@ -144,6 +147,9 @@ juce::String getDisplayName(TrackFormat format)
     case TrackFormat::surround71:   return "7.1";
     case TrackFormat::dolbyDigital: return "Dolby Digital 5.1";
     case TrackFormat::dts:          return "DTS 5.1";
+    case TrackFormat::surround514:  return "5.1.4";
+    case TrackFormat::surround714:  return "7.1.4";
+    case TrackFormat::surround916:  return "9.1.6";
     case TrackFormat::stereo:       break;
     }
     return "Stereo";
@@ -172,6 +178,9 @@ int fileChannelFor(int fileChannels, const engine::ChannelLayout& track, int tra
     case 4: return engine::ChannelLayout::lcrLfe().indexOf(speaker);
     case 6: return engine::ChannelLayout::surround51().indexOf(speaker);
     case 8: return engine::ChannelLayout::surround71().indexOf(speaker);
+    case 10: return engine::ChannelLayout::surround514().indexOf(speaker);
+    case 12: return engine::ChannelLayout::surround714().indexOf(speaker);
+    case 16: return engine::ChannelLayout::surround916().indexOf(speaker);
     default: break;
     }
     return trackChannel < fileChannels ? trackChannel : -1;
@@ -179,8 +188,9 @@ int fileChannelFor(int fileChannels, const engine::ChannelLayout& track, int tra
 
 std::vector<TrackFormat> getAllTrackFormats()
 {
-    return {TrackFormat::mono,       TrackFormat::stereo,       TrackFormat::lcrLfe, TrackFormat::surround51,
-            TrackFormat::surround71, TrackFormat::dolbyDigital, TrackFormat::dts};
+    return {TrackFormat::mono,        TrackFormat::stereo,      TrackFormat::lcrLfe,      TrackFormat::surround51,
+            TrackFormat::surround71,  TrackFormat::surround514, TrackFormat::surround714, TrackFormat::surround916,
+            TrackFormat::dolbyDigital, TrackFormat::dts};
 }
 
 engine::ChannelLayout getLayout(TrackFormat format)
@@ -193,6 +203,9 @@ engine::ChannelLayout getLayout(TrackFormat format)
     case TrackFormat::surround71:   return engine::ChannelLayout::surround71();
     case TrackFormat::dolbyDigital: return engine::ChannelLayout::dolbyDigital();
     case TrackFormat::dts:          return engine::ChannelLayout::dts();
+    case TrackFormat::surround514:  return engine::ChannelLayout::surround514();
+    case TrackFormat::surround714:  return engine::ChannelLayout::surround714();
+    case TrackFormat::surround916:  return engine::ChannelLayout::surround916();
     case TrackFormat::stereo:       break;
     }
     return engine::ChannelLayout::stereo();

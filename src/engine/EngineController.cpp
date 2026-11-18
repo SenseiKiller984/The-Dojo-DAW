@@ -182,6 +182,18 @@ void EngineController::publishGraph(std::unique_ptr<RenderGraph> graph)
         return;
 
     graph->serial = nextGraphSerial_++;
+    if (pendingGraph_ != nullptr)
+    {
+        // The older graph is never posted: room it brought for slots (that the compiler now counts
+        // on) goes with the new one, unless that brings its own for the slot.
+        for (auto& room : pendingGraph_->slotBuffers)
+        {
+            const bool replaced = std::any_of(graph->slotBuffers.begin(), graph->slotBuffers.end(),
+                                              [&room](const SlotBuffers& own) { return own.slot == room.slot; });
+            if (!replaced)
+                graph->slotBuffers.push_back(std::move(room));
+        }
+    }
     pendingGraph_ = std::move(graph); // any older, never-posted graph is destroyed here
     pumpGraphs();
 }

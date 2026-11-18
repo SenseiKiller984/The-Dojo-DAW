@@ -547,7 +547,7 @@ TEST_CASE("Track > New makes multichannel tracks; Split into Mono gives one mono
     panel.getRow(0).name.setText("Ambience");
     panel.addRow(0);
     panel.getRow(1).type.setSelectedId(2, juce::sendNotificationSync); // aux input
-    panel.getRow(1).format.setSelectedId(6, juce::sendNotificationSync); // Dolby Digital
+    panel.getRow(1).format.setSelectedId(9, juce::sendNotificationSync); // Dolby Digital (after 5.1.4, 7.1.4, 9.1.6)
     auto rows = panel.getRows();
     REQUIRE(rows.size() == 2);
     CHECK(rows[0].format == TrackFormat::surround51);

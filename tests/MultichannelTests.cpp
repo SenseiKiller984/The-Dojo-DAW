@@ -131,7 +131,7 @@ juce::File steps(const juce::File& file, int numChannels, double seconds = 1.0)
 
 TEST_CASE("Track formats: names, channel counts and speaker orders", "[session][multichannel]")
 {
-    CHECK(getAllTrackFormats().size() == 7);
+    CHECK(getAllTrackFormats().size() == 10);
     CHECK(getNumChannels(TrackFormat::mono) == 1);
     CHECK(getNumChannels(TrackFormat::stereo) == 2);
     CHECK(getNumChannels(TrackFormat::lcrLfe) == 4);
@@ -139,7 +139,12 @@ TEST_CASE("Track formats: names, channel counts and speaker orders", "[session][
     CHECK(getNumChannels(TrackFormat::surround71) == 8);
     CHECK(getNumChannels(TrackFormat::dolbyDigital) == 6);
     CHECK(getNumChannels(TrackFormat::dts) == 6);
+    CHECK(getNumChannels(TrackFormat::surround514) == 10);
+    CHECK(getNumChannels(TrackFormat::surround714) == 12);
+    CHECK(getNumChannels(TrackFormat::surround916) == 16);
     CHECK(getDisplayName(TrackFormat::dolbyDigital) == "Dolby Digital 5.1");
+    CHECK(getDisplayName(TrackFormat::surround714) == "7.1.4");
+    CHECK(toString(TrackFormat::surround916) == "9.1.6");
     for (const auto format : getAllTrackFormats())
         CHECK(trackFormatFromString(toString(format)) == format);
 
@@ -282,7 +287,7 @@ TEST_CASE("A 5.1 track plays its six channels to a 5.1 master, or folded down to
         rig.render(0.5);
         for (int ch = 0; ch < 6; ++ch)
             CHECK_THAT(rig.level(ch), WithinAbs(0.1 * (ch + 1), 1e-5));
-        CHECK(rig.builder.getSlot(track::getId(t)) >= engine::kFirstWideSlot);
+        CHECK(rig.engine.getSlotCapacity(rig.builder.getSlot(track::getId(t))).channels >= 6);
 
         // The track's meter has six channels.
         const auto peaks = rig.engine.collectTrackPeaks(rig.builder.getSlot(track::getId(t)));
@@ -461,8 +466,8 @@ TEST_CASE("Busses of other formats: sends and routing convert by speaker", "[eng
         CHECK_THAT(rig.level(layout.indexOf(Speaker::left)), WithinAbs(0.25, 1e-5));
         CHECK_THAT(rig.level(layout.indexOf(Speaker::right)), WithinAbs(0.5, 1e-5));
         CHECK_THAT(rig.level(layout.indexOf(Speaker::centre)), WithinAbs(0.0, 1e-6));
-        // The stereo track feeds a 5.1 master, so it renders in a wide slot.
-        CHECK(rig.builder.getSlot(track::getId(t)) >= engine::kFirstWideSlot);
+        // The stereo track feeds a 5.1 master, so its slot was given six channels.
+        CHECK(rig.engine.getSlotCapacity(rig.builder.getSlot(track::getId(t))).channels >= 6);
     }
 }
 

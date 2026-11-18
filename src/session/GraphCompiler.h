@@ -8,6 +8,7 @@
 #include <juce_events/juce_events.h>
 
 #include <functional>
+#include <array>
 #include <map>
 #include <memory>
 
@@ -66,10 +67,17 @@ public:
 
 private:
     /** A stable slot for a track; `wide` tracks (multichannel signals) get one of the wide slots. */
-    int assignSlot(std::uint32_t trackId, std::vector<bool>& used, bool wide);
+    int assignSlot(std::uint32_t trackId, std::vector<bool>& used);
     std::shared_ptr<engine::ClipStretcher> getStretcher(std::uint32_t clipId, int numChannels);
 
     std::map<std::uint32_t, int> slots_;
+    /** The room each engine slot has been given (channels, delay ring), as far as this builder knows. */
+    struct SlotRoom
+    {
+        int channels = 2;
+        int delaySamples = engine::kMaxCompensationSamples;
+    };
+    std::array<SlotRoom, static_cast<std::size_t>(engine::kMaxTracks)> room_{};
     std::map<std::uint32_t, std::shared_ptr<engine::ClipStretcher>> stretchers_;
     double sampleRate_ = 48000.0;
     int maxBlock_ = 2048;

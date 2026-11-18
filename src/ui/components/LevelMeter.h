@@ -8,7 +8,7 @@ namespace dojo::ui
 {
 
 /**
-    Peak meter (stereo, or one bar per channel of a multichannel signal, up to 8) with peak-hold and
+    Peak meter (stereo, or one bar per channel of a multichannel signal, up to 16) with peak-hold and
     latching clip indicators.
 
     Fed once per UI frame with the "max since last frame" peaks published by the engine, so no
@@ -24,11 +24,11 @@ public:
     LevelMeter();
     ~LevelMeter() override;
 
-    static constexpr int kMaxChannels = 8;
+    static constexpr int kMaxChannels = 16;
 
     /** `peakLeft` / `peakRight` are linear; `elapsedSeconds` is the time since the previous update. */
     void update(float peakLeft, float peakRight, double elapsedSeconds);
-    /** One linear peak per channel (`numChannels` bars, 1..8). */
+    /** One linear peak per channel (`numChannels` bars, 1..16). */
     void update(const float* peaks, int numChannels, double elapsedSeconds);
     [[nodiscard]] int getNumChannels() const noexcept { return numChannels_; }
 

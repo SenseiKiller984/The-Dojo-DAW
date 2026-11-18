@@ -22,6 +22,15 @@ juce::Point<float> normalisedPosition(engine::Speaker speaker, const engine::Cha
     case engine::Speaker::rightSurround: return {1.0f, hasRears ? 0.0f : 1.0f};
     case engine::Speaker::leftRear:      return {-1.0f, 1.0f};
     case engine::Speaker::rightRear:     return {1.0f, 1.0f};
+    case engine::Speaker::leftWide:      return {-1.0f, -0.5f};
+    case engine::Speaker::rightWide:     return {1.0f, -0.5f};
+    // The top layer, seen from above: inside the room, over the speakers below it.
+    case engine::Speaker::topFrontLeft:  return {-0.5f, -0.5f};
+    case engine::Speaker::topFrontRight: return {0.5f, -0.5f};
+    case engine::Speaker::topMiddleLeft: return {-0.5f, 0.0f};
+    case engine::Speaker::topMiddleRight: return {0.5f, 0.0f};
+    case engine::Speaker::topRearLeft:   return {-0.5f, 0.5f};
+    case engine::Speaker::topRearRight:  return {0.5f, 0.5f};
     }
     return {};
 }
@@ -95,6 +104,8 @@ void SurroundPanner::paint(juce::Graphics& g)
         g.setColour(colour::textSecondary);
         if (speaker == engine::Speaker::lfe)
             g.fillRect(juce::Rectangle<float>(4.0f, 4.0f).withCentre(at));
+        else if (engine::isHeight(speaker))
+            g.drawEllipse(juce::Rectangle<float>(5.0f, 5.0f).withCentre(at), 1.0f); // (the top layer: hollow)
         else
             g.fillEllipse(juce::Rectangle<float>(5.0f, 5.0f).withCentre(at));
         if (speaker == engine::Speaker::centre && centre_ > 0.0)

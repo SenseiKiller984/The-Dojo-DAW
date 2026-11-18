@@ -66,9 +66,15 @@ public:
     std::function<void(const juce::Result&, const juce::Array<juce::File>& filesWritten)> onFinished;
 
     [[nodiscard]] static juce::String getFileExtension(ExportSettings::Format format);
-    /** Creates a writer for `file` (replacing it). Null with `error` set on failure. */
+    /** Creates a writer for `file` (replacing it). Null with `error` set on failure. A multichannel
+        WAV gets the channel mask of `layout` when its order is the WAV standard one (3.1, 5.1,
+        5.1.4); other orders (7.1, 7.1.4, 9.1.6, Dolby Digital, DTS) are written as discrete
+        channels in the format's own order. FLAC holds up to 8 channels. */
     static std::unique_ptr<juce::AudioFormatWriter> createWriter(const juce::File& file, const ExportSettings& settings,
-                                                                 double sampleRate, int numChannels, juce::String& error);
+                                                                 double sampleRate, int numChannels, juce::String& error,
+                                                                 const engine::ChannelLayout* layout = nullptr);
+    /** The channel set a WAV of `layout` declares (see createWriter). */
+    [[nodiscard]] static juce::AudioChannelSet wavChannelSet(const engine::ChannelLayout& layout);
     /** The stem file for a track. */
     [[nodiscard]] static juce::File getStemFile(const ExportSettings& settings, const juce::String& trackName);
 

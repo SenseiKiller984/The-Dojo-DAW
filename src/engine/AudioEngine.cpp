@@ -43,6 +43,17 @@ void addAllNotesOff(juce::MidiBuffer& midi) noexcept
 }
 } // namespace
 
+void SlotBuffers::allocate(int numChannels, int ringSamples, int blockSize)
+{
+    channels = std::clamp(numChannels, 2, kMaxChannels);
+    delaySamples = std::clamp(ringSamples, 1, kMaxCompensationSamples);
+    const int samples = std::max(1, blockSize);
+    for (auto* buffer : {&main, &pre, &post, &inputScratch, &out})
+        buffer->setSize(channels, samples, false, true, false);
+    delay.setSize(channels, delaySamples, false, true, false);
+    groupScratch.setSize(2, samples, false, true, false);
+}
+
 AudioEngine::AudioEngine(int numWorkerThreads)
     : workers_(numWorkerThreads)
 {
@@ -99,21 +110,25 @@ void AudioEngine::prepare(double sampleRate, int maximumBlockSize, int numOutput
 
     for (std::size_t index = 0; index < slots_.size(); ++index)
     {
+        // Every slot keeps the room it has been given (graphs swap more in, see SlotBuffers): two
+        // channels and a full-length delay ring to begin with.
         auto& slot = slots_[index];
-        const bool wide = static_cast<int>(index) >= kFirstWideSlot;
-        const int channels = wide ? kMaxChannels : 2;
+        const bool wide = slot.main.getNumChannels() > 2;
+        const int channels = std::max(2, slot.main.getNumChannels());
+        const int ring = wide ? std::max(1, slot.delay.getNumSamples()) : kMaxCompensationSamples;
         slot.main.setSize(channels, maxBlockSize_, false, true, false);
         slot.pre.setSize(channels, maxBlockSize_, false, true, false);
         slot.post.setSize(channels, maxBlockSize_, false, true, false);
         slot.inputScratch.setSize(channels, maxBlockSize_, false, true, false);
         slot.midi.ensureSize(kMidiBufferBytes);
-        if (slot.delay.getNumSamples() != kMaxCompensationSamples || slot.delay.getNumChannels() != channels)
-            slot.delay.setSize(channels, kMaxCompensationSamples, false, true, false);
+        if (slot.delay.getNumSamples() != ring || slot.delay.getNumChannels() != channels)
+            slot.delay.setSize(channels, ring, false, true, false);
         if (wide)
         {
-            slot.out.setSize(kMaxChannels, maxBlockSize_, false, true, false);
+            slot.out.setSize(channels, maxBlockSize_, false, true, false);
             slot.groupScratch.setSize(2, maxBlockSize_, false, true, false);
         }
+        publishSlotCapacity(static_cast<int>(index));
         slot.matrixValid = false;
         slot.delay.clear();
         slot.delayWrite = 0;
@@ -204,6 +219,24 @@ ChannelPeaks AudioEngine::collectTrackPeaks(int slot) noexcept
 float AudioEngine::collectSurfacePeak(int slot) noexcept
 {
     return slot >= 0 && slot < kMaxTracks ? telemetry_.surfacePeaks[static_cast<std::size_t>(slot)].exchange(0.0f, std::memory_order_acq_rel) : 0.0f;
+}
+
+AudioEngine::SlotCapacity AudioEngine::getSlotCapacity(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxTracks)
+        return {};
+    const auto index = static_cast<std::size_t>(slot);
+    return {std::max(2, slotChannels_[index].load(std::memory_order_acquire)),
+            std::max(1, slotDelaySamples_[index].load(std::memory_order_acquire))};
+}
+
+void AudioEngine::publishSlotCapacity(int slot) noexcept
+{
+    if (slot < 0 || slot >= kMaxTracks)
+        return;
+    const auto& state = slots_[static_cast<std::size_t>(slot)];
+    slotChannels_[static_cast<std::size_t>(slot)].store(state.main.getNumChannels(), std::memory_order_release);
+    slotDelaySamples_[static_cast<std::size_t>(slot)].store(state.delay.getNumSamples(), std::memory_order_release);
 }
 
 float AudioEngine::collectInputPeak(int channel) noexcept
@@ -633,6 +666,29 @@ void AudioEngine::handle(const command::SwapGraph& cmd) noexcept
 
     if (graph_ != nullptr)
     {
+        // Room for slots that need more: swap it in (moves, no allocation). The old buffers stay
+        // in the graph and are freed with it on the message thread.
+        for (auto& room : graph_->slotBuffers)
+        {
+            if (room.slot < 0 || room.slot >= kMaxTracks || room.main.getNumSamples() < maxBlockSize_)
+                continue; // (sized before the device changed: the next graph brings new room)
+            auto& slot = slots_[static_cast<std::size_t>(room.slot)];
+            if (slot.main.getNumChannels() >= room.channels && slot.delay.getNumChannels() >= room.channels
+                && slot.delay.getNumSamples() >= room.delaySamples && slot.out.getNumChannels() >= room.channels)
+                continue;
+            std::swap(slot.main, room.main);
+            std::swap(slot.pre, room.pre);
+            std::swap(slot.post, room.post);
+            std::swap(slot.inputScratch, room.inputScratch);
+            std::swap(slot.delay, room.delay);
+            std::swap(slot.out, room.out);
+            std::swap(slot.groupScratch, room.groupScratch);
+            slot.delayWrite = 0;
+            slot.currentDelay = 0;
+            slot.matrixValid = false;
+            publishSlotCapacity(room.slot);
+        }
+
         masterGainTarget_ = std::clamp(graph_->masterGain, 0.0, 4.0);
         masterGain_.setTargetValue(masterGainTarget_);
         telemetry_.appliedGraphSerial.store(graph_->serial, std::memory_order_release);
@@ -716,8 +772,11 @@ void AudioEngine::processTrack(int graphIndex) noexcept
         slot.panic = true;
     }
 
-    if (track.isWide() && track.slot < kFirstWideSlot)
-        return; // (the compiler always gives multichannel tracks a wide slot)
+    if (slot.main.getNumChannels() < track.bufferChannels || slot.delay.getNumChannels() < track.outputLayout.numChannels)
+    {
+        slot.main.clear(); // (its room has not arrived: silent rather than wrong)
+        return;
+    }
 
     slot.main.clear(0, numSamples);
     slot.midi.clear();
@@ -1580,7 +1639,8 @@ void AudioEngine::delayInto(InputDelayLine& line, const Sample* const* inputs, i
 
 void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& slot) noexcept
 {
-    const int delay = std::clamp(track.compensationDelay, 0, kMaxCompensationSamples - 1);
+    const int capacity = slot.delay.getNumSamples();
+    const int delay = std::clamp(track.compensationDelay, 0, std::max(0, capacity - 1));
 
     if (delay != slot.currentDelay)
     {
@@ -1593,7 +1653,6 @@ void AudioEngine::applyCompensationDelay(const RenderTrack& track, SlotState& sl
         return;
 
     const int numSamples = currentNumSamples_;
-    const int capacity = kMaxCompensationSamples;
 
     for (int ch = 0; ch < std::min(track.outputLayout.numChannels, slot.delay.getNumChannels()); ++ch)
     {
@@ -1671,9 +1730,14 @@ void AudioEngine::writeOutputsAndMeter(float* const* outputs, int numOutputs, in
             std::fill_n(outputs[ch] + offset, numSamples, 0.0f);
     };
 
-    // A surround master: as Preferences > Surround says.
+    // A surround master: as Preferences > Surround says. An offline render (an export) is not
+    // monitoring: every channel to its own output, or the ITU fold-down into fewer.
     auto rendering = SurroundRendering::stereo;
-    if (numMaster > 2)
+    if (numMaster > 2 && offlineActive_.load(std::memory_order_acquire))
+    {
+        rendering = numOutputs >= numMaster ? SurroundRendering::discrete : SurroundRendering::foldDown;
+    }
+    else if (numMaster > 2)
     {
         switch (surround_.mode)
         {

@@ -13,6 +13,16 @@ namespace dojo::ui
 {
 namespace
 {
+/** A format's item id in the master format menu: its place in session::getAllTrackFormats() + 1. */
+int menuIdOf(session::TrackFormat format)
+{
+    const auto all = session::getAllTrackFormats();
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (all[i] == format)
+            return static_cast<int>(i) + 1;
+    return 2; // (stereo)
+}
+
 constexpr int kHeaderHeight = 26;
 constexpr int kMasterStripWidth = 132;
 constexpr float kFaderMinDb = static_cast<float>(session::kMinusInfinityDb);
@@ -612,7 +622,9 @@ void ChannelStrip::resized()
     volumeArea_ = readoutArea_.withWidth(readoutArea_.getWidth() / 2);
     panArea_ = readoutArea_.withTrimmedLeft(volumeArea_.getWidth());
     area.removeFromBottom(2);
-    meter_.setBounds(area.removeFromRight(getDestinationChannels() > 2 ? 28 : 14)); // a bar per channel
+    // A bar per channel: wider for more channels (a 7.1.4 or 9.1.6 destination has 12 or 16).
+    const int meterChannels = getDestinationChannels();
+    meter_.setBounds(area.removeFromRight(meterChannels > 8 ? 46 : (meterChannels > 2 ? 28 : 14)));
     area.removeFromRight(2);
     fader_.setBounds(area);
 }
@@ -697,7 +709,7 @@ MasterStrip::MasterStrip(session::Session& session, EditorState& editor, std::fu
     const auto formats = session::getAllTrackFormats();
     for (std::size_t i = 1; i < formats.size(); ++i) // (never mono)
         format_.addItem(session::getDisplayName(formats[i]), static_cast<int>(i) + 1);
-    format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
+    format_.setSelectedId(menuIdOf(session_.getMasterFormat()), juce::dontSendNotification);
     format_.setTooltip("Master format: stereo or surround. With fewer device outputs than channels you hear a stereo fold-down.");
     format_.setWantsKeyboardFocus(false);
     format_.onChange = [this]
@@ -750,7 +762,7 @@ void MasterStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Id
     }
     if (tree == session_.getState() && property == session::ids::masterFormat)
     {
-        format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
+        format_.setSelectedId(menuIdOf(session_.getMasterFormat()), juce::dontSendNotification);
         resized();
     }
 }
@@ -758,7 +770,7 @@ void MasterStrip::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Id
 void MasterStrip::valueTreeRedirected(juce::ValueTree&)
 {
     fader_.setValue(session_.getMasterVolumeDb(), juce::dontSendNotification);
-    format_.setSelectedId(static_cast<int>(session_.getMasterFormat()) + 1, juce::dontSendNotification);
+    format_.setSelectedId(menuIdOf(session_.getMasterFormat()), juce::dontSendNotification);
     resized();
 }
 
@@ -814,7 +826,8 @@ void MasterStrip::resized()
     area.removeFromBottom(6);
 
     // A surround master meters every channel: a wider meter.
-    meter_.setBounds(area.removeFromRight(session::isMultichannel(session_.getMasterFormat()) ? 44 : 22));
+    const int masterChannels = session::getNumChannels(session_.getMasterFormat());
+    meter_.setBounds(area.removeFromRight(masterChannels > 8 ? 62 : (masterChannels > 2 ? 44 : 22)));
     scaleArea_ = area.removeFromRight(26);
     fader_.setBounds(area);
 }

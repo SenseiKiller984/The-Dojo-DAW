@@ -49,9 +49,38 @@ juce::File Exporter::getStemFile(const ExportSettings& settings, const juce::Str
         juce::File::createLegalFileName(base + " - " + trackName) + getFileExtension(settings.format));
 }
 
-std::unique_ptr<juce::AudioFormatWriter> Exporter::createWriter(const juce::File& file, const ExportSettings& settings,
-                                                                double sampleRate, int numChannels, juce::String& error)
+juce::AudioChannelSet Exporter::wavChannelSet(const engine::ChannelLayout& layout)
 {
+    using Set = juce::AudioChannelSet;
+    if (layout == engine::ChannelLayout::stereo())
+        return Set::stereo();
+    if (layout.numChannels == 1)
+        return Set::mono();
+    // Only where the WAV standard order (its channel mask's bit order) is the format's own.
+    if (layout == engine::ChannelLayout::lcrLfe())
+    {
+        Set set;
+        for (const auto type : {Set::left, Set::right, Set::centre, Set::LFE})
+            set.addChannel(type);
+        return set;
+    }
+    if (layout == engine::ChannelLayout::surround51())
+        return Set::create5point1();
+    if (layout == engine::ChannelLayout::surround514())
+        return Set::create5point1point4();
+    return Set::discreteChannels(layout.numChannels);
+}
+
+std::unique_ptr<juce::AudioFormatWriter> Exporter::createWriter(const juce::File& file, const ExportSettings& settings,
+                                                                double sampleRate, int numChannels, juce::String& error,
+                                                                const engine::ChannelLayout* layout)
+{
+    if (settings.format == ExportSettings::Format::flac && numChannels > 8)
+    {
+        error = "FLAC holds up to 8 channels. Export " + juce::String(numChannels) + "-channel (3D) mixes and stems as WAV.";
+        return nullptr;
+    }
+
     file.deleteFile();
     std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
     if (static_cast<juce::FileOutputStream*>(stream.get())->failedToOpen())
@@ -72,6 +101,10 @@ std::unique_ptr<juce::AudioFormatWriter> Exporter::createWriter(const juce::File
             options = options.withBitsPerSample(32).withSampleFormat(juce::AudioFormatWriterOptions::SampleFormat::floatingPoint);
         else
             options = options.withBitsPerSample(settings.bitDepth <= 16 ? 16 : 24);
+        if (layout != nullptr && layout->numChannels == numChannels && numChannels > 2)
+            options = options.withChannelLayout(wavChannelSet(*layout));
+        else if (numChannels > 2)
+            options = options.withChannelLayout(juce::AudioChannelSet::discreteChannels(numChannels));
         writer = wav.createWriterFor(stream, options);
         break;
     }
@@ -119,7 +152,7 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         target.layout = layout;
         target.channels = stereoOnly ? 2 : layout.numChannels;
         target.foldDown = layout.numChannels > target.channels;
-        auto writer = createWriter(file, settings_, sampleRate, target.channels, error);
+        auto writer = createWriter(file, settings_, sampleRate, target.channels, error, &target.layout);
         if (writer == nullptr)
             return false;
 

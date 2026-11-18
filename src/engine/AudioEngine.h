@@ -119,6 +119,13 @@ public:
     [[nodiscard]] float collectInputPeak(int channel) noexcept;
     /** A track's peak (all channels) since control surfaces last asked (their meters' own reading). */
     [[nodiscard]] float collectSurfacePeak(int slot) noexcept;
+    /** A slot's room as the engine last set it (any thread): its channels and delay ring length. */
+    struct SlotCapacity
+    {
+        int channels = 2;
+        int delaySamples = kMaxCompensationSamples;
+    };
+    [[nodiscard]] SlotCapacity getSlotCapacity(int slot) const noexcept;
     /** A track's fader gain (linear) and pan (-1..1) while a modulator or automation moves them;
         NaN when they are the track's own settings. */
     [[nodiscard]] float getMovingVolume(int slot) const noexcept
@@ -342,6 +349,9 @@ private:
     juce::AudioBuffer<Sample> inputBus_; ///< device inputs as 64-bit, for monitoring and capture
     juce::MidiBuffer masterMidi_;
     std::vector<SlotState> slots_;
+    std::array<std::atomic<int>, static_cast<std::size_t>(kMaxTracks)> slotChannels_{};     ///< (getSlotCapacity)
+    std::array<std::atomic<int>, static_cast<std::size_t>(kMaxTracks)> slotDelaySamples_{};
+    void publishSlotCapacity(int slot) noexcept;
 
     // --- Audio-thread state ----------------------------------------------------------------------
     double positionSeconds_ = 0.0;

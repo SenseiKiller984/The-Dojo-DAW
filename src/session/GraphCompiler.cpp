@@ -165,17 +165,15 @@ void GraphBuilder::setRenderFormat(double sampleRate, int maximumBlockSize)
         sampleRate_ = sampleRate;
     if (maximumBlockSize > 0)
         maxBlock_ = std::max(maximumBlockSize, 64);
+    // The engine was (re)prepared: room sized for the old blocks may never have arrived, so ask
+    // again (the engine ignores room a slot already has).
+    room_.fill(SlotRoom{});
 }
 
-int GraphBuilder::assignSlot(std::uint32_t trackId, std::vector<bool>& used, bool wide)
+int GraphBuilder::assignSlot(std::uint32_t trackId, std::vector<bool>& used)
 {
     if (const auto it = slots_.find(trackId); it != slots_.end())
-    {
-        if (!wide || it->second >= engine::kFirstWideSlot)
-            return it->second;
-        used[static_cast<std::size_t>(it->second)] = false; // it needs a wide slot now
-        slots_.erase(it);
-    }
+        return it->second;
 
     const auto take = [&](int from, int to)
     {
@@ -191,11 +189,7 @@ int GraphBuilder::assignSlot(std::uint32_t trackId, std::vector<bool>& used, boo
         return -1;
     };
 
-    // Stereo tracks fill the stereo slots first (the wide ones are kept for multichannel signals).
-    int slot = wide ? take(engine::kFirstWideSlot, engine::kMaxTracks) : take(0, engine::kFirstWideSlot);
-    if (slot < 0 && !wide)
-        slot = take(engine::kFirstWideSlot, engine::kMaxTracks);
-    return slot; // -1: more tracks than the engine renders
+    return take(0, engine::kMaxTracks); // -1: more tracks than the engine renders
 }
 
 std::shared_ptr<engine::ClipStretcher> GraphBuilder::getStretcher(std::uint32_t clipId, int numChannels)
@@ -235,17 +229,6 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         const auto format = track::getFormat(t);
         return isMultichannel(format) ? getLayout(format) : engine::ChannelLayout::stereo();
     };
-    const auto mayBeWide = [&](const juce::ValueTree& t)
-    {
-        // Its own layout, its destination's, or a fallback destination's (folder or master).
-        if (layoutOfTrack(t).isMultichannel() || masterLayout.isMultichannel())
-            return true;
-        if (const auto dest = session.getDestination(t); dest.isValid() && layoutOfTrack(dest).isMultichannel())
-            return true;
-        const auto folderTree = Session::getParentFolder(t);
-        return folderTree.isValid() && layoutOfTrack(folderTree).isMultichannel();
-    };
-
     // --- Slots: forget tracks that no longer exist, keep the rest stable ----------------------------
     std::set<std::uint32_t> liveIds;
     for (const auto& t : allTracks)
@@ -271,7 +254,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     std::vector<int> slotOf;
     for (const auto& t : allTracks)
     {
-        const int slot = assignSlot(track::getId(t), used, track::getKind(t) != TrackKind::midi && mayBeWide(t));
+        const int slot = assignSlot(track::getId(t), used);
         if (slot < 0)
             continue;
         indexOfId[track::getId(t)] = static_cast<int>(trees.size());
@@ -1252,6 +1235,39 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
         }
     for (auto it = stretchers_.begin(); it != stretchers_.end();)
         it = liveClips.count(it->first) == 0 ? stretchers_.erase(it) : std::next(it);
+
+    // --- Room in the engine's slots --------------------------------------------------------------
+    // A slot holds its track's own channels, its destination's (the fader delivers those) and, for
+    // a bus, what its sends bring in (delayed in its scratch). A slot with more than two channels
+    // gets a delay ring as long as its delay needs. Slots that need more than they were given get it
+    // with this graph, allocated here (see SlotBuffers).
+    for (auto& rt : graph->tracks)
+    {
+        int channels = std::max({2, rt.layout.numChannels, rt.outputLayout.numChannels});
+        for (const auto& rs : rt.sends)
+            if (rs.auxNode == nullptr && rs.sourceIndex >= 0 && rs.sourceIndex < static_cast<int>(graph->tracks.size()))
+            {
+                const auto& from = graph->tracks[static_cast<std::size_t>(rs.sourceIndex)];
+                channels = std::max(channels, rs.preFader ? from.layout.numChannels : from.outputLayout.numChannels);
+            }
+        rt.bufferChannels = std::min(channels, engine::kMaxChannels);
+    }
+    for (const auto& rt : graph->tracks)
+    {
+        if (rt.slot < 0 || rt.slot >= engine::kMaxTracks)
+            continue;
+        auto& room = room_[static_cast<std::size_t>(rt.slot)];
+        int ring = engine::kMinWideDelaySamples; // (a two-channel slot's full-length ring always does)
+        while (ring <= rt.compensationDelay && ring < engine::kMaxCompensationSamples)
+            ring *= 2;
+        if (rt.bufferChannels <= room.channels && ring <= room.delaySamples)
+            continue;
+        room.channels = std::max(room.channels, rt.bufferChannels);
+        room.delaySamples = ring;
+        auto& buffers = graph->slotBuffers.emplace_back();
+        buffers.slot = rt.slot;
+        buffers.allocate(room.channels, room.delaySamples, maxBlock_);
+    }
 
     return graph;
 }

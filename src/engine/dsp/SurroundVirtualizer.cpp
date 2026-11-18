@@ -86,6 +86,14 @@ double SurroundVirtualizer::azimuthOf(Speaker speaker, bool sevenOne) noexcept
     case Speaker::rightSurround: return sevenOne ? 90.0 : 110.0;
     case Speaker::leftRear:      return -150.0;
     case Speaker::rightRear:     return 150.0;
+    case Speaker::leftWide:      return -60.0;
+    case Speaker::rightWide:     return 60.0;
+    case Speaker::topFrontLeft:  return sevenOne ? -45.0 : -30.0;
+    case Speaker::topFrontRight: return sevenOne ? 45.0 : 30.0;
+    case Speaker::topMiddleLeft: return -90.0;
+    case Speaker::topMiddleRight: return 90.0;
+    case Speaker::topRearLeft:   return sevenOne ? -135.0 : -110.0;
+    case Speaker::topRearRight:  return sevenOne ? 135.0 : 110.0;
     }
     return 0.0;
 }

@@ -27,7 +27,7 @@ using engine::TrackKind;
           TRACK       id, name, colour, kind (audio|instrument|bus), folder, collapsed,
                       volumeDb, pan, muted, soloed, phaseInverted, output, input, inputStereo,
                       monitor, armed, speed, pitch, auxSource, auxChannel, showAutomation,
-                      format (mono|stereo|3.1|5.1|7.1|dolbyDigital|dts), panFrontRear, panCentre,
+                      format (mono|stereo|3.1|5.1|7.1|5.1.4|7.1.4|9.1.6|dolbyDigital|dts), panFrontRear, panCentre,
                       showTakes, audition (the take lane played instead of the comp)
             CLIP        id, name, file, start, length, offset, fadeIn, fadeOut, gainDb, gainBypassed, stretch,
                         pitch, sourceChannel, editLocked, timeLocked, rating (1..5), groups (clip group ids,
@@ -221,6 +221,10 @@ const std::array<juce::Colour, 8>& getTrackPalette();
         3.1            L R C LFE
         5.1            L R C LFE Ls Rs   (SMPTE/ITU)
         7.1            L R C LFE Ls Rs Lrs Rrs
+        5.1.4          L R C LFE Ls Rs Ltf Rtf Ltr Rtr                 (5.1 + four heights)
+        7.1.4          L R C LFE Ls Rs Lrs Rrs Ltf Rtf Ltr Rtr         (7.1 + four heights)
+        9.1.6          L R C LFE Ls Rs Lrs Rrs Lw Rw Ltf Rtf Ltm Rtm Ltr Rtr
+                                                                       (7.1 + wides + six heights)
         Dolby Digital  L C R Ls Rs LFE   (5.1 in AC-3 order)
         DTS            L R Ls Rs C LFE   (5.1 in DTS order)
 */
@@ -233,21 +237,24 @@ enum class TrackFormat
     surround71,
     dolbyDigital,
     dts,
+    surround514,
+    surround714,
+    surround916,
 };
 [[nodiscard]] juce::String toString(TrackFormat format);
 [[nodiscard]] TrackFormat trackFormatFromString(const juce::String& text);
-/** "Mono", "Stereo", "3.1", "5.1", "7.1", "Dolby Digital 5.1", "DTS 5.1". */
+/** "Mono", "Stereo", "3.1", "5.1", "7.1", "5.1.4", "7.1.4", "9.1.6", "Dolby Digital 5.1", "DTS 5.1". */
 [[nodiscard]] juce::String getDisplayName(TrackFormat format);
 [[nodiscard]] int getNumChannels(TrackFormat format);
 [[nodiscard]] inline bool isMultichannel(TrackFormat format) { return getNumChannels(format) > 2; }
-/** Every format, in menu order. */
+/** Every format, in menu order (not the enum's). */
 [[nodiscard]] std::vector<TrackFormat> getAllTrackFormats();
 /** The speakers of a format's channels (mono: the centre). */
 [[nodiscard]] engine::ChannelLayout getLayout(TrackFormat format);
 /**
     Which channel of an audio file (with `fileChannels` channels) a multichannel track's channel
     `trackChannel` plays, or -1: the same channel when the file has as many (recorded on such a
-    track), otherwise by speaker (assuming the SMPTE order for 1, 2, 4, 6 and 8 channels; a mono
+    track), otherwise by speaker (assuming the SMPTE order for 1, 2, 4, 6, 8, 10, 12 and 16 channels; a mono
     file plays from the centre).
 */
 [[nodiscard]] int fileChannelFor(int fileChannels, const engine::ChannelLayout& track, int trackChannel);
