@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Punchy Drum Bus: a built-in device chain (Drum EQ > The Glue > Saturation > Bass Mono > Soft Clipper). -->
+<DOJO_PRESET version="1" name="Punchy Drum Bus" category="Drums" chain="1"
+             description="A modern drum bus: a solid kick, less cardboard, crisp cymbals, glued with parallel compression, warmed with light saturation, the low end kept mono and the peaks softly clipped for loudness.">
+  <DEVICE key="builtin:eq" name="Drum EQ">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="30.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="60.0"/>
+      <PARAM id="band2Gain" value="2.5"/>
+      <PARAM id="band2Q" value="1.0"/>
+      <PARAM id="band3On" value="1.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="420.0"/>
+      <PARAM id="band3Gain" value="-3.0"/>
+      <PARAM id="band3Q" value="1.2"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="8000.0"/>
+      <PARAM id="band4Gain" value="2.5"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:gluecomp" name="The Glue">
+    <DOJO_DEVICE type="builtin:gluecomp" version="1">
+      <PARAM id="threshold" value="-18.0"/>
+      <PARAM id="ratio" value="1.0"/>
+      <PARAM id="attack" value="5.0"/>
+      <PARAM id="release" value="6.0"/>
+      <PARAM id="makeup" value="4.0"/>
+      <PARAM id="mix" value="65.0"/>
+      <PARAM id="range" value="70.0"/>
+      <PARAM id="schp" value="90.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <PARAM id="peakclip" value="0.0"/>
+      <PARAM id="osrealtime" value="1.0"/>
+      <PARAM id="osoffline" value="3.0"/>
+      <PARAM id="osphase" value="2.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:overdrive" name="Saturation">
+    <DOJO_DEVICE type="builtin:overdrive" version="1">
+      <PARAM id="freq" value="700.0"/>
+      <PARAM id="width" value="9.0"/>
+      <PARAM id="drive" value="15.0"/>
+      <PARAM id="tone" value="85.0"/>
+      <PARAM id="dynamics" value="60.0"/>
+      <PARAM id="output" value="-3.0"/>
+      <PARAM id="mix" value="30.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:utility" name="Bass Mono">
+    <DOJO_DEVICE type="builtin:utility" version="1">
+      <PARAM id="gain" value="0.0"/>
+      <PARAM id="width" value="100.0"/>
+      <PARAM id="mono" value="0.0"/>
+      <PARAM id="bassmono" value="1.0"/>
+      <PARAM id="bassfreq" value="120.0"/>
+      <PARAM id="phasel" value="0.0"/>
+      <PARAM id="phaser" value="0.0"/>
+      <PARAM id="channel" value="0.0"/>
+      <PARAM id="balance" value="0.0"/>
+      <PARAM id="mute" value="0.0"/>
+      <PARAM id="dc" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:softclip" name="Soft Clipper">
+    <DOJO_DEVICE type="builtin:softclip" version="1">
+      <PARAM id="drive" value="2.0"/>
+      <PARAM id="ceiling" value="-1.0"/>
+      <PARAM id="shape" value="0.0"/>
+      <PARAM id="softness" value="40.0"/>
+      <PARAM id="asymmetry" value="0.0"/>
+      <PARAM id="link" value="1.0"/>
+      <PARAM id="autogain" value="0.0"/>
+      <PARAM id="listen" value="0.0"/>
+      <PARAM id="guard" value="1.0"/>
+      <PARAM id="osrealtime" value="1.0"/>
+      <PARAM id="osoffline" value="3.0"/>
+      <PARAM id="osphase" value="2.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

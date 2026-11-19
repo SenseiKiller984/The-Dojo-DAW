@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Drivers License Vocal Saturation: a built-in device chain (Noise Gate > Subtractive EQ > Fast Compressor > Saturation > Air EQ (Red Light) > Slapback Delay > Short Plate). -->
+<DOJO_PRESET version="1" name="Drivers License Vocal Saturation" category="Vocals" chain="1"
+             description="The intimate, saturated bedroom-pop vocal: a noise gate for fan, AC and traffic noise, subtractive EQ against bedroom mud and boxiness, a fast compressor that keeps whispers close and belts in check, subtle overdrive, an air boost like expensive preamps, a tight slapback for space and width and a very short plate that glues it all together.">
+  <DEVICE key="builtin:gate" name="Noise Gate">
+    <DOJO_DEVICE type="builtin:gate" version="1">
+      <PARAM id="threshold" value="-50.0"/>
+      <PARAM id="return" value="4.0"/>
+      <PARAM id="attack" value="0.5"/>
+      <PARAM id="hold" value="60.0"/>
+      <PARAM id="release" value="180.0"/>
+      <PARAM id="floor" value="-80.0"/>
+      <PARAM id="flip" value="0.0"/>
+      <PARAM id="lookahead" value="1.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <PARAM id="keylow" value="100.0"/>
+      <PARAM id="keyhigh" value="20000.0"/>
+      <PARAM id="listen" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:eq" name="Subtractive EQ">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="90.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="450.0"/>
+      <PARAM id="band2Gain" value="-3.5"/>
+      <PARAM id="band2Q" value="1.4"/>
+      <PARAM id="band3On" value="0.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="2500.0"/>
+      <PARAM id="band3Gain" value="0.0"/>
+      <PARAM id="band3Q" value="0.71"/>
+      <PARAM id="band4On" value="0.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="8000"/>
+      <PARAM id="band4Gain" value="0.0"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:compressor" name="Fast Compressor">
+    <DOJO_DEVICE type="builtin:compressor" version="1">
+      <PARAM id="threshold" value="-24.0"/>
+      <PARAM id="ratio" value="6.0"/>
+      <PARAM id="attack" value="1.0"/>
+      <PARAM id="release" value="70.0"/>
+      <PARAM id="knee" value="4.0"/>
+      <PARAM id="makeup" value="6.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:overdrive" name="Saturation">
+    <DOJO_DEVICE type="builtin:overdrive" version="1">
+      <PARAM id="freq" value="1800.0"/>
+      <PARAM id="width" value="7.0"/>
+      <PARAM id="drive" value="20.0"/>
+      <PARAM id="tone" value="100.0"/>
+      <PARAM id="dynamics" value="70.0"/>
+      <PARAM id="output" value="-3.0"/>
+      <PARAM id="mix" value="25.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:eq" name="Air EQ (Red Light)">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="0.0"/>
+      <PARAM id="band1Shape" value="1.0"/>
+      <PARAM id="band1Freq" value="100"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="0.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="500"/>
+      <PARAM id="band2Gain" value="0.0"/>
+      <PARAM id="band2Q" value="0.71"/>
+      <PARAM id="band3On" value="0.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="2500.0"/>
+      <PARAM id="band3Gain" value="0.0"/>
+      <PARAM id="band3Q" value="0.71"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="10000.0"/>
+      <PARAM id="band4Gain" value="5.5"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:echo" name="Slapback Delay">
+    <DOJO_DEVICE type="builtin:echo" version="1">
+      <PARAM id="mode" value="0.0"/>
+      <PARAM id="sync" value="0.0"/>
+      <PARAM id="divl" value="6.0"/>
+      <PARAM id="divr" value="5.0"/>
+      <PARAM id="timel" value="92.0"/>
+      <PARAM id="timer" value="118.0"/>
+      <PARAM id="link" value="0.0"/>
+      <PARAM id="feedback" value="6.0"/>
+      <PARAM id="invert" value="0.0"/>
+      <PARAM id="input" value="0.0"/>
+      <PARAM id="filter" value="1.0"/>
+      <PARAM id="hp" value="250.0"/>
+      <PARAM id="lp" value="7000.0"/>
+      <PARAM id="res" value="0.0"/>
+      <PARAM id="modrate" value="0.5"/>
+      <PARAM id="moddepth" value="0.0"/>
+      <PARAM id="modfilter" value="0.0"/>
+      <PARAM id="drive" value="0.0"/>
+      <PARAM id="noise" value="0.0"/>
+      <PARAM id="wobble" value="0.0"/>
+      <PARAM id="duck" value="0.0"/>
+      <PARAM id="reverb" value="0.0"/>
+      <PARAM id="reverbdecay" value="50.0"/>
+      <PARAM id="reverbloc" value="1.0"/>
+      <PARAM id="width" value="120.0"/>
+      <PARAM id="mix" value="18.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:plate" name="Short Plate">
+    <DOJO_DEVICE type="builtin:plate" version="1">
+      <PARAM id="plate" value="0.0"/>
+      <PARAM id="predelay" value="5.0"/>
+      <PARAM id="sync" value="0.0"/>
+      <PARAM id="division" value="1.0"/>
+      <PARAM id="decay" value="0.8"/>
+      <PARAM id="size" value="70.0"/>
+      <PARAM id="damping" value="12000.0"/>
+      <PARAM id="lowdecay" value="80.0"/>
+      <PARAM id="lowfreq" value="300.0"/>
+      <PARAM id="bandwidth" value="16000.0"/>
+      <PARAM id="diffusion" value="75.0"/>
+      <PARAM id="modrate" value="0.8"/>
+      <PARAM id="modulation" value="20.0"/>
+      <PARAM id="drive" value="0.0"/>
+      <PARAM id="ducking" value="0.0"/>
+      <PARAM id="freeze" value="0.0"/>
+      <PARAM id="lowcut" value="300.0"/>
+      <PARAM id="highcut" value="20000.0"/>
+      <PARAM id="width" value="100.0"/>
+      <PARAM id="mix" value="14.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

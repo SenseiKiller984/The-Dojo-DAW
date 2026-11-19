@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Shimmer Bloom: a built-in device chain (Clean Lows > Octave Shimmer > Chorus > Shimmer Hall). -->
+<DOJO_PRESET version="1" name="Shimmer Bloom" category="Pads &amp; Keys" chain="1"
+             description="An ethereal, rising shimmer for pads, keys and guitars: clean lows, an octave-up pitch shifter feeding back on itself, a gentle chorus and a huge, bright reverb.">
+  <DEVICE key="builtin:eq" name="Clean Lows">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="150.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="0.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="500"/>
+      <PARAM id="band2Gain" value="0.0"/>
+      <PARAM id="band2Q" value="0.71"/>
+      <PARAM id="band3On" value="0.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="2500.0"/>
+      <PARAM id="band3Gain" value="0.0"/>
+      <PARAM id="band3Q" value="0.71"/>
+      <PARAM id="band4On" value="0.0"/>
+      <PARAM id="band4Shape" value="3.0"/>
+      <PARAM id="band4Freq" value="8000"/>
+      <PARAM id="band4Gain" value="0.0"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="5.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:shifter" name="Octave Shimmer">
+    <DOJO_DEVICE type="builtin:shifter" version="1">
+      <PARAM id="mode" value="0.0"/>
+      <PARAM id="pitch" value="12.0"/>
+      <PARAM id="fine" value="0.0"/>
+      <PARAM id="shift" value="100.0"/>
+      <PARAM id="spread" value="30.0"/>
+      <PARAM id="window" value="80.0"/>
+      <PARAM id="lfoamt" value="0.0"/>
+      <PARAM id="lforate" value="1"/>
+      <PARAM id="lfosync" value="0.0"/>
+      <PARAM id="lfodiv" value="9.0"/>
+      <PARAM id="lfoshape" value="0.0"/>
+      <PARAM id="lfostereo" value="0.0"/>
+      <PARAM id="envamt" value="0.0"/>
+      <PARAM id="envattack" value="5"/>
+      <PARAM id="envrelease" value="200"/>
+      <PARAM id="delay" value="140.0"/>
+      <PARAM id="delaysync" value="0.0"/>
+      <PARAM id="delaydiv" value="6.0"/>
+      <PARAM id="feedback" value="45.0"/>
+      <PARAM id="mix" value="35.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:chorus" name="Chorus">
+    <DOJO_DEVICE type="builtin:chorus" version="1">
+      <PARAM id="mode" value="0.0"/>
+      <PARAM id="rate" value="0.3"/>
+      <PARAM id="amount" value="30.0"/>
+      <PARAM id="feedback" value="0.0"/>
+      <PARAM id="width" value="150.0"/>
+      <PARAM id="warmth" value="0.0"/>
+      <PARAM id="highpass" value="20.0"/>
+      <PARAM id="shape" value="0.0"/>
+      <PARAM id="output" value="0.0"/>
+      <PARAM id="mix" value="25.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:reverb" name="Shimmer Hall">
+    <DOJO_DEVICE type="builtin:reverb" version="1">
+      <PARAM id="size" value="1.0"/>
+      <PARAM id="decay" value="9.0"/>
+      <PARAM id="damping" value="0.25"/>
+      <PARAM id="predelay" value="60.0"/>
+      <PARAM id="lowcut" value="300.0"/>
+      <PARAM id="width" value="1.0"/>
+      <PARAM id="mix" value="40.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>

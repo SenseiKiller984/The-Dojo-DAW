@@ -1,0 +1,21 @@
+# Build trees (one per CMake preset)
+/build/
+/out/
+/cmake-build-*/
+
+# IDE / editor state
+/.vs/
+/.vscode/
+/.idea/
+*.user
+*.suo
+.cache/
+compile_commands.json
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Crash dumps / logs from local runs
+*.dmp
+core.*

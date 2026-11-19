@@ -1,0 +1,122 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "DOJO_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-gcc-base",
+      "hidden": true,
+      "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "linux-clang-base",
+      "hidden": true,
+      "inherits": "linux-base",
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux | GCC | Debug",
+      "inherits": "linux-gcc-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux | GCC | Release",
+      "inherits": "linux-gcc-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux-clang-debug",
+      "displayName": "Linux | Clang | Debug",
+      "inherits": "linux-clang-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-clang-release",
+      "displayName": "Linux | Clang | Release",
+      "inherits": "linux-clang-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux-asan",
+      "displayName": "Linux | Clang | AddressSanitizer",
+      "inherits": "linux-clang-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "DOJO_SANITIZER": "address" }
+    },
+    {
+      "name": "linux-tsan",
+      "displayName": "Linux | Clang | ThreadSanitizer",
+      "inherits": "linux-clang-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "DOJO_SANITIZER": "thread" }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows | MSVC (Visual Studio, x64)",
+      "description": "Uses the newest installed Visual Studio generator; build Debug or Release via the build presets.",
+      "inherits": "base",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "ci-linux-gcc",
+      "displayName": "CI | Linux | GCC | Release",
+      "inherits": "linux-release",
+      "cacheVariables": { "DOJO_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "ci-linux-clang",
+      "displayName": "CI | Linux | Clang | RelWithDebInfo",
+      "inherits": "linux-clang-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "DOJO_WARNINGS_AS_ERRORS": "ON" }
+    },
+    {
+      "name": "ci-windows-msvc",
+      "displayName": "CI | Windows | MSVC",
+      "inherits": "windows-msvc",
+      "cacheVariables": { "DOJO_WARNINGS_AS_ERRORS": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-clang-debug", "configurePreset": "linux-clang-debug" },
+    { "name": "linux-clang-release", "configurePreset": "linux-clang-release" },
+    { "name": "linux-asan", "configurePreset": "linux-asan" },
+    { "name": "linux-tsan", "configurePreset": "linux-tsan" },
+    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc", "configuration": "Debug" },
+    { "name": "windows-msvc-release", "configurePreset": "windows-msvc", "configuration": "Release" },
+    { "name": "ci-linux-gcc", "configurePreset": "ci-linux-gcc" },
+    { "name": "ci-linux-clang", "configurePreset": "ci-linux-clang" },
+    { "name": "ci-windows-msvc", "configurePreset": "ci-windows-msvc", "configuration": "RelWithDebInfo" }
+  ],
+  "testPresets": [
+    { "name": "test-base", "hidden": true, "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "linux-debug", "inherits": "test-base", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "inherits": "test-base", "configurePreset": "linux-release" },
+    { "name": "linux-clang-debug", "inherits": "test-base", "configurePreset": "linux-clang-debug" },
+    { "name": "linux-clang-release", "inherits": "test-base", "configurePreset": "linux-clang-release" },
+    { "name": "linux-asan", "inherits": "test-base", "configurePreset": "linux-asan" },
+    { "name": "linux-tsan", "inherits": "test-base", "configurePreset": "linux-tsan" },
+    { "name": "windows-msvc-debug", "inherits": "test-base", "configurePreset": "windows-msvc", "configuration": "Debug" },
+    { "name": "windows-msvc-release", "inherits": "test-base", "configurePreset": "windows-msvc", "configuration": "Release" },
+    { "name": "ci-linux-gcc", "inherits": "test-base", "configurePreset": "ci-linux-gcc" },
+    { "name": "ci-linux-clang", "inherits": "test-base", "configurePreset": "ci-linux-clang" },
+    { "name": "ci-windows-msvc", "inherits": "test-base", "configurePreset": "ci-windows-msvc", "configuration": "RelWithDebInfo" }
+  ]
+}

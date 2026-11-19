@@ -1,0 +1,168 @@
+#pragma once
+
+#include "engine/TrackTaps.h"
+#include "plugins/PluginManager.h"
+#include "session/Presets.h"
+#include "session/Project.h"
+#include "ui/EditorState.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+#include <functional>
+#include <map>
+#include <memory>
+#include <vector>
+
+namespace dojo::ui
+{
+
+class DeviceCard;
+class LatencyBadge;
+class LoopEnd;
+class LoopFrame;
+
+/**
+    The device chain of the selected track (or the master bus), left to right in signal order.
+
+    Each device is a card: a header (name, bypass, sidechain source for devices that have a
+    sidechain input, presets, plug-in window, move left/right, remove) above its editor. A device
+    with an insert loop (an accessory / effects loop, such as the Rhodes Suitcase's) is followed by
+    its loop in a frame: the loop's devices, then a slot to add or drop effects into it, after which
+    the signal returns into the device. The "+"
+    card adds a native device or a plug-in; devices and plug-ins can also be dropped here from the
+    browser. Hosted plug-ins open their own GUI in a separate window.
+
+    Presets (session/Presets.h): a card's presets menu loads the presets that fit its device and
+    saves its settings (as a new preset file, into an existing one, or with the whole chain). A
+    Delay: each card's header shows how much delay (latency) its device adds, in milliseconds (the
+    samples and the chain's delay up to that device in its tooltip), and the panel's header shows
+    the whole chain's delay (the devices that are on). They follow lookahead, mode and bypass changes.
+
+    A preset dropped onto a card (from the browser, or a .dojopreset file from the file manager) loads
+    into that device; dropped anywhere else on the panel it adds a device that starts from it (a
+    chain preset adds its whole chain, also offered in the "+ Add Device" menu).
+*/
+class DevicePanel final : public juce::Component,
+                          public juce::DragAndDropTarget,
+                          public juce::FileDragAndDropTarget,
+                          private juce::ValueTree::Listener,
+                          private EditorState::Listener,
+                          private juce::AsyncUpdater,
+                          private juce::Timer
+{
+public:
+    DevicePanel(session::Project& project, plugins::PluginManager& plugins, EditorState& editor);
+    ~DevicePanel() override;
+
+    void paint(juce::Graphics& g) override;
+    void resized() override;
+
+    bool isInterestedInDragSource(const SourceDetails& details) override;
+    void itemDropped(const SourceDetails& details) override;
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    /** Opens (or brings to front) a hosted plug-in's own GUI. */
+    void openPluginWindow(const juce::ValueTree& device);
+
+    /** Shows a file chooser for a preset file (kept here so it outlives a rebuilt card). */
+    void choosePresetFile(const juce::String& title, bool forSaving, const juce::File& initial,
+                          std::function<void(const juce::File&)> onChosen);
+    /** Shows a short message on a device's card (what a preset action did). */
+    void showNotice(const juce::ValueTree& device, const juce::String& text, bool ok);
+
+    // --- Tests -----------------------------------------------------------------------------------
+    /** The card showing `device` (a DragAndDropTarget and a FileDragAndDropTarget), or nullptr. */
+    [[nodiscard]] juce::Component* findCard(const juce::ValueTree& device) const;
+    /** The end of `host`'s insert loop (its "+ Add to Loop" button and drop target), if shown. */
+    [[nodiscard]] juce::Component* findLoopEnd(const juce::ValueTree& host) const;
+    /** The message the card of `device` shows right now (empty when none). */
+    [[nodiscard]] juce::String getNotice(const juce::ValueTree& device) const;
+    /** The message the panel itself shows right now (a preset dropped on it). */
+    [[nodiscard]] const juce::String& getPanelNotice() const noexcept { return panelNotice_; }
+    /** The delay a card shows for `device` ("1.27 ms"), and its tooltip. */
+    [[nodiscard]] juce::String getLatencyText(const juce::ValueTree& device) const;
+    [[nodiscard]] juce::String getLatencyTooltip(const juce::ValueTree& device) const;
+    /** The chain's delay in the header ("CHAIN DELAY 2.27 ms"), its tooltip, and in samples. */
+    [[nodiscard]] juce::String getChainLatencyText() const;
+    [[nodiscard]] juce::String getChainLatencyTooltip() const;
+    [[nodiscard]] int getChainLatencySamples() const noexcept { return chainLatencySamples_; }
+    /** Reads every device's delay again (also done five times a second). */
+    void refreshLatencies();
+
+    /** The preset chains the "+ Add Device" menu offers. */
+    [[nodiscard]] juce::StringArray getAddMenuChainItems();
+    /** What the presets menu of the card of `device` lists (section headers in brackets). */
+    [[nodiscard]] juce::StringArray getPresetMenuItems(const juce::ValueTree& device) const;
+
+    /** Where editors can watch other tracks' sound (the EQ's spectrum overlay). */
+    void setTrackTaps(engine::TrackTaps* taps) noexcept { taps_ = taps; }
+    [[nodiscard]] engine::TrackTaps* getTrackTaps() const noexcept { return taps_; }
+    /** Where device editors find the sound card's channel names (outputs or inputs: the HW Insert). */
+    void setChannelNames(std::function<juce::StringArray(bool)> names) { channelNames_ = std::move(names); }
+    [[nodiscard]] const std::function<juce::StringArray(bool)>& getChannelNames() const noexcept { return channelNames_; }
+
+private:
+    class PluginWindow;
+
+    [[nodiscard]] juce::ValueTree getOwner() const;
+    void rebuild();
+    void layoutCards();
+    void showAddMenu();
+    /** VCA Masters and MIDI tracks have no devices. */
+    [[nodiscard]] static bool ownerTakesDevices(const juce::ValueTree& owner);
+    void closeStaleWindows();
+    void dropPreset(const session::presets::Preset& preset);
+    void layoutHeader();
+    [[nodiscard]] juce::String getHeaderTitle() const;
+    void timerCallback() override;
+    void addChainItems(juce::PopupMenu& menu);
+    void setPanelNotice(const juce::String& text);
+
+    void handleAsyncUpdate() override { rebuild(); }
+    void editorStateChanged() override;
+    void valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child) override;
+    void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree& child, int) override;
+    void valueTreeChildOrderChanged(juce::ValueTree& parent, int, int) override;
+    void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property) override;
+    void valueTreeRedirected(juce::ValueTree&) override { triggerAsyncUpdate(); }
+
+    session::Project& project_;
+    plugins::PluginManager& plugins_;
+    engine::TrackTaps* taps_ = nullptr;
+    std::function<juce::StringArray(bool)> channelNames_;
+    EditorState& editor_;
+
+    juce::Viewport viewport_;
+    juce::Component holder_;
+    std::vector<std::unique_ptr<DeviceCard>> cards_;
+    /** An insert loop shown in the chain: its frame, its cards (cards_[first .. end)) and its end. */
+    struct LoopView
+    {
+        std::unique_ptr<LoopFrame> frame;
+        std::unique_ptr<LoopEnd> end;
+        std::size_t first = 0, last = 0; ///< (cards_ indices: first .. last - 1 are in the loop)
+    };
+    std::vector<LoopView> loops_;
+    /** Every device with an insert loop on the panel, and whether its loop is shown (a loop shows
+        while its device offers it, or while it holds devices). */
+    struct LoopHost
+    {
+        juce::ValueTree device;
+        std::shared_ptr<engine::ProcessorNode> node;
+        bool shown = false;
+    };
+    std::vector<LoopHost> loopHosts_;
+    [[nodiscard]] static bool showsLoop(const juce::ValueTree& device, const engine::ProcessorNode& node);
+    juce::TextButton addButton_;
+    juce::ValueTree shownOwner_;
+    bool shownMaster_ = false;
+    std::map<std::uint32_t, std::unique_ptr<PluginWindow>> windows_;
+    std::unique_ptr<juce::FileChooser> chooser_;
+    std::unique_ptr<LatencyBadge> chainLatency_;
+    int chainLatencySamples_ = 0;
+    juce::String panelNotice_;
+    juce::uint32 panelNoticeSerial_ = 0;
+};
+
+} // namespace dojo::ui

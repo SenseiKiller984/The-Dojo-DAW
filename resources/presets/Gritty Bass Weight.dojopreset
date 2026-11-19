@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Gritty Bass Weight: a built-in device chain (Bass Compressor > Mid Grit > Weight & Growl > Mono Lows). -->
+<DOJO_PRESET version="1" name="Gritty Bass Weight" category="Bass" chain="1"
+             description="A bass that holds the low end and still cuts through on small speakers: steady compression, clean lows with distorted mids and tamed highs, weight at 80 Hz, growl at 700 Hz and a mono low end.">
+  <DEVICE key="builtin:compressor" name="Bass Compressor">
+    <DOJO_DEVICE type="builtin:compressor" version="1">
+      <PARAM id="threshold" value="-20.0"/>
+      <PARAM id="ratio" value="4.0"/>
+      <PARAM id="attack" value="15.0"/>
+      <PARAM id="release" value="80.0"/>
+      <PARAM id="knee" value="6.0"/>
+      <PARAM id="makeup" value="3.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <PARAM id="sidechain" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:roar" name="Mid Grit">
+    <DOJO_DEVICE type="builtin:roar" version="1">
+      <PARAM id="drive" value="4.0"/>
+      <PARAM id="tone" value="0.0"/>
+      <PARAM id="routing" value="4.0"/>
+      <PARAM id="xlow" value="150.0"/>
+      <PARAM id="xhigh" value="2500.0"/>
+      <PARAM id="s1on" value="1.0"/>
+      <PARAM id="s1shape" value="0.0"/>
+      <PARAM id="s1amount" value="8.0"/>
+      <PARAM id="s1bias" value="0.0"/>
+      <PARAM id="s1filter" value="0.0"/>
+      <PARAM id="s1pre" value="0.0"/>
+      <PARAM id="s1freq" value="2000"/>
+      <PARAM id="s1res" value="20.0"/>
+      <PARAM id="s1level" value="0.0"/>
+      <PARAM id="s2on" value="1.0"/>
+      <PARAM id="s2shape" value="2.0"/>
+      <PARAM id="s2amount" value="55.0"/>
+      <PARAM id="s2bias" value="0.0"/>
+      <PARAM id="s2filter" value="0.0"/>
+      <PARAM id="s2pre" value="0.0"/>
+      <PARAM id="s2freq" value="2000"/>
+      <PARAM id="s2res" value="20.0"/>
+      <PARAM id="s2level" value="-2.0"/>
+      <PARAM id="s3on" value="1.0"/>
+      <PARAM id="s3shape" value="1.0"/>
+      <PARAM id="s3amount" value="25.0"/>
+      <PARAM id="s3bias" value="0.0"/>
+      <PARAM id="s3filter" value="1.0"/>
+      <PARAM id="s3pre" value="0.0"/>
+      <PARAM id="s3freq" value="6000.0"/>
+      <PARAM id="s3res" value="20.0"/>
+      <PARAM id="s3level" value="-8.0"/>
+      <PARAM id="l1shape" value="0.0"/>
+      <PARAM id="l1rate" value="1"/>
+      <PARAM id="l1sync" value="0.0"/>
+      <PARAM id="l1div" value="9.0"/>
+      <PARAM id="l2shape" value="1.0"/>
+      <PARAM id="l2rate" value="0.25"/>
+      <PARAM id="l2sync" value="0.0"/>
+      <PARAM id="l2div" value="9.0"/>
+      <PARAM id="envattack" value="5"/>
+      <PARAM id="envrelease" value="150"/>
+      <PARAM id="envgain" value="0.0"/>
+      <PARAM id="noiserate" value="4"/>
+      <PARAM id="noisesmooth" value="50.0"/>
+      <PARAM id="m1src" value="0.0"/>
+      <PARAM id="m1dst" value="0.0"/>
+      <PARAM id="m1amt" value="0.0"/>
+      <PARAM id="m2src" value="0.0"/>
+      <PARAM id="m2dst" value="0.0"/>
+      <PARAM id="m2amt" value="0.0"/>
+      <PARAM id="m3src" value="0.0"/>
+      <PARAM id="m3dst" value="0.0"/>
+      <PARAM id="m3amt" value="0.0"/>
+      <PARAM id="m4src" value="0.0"/>
+      <PARAM id="m4dst" value="0.0"/>
+      <PARAM id="m4amt" value="0.0"/>
+      <PARAM id="m5src" value="0.0"/>
+      <PARAM id="m5dst" value="0.0"/>
+      <PARAM id="m5amt" value="0.0"/>
+      <PARAM id="m6src" value="0.0"/>
+      <PARAM id="m6dst" value="0.0"/>
+      <PARAM id="m6amt" value="0.0"/>
+      <PARAM id="m7src" value="0.0"/>
+      <PARAM id="m7dst" value="0.0"/>
+      <PARAM id="m7amt" value="0.0"/>
+      <PARAM id="m8src" value="0.0"/>
+      <PARAM id="m8dst" value="0.0"/>
+      <PARAM id="m8amt" value="0.0"/>
+      <PARAM id="fbamount" value="0.0"/>
+      <PARAM id="fbtime" value="120"/>
+      <PARAM id="fbsync" value="0.0"/>
+      <PARAM id="fbdiv" value="6.0"/>
+      <PARAM id="fbfreq" value="1000"/>
+      <PARAM id="fbinvert" value="0.0"/>
+      <PARAM id="comp" value="0.0"/>
+      <PARAM id="output" value="-2.0"/>
+      <PARAM id="mix" value="100.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:eq" name="Weight &amp; Growl">
+    <DOJO_DEVICE type="builtin:eq" version="1">
+      <PARAM id="band1On" value="1.0"/>
+      <PARAM id="band1Shape" value="0.0"/>
+      <PARAM id="band1Freq" value="30.0"/>
+      <PARAM id="band1Gain" value="0.0"/>
+      <PARAM id="band1Q" value="0.71"/>
+      <PARAM id="band2On" value="1.0"/>
+      <PARAM id="band2Shape" value="2.0"/>
+      <PARAM id="band2Freq" value="80.0"/>
+      <PARAM id="band2Gain" value="2.0"/>
+      <PARAM id="band2Q" value="1.0"/>
+      <PARAM id="band3On" value="1.0"/>
+      <PARAM id="band3Shape" value="2.0"/>
+      <PARAM id="band3Freq" value="700.0"/>
+      <PARAM id="band3Gain" value="2.0"/>
+      <PARAM id="band3Q" value="1.5"/>
+      <PARAM id="band4On" value="1.0"/>
+      <PARAM id="band4Shape" value="4.0"/>
+      <PARAM id="band4Freq" value="9000.0"/>
+      <PARAM id="band4Gain" value="0.0"/>
+      <PARAM id="band4Q" value="0.71"/>
+      <PARAM id="output" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEVICE key="builtin:utility" name="Mono Lows">
+    <DOJO_DEVICE type="builtin:utility" version="1">
+      <PARAM id="gain" value="0.0"/>
+      <PARAM id="width" value="100.0"/>
+      <PARAM id="mono" value="0.0"/>
+      <PARAM id="bassmono" value="1.0"/>
+      <PARAM id="bassfreq" value="150.0"/>
+      <PARAM id="phasel" value="0.0"/>
+      <PARAM id="phaser" value="0.0"/>
+      <PARAM id="channel" value="0.0"/>
+      <PARAM id="balance" value="0.0"/>
+      <PARAM id="mute" value="0.0"/>
+      <PARAM id="dc" value="0.0"/>
+      <EXTRA/>
+    </DOJO_DEVICE>
+  </DEVICE>
+</DOJO_PRESET>
