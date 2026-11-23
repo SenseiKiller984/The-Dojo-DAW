@@ -68,8 +68,26 @@ struct AudioEdits::Material
     double sampleRate = 44100.0;
     juce::int64 first = 0; ///< the sample of `from`
     juce::AudioBuffer<float> audio;
-    std::mutex lock; ///< (one render at a time)
+    std::mutex lock; ///< (one render at a time; guards what follows)
     pitch::Renderer pitch;
+    std::shared_ptr<const juce::AudioBuffer<float>> processed; ///< with the spectral edits
+    std::uint64_t processedKey = 0;
+    std::uint64_t pitchInputKey = 0; ///< what the pitch renderer's cache was made from
+
+    /** The audio with spectral operations applied (kept for the next time); the lock is held. Null if
+        cancelled. */
+    std::shared_ptr<const juce::AudioBuffer<float>> withSpectral(const std::vector<spectral::Operation>& ops, const std::atomic<bool>* cancel)
+    {
+        const auto key = spectral::keyOf(ops) + 1;
+        if (processed != nullptr && processedKey == key)
+            return processed;
+        auto result = std::make_shared<juce::AudioBuffer<float>>(spectral::apply(audio, sampleRate, ops, cancel));
+        if (cancel != nullptr && cancel->load())
+            return {};
+        processed = result;
+        processedKey = key;
+        return processed;
+    }
 
     static std::shared_ptr<Material> load(juce::AudioFormatManager& formats, const juce::File& source, double from, double to, juce::String& error)
     {
@@ -140,33 +158,77 @@ juce::ValueTree AudioEdits::clipOf(juce::ValueTree tree)
     return tree;
 }
 
-bool AudioEdits::analysePitch(const juce::ValueTree& clip, pitch::Mode mode, juce::String& error)
+bool AudioEdits::regionOf(const juce::ValueTree& clip, Region& region, juce::String& error) const
 {
     if (!clip.isValid() || !clip.hasType(ids::clip))
     {
-        error = "Pitch editing works on audio clips.";
+        error = "Audio editing works on audio clips.";
         return false;
     }
-    const auto source = audioedits::getSource(clip);
+    region.source = audioedits::getSource(clip);
     double fileLength = 0.0;
     {
-        std::unique_ptr<juce::AudioFormatReader> reader(assets_.getFormatManager().createReaderFor(source));
+        std::unique_ptr<juce::AudioFormatReader> reader(assets_.getFormatManager().createReaderFor(region.source));
         if (reader == nullptr || reader->sampleRate <= 0.0)
         {
-            error = "Could not read " + source.getFullPathName();
+            error = "Could not read " + region.source.getFullPathName();
             return false;
         }
         fileLength = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
     }
     const double s0 = clip::sourceAt(clip, 0.0);
     const double s1 = clip::sourceAt(clip, clip::getLoopLength(clip));
-    const double from = std::clamp(std::min(s0, s1) - 0.2, 0.0, fileLength);
-    const double to = std::clamp(std::max(s0, s1) + 0.2, 0.0, fileLength);
-    if (to - from < 0.05)
+    region.from = std::clamp(std::min(s0, s1) - 0.2, 0.0, fileLength);
+    region.to = std::clamp(std::max(s0, s1) + 0.2, 0.0, fileLength);
+    // (an edit keeps the part it was made on, while it covers the clip)
+    const auto edit = audioedits::getEdit(clip);
+    if (edit.isValid())
     {
-        error = "The clip plays too little of its file to analyse.";
+        const double from = static_cast<double>(edit.getProperty(ids::from, region.from));
+        const double to = static_cast<double>(edit.getProperty(ids::to, region.to));
+        if (from <= region.from + 1.0e-9 && to >= region.to - 1.0e-9)
+        {
+            region.from = from;
+            region.to = to;
+        }
+    }
+    if (region.to - region.from < 0.05)
+    {
+        error = "The clip plays too little of its file.";
         return false;
     }
+    return true;
+}
+
+std::shared_ptr<AudioEdits::Material> AudioEdits::materialFor(std::uint32_t clipId, const Region& region)
+{
+    const auto found = entries_.find(clipId);
+    if (found != entries_.end() && found->second.material != nullptr && found->second.material->covers(region.source, region.from, region.to))
+        return found->second.material;
+    return {};
+}
+
+std::vector<spectral::Operation> AudioEdits::spectralOperationsOf(const juce::ValueTree& clip)
+{
+    std::vector<spectral::Operation> ops;
+    const double from = audioedits::getFrom(clip);
+    for (const auto& op : audioedits::getSpectralOperations(clip))
+        ops.push_back(audioedits::toOperation(op, from));
+    return ops;
+}
+
+bool AudioEdits::analysePitch(const juce::ValueTree& clip, pitch::Mode mode, juce::String& error)
+{
+    Region region;
+    if (!regionOf(clip, region, error))
+        return false;
+    const auto source = region.source;
+    const double from = region.from;
+    const double to = region.to;
+    // (the spectral edits, at the times of this region)
+    std::vector<spectral::Operation> ops;
+    for (const auto& op : audioedits::getSpectralOperations(clip))
+        ops.push_back(audioedits::toOperation(op, from));
 
     const auto id = clip::getId(clip);
     auto& entry = entries_[id];
@@ -181,20 +243,26 @@ bool AudioEdits::analysePitch(const juce::ValueTree& clip, pitch::Mode mode, juc
     auto material = entry.material != nullptr && entry.material->covers(source, from, to) ? entry.material : nullptr;
 
     pool_.addJob([weak = juce::WeakReference<AudioEdits>(this), formats = &assets_.getFormatManager(), id, generation = entry.generation, cancel = entry.cancel,
-                  progress = entry.progress, material, source, from, to, mode]() mutable
+                  progress = entry.progress, material, source, from, to, mode, ops]() mutable
                  {
                      juce::String problem;
                      if (material == nullptr)
                          material = Material::load(*formats, source, from, to, problem);
                      std::vector<pitch::Note> notes;
-                     if (material != nullptr && !isCancelled(cancel))
+                     std::shared_ptr<const juce::AudioBuffer<float>> input;
+                     if (material != nullptr)
                      {
-                         const int count = material->audio.getNumSamples();
-                         const int channels = material->audio.getNumChannels();
+                         const std::lock_guard<std::mutex> lock(material->lock);
+                         input = material->withSpectral(ops, cancel.get());
+                     }
+                     if (input != nullptr && !isCancelled(cancel))
+                     {
+                         const int count = input->getNumSamples();
+                         const int channels = input->getNumChannels();
                          std::vector<float> mono(static_cast<std::size_t>(count), 0.0f);
                          for (int ch = 0; ch < channels; ++ch)
                          {
-                             const float* in = material->audio.getReadPointer(ch);
+                             const float* in = input->getReadPointer(ch);
                              for (int i = 0; i < count; ++i)
                                  mono[static_cast<std::size_t>(i)] += in[i] / static_cast<float>(channels);
                          }
@@ -265,10 +333,39 @@ void AudioEdits::removePitch(juce::ValueTree clip)
     auto edit = audioedits::getEdit(clip);
     if (!edit.isValid())
         return;
-    auto* um = &session_.getUndoManager();
     session_.beginTransaction("Remove Pitch Edits");
-    clip.setProperty(ids::file, audioedits::getSource(clip).getFullPathName(), um);
-    clip.removeChild(edit, um);
+    removePart(clip, edit.getChildWithName(ids::pitchEdit));
+}
+
+void AudioEdits::removeSpectralOperation(juce::ValueTree op)
+{
+    auto spectralTree = op.getParent();
+    const auto clip = clipOf(op);
+    if (!spectralTree.isValid() || !clip.isValid())
+        return;
+    session_.beginTransaction("Remove Spectral Edit");
+    if (spectralTree.getNumChildren() > 1)
+        spectralTree.removeChild(op, &session_.getUndoManager());
+    else
+        removePart(clip, spectralTree);
+}
+
+void AudioEdits::removePart(juce::ValueTree clip, juce::ValueTree part)
+{
+    auto edit = audioedits::getEdit(clip);
+    auto* um = &session_.getUndoManager();
+    // The last part: the whole edit goes, and the clip plays its own file.
+    int others = 0;
+    for (const auto& child : edit)
+        if (child != part && (child.hasType(ids::pitchEdit) || (child.hasType(ids::spectralEdit) && child.getNumChildren() > 0)))
+            ++others;
+    if (others == 0)
+    {
+        clip.setProperty(ids::file, audioedits::getSource(clip).getFullPathName(), um);
+        clip.removeChild(edit, um);
+    }
+    else if (part.isValid())
+        edit.removeChild(part, um);
 }
 
 void AudioEdits::setBypassed(juce::ValueTree clip, bool bypassed)
@@ -283,7 +380,7 @@ bool AudioEdits::isBypassed(const juce::ValueTree& clip) { return static_cast<bo
 
 bool AudioEdits::isBusy() const
 {
-    if (pendingLoads_ > 0)
+    if (pendingLoads_ > 0 || pendingSpectrograms_ > 0)
         return true;
     for (const auto& [id, entry] : entries_)
         if (entry.status == Status::analysing || entry.rendering || entry.dirty)
@@ -331,6 +428,131 @@ void AudioEdits::reset()
     sendChangeMessage();
 }
 
+// --- Spectral editing --------------------------------------------------------------------------------------
+
+juce::ValueTree AudioEdits::addSpectralOperation(juce::ValueTree clip, spectral::Operation op, const juce::String& undoName)
+{
+    Region region;
+    juce::String error;
+    if (!regionOf(clip, region, error))
+        return {};
+    auto* um = &session_.getUndoManager();
+    session_.beginTransaction(undoName);
+    auto edit = audioedits::getEdit(clip);
+    if (!edit.isValid())
+    {
+        juce::ValueTree fresh(ids::audioEdit);
+        fresh.setProperty(ids::source, region.source.getFullPathName(), nullptr);
+        fresh.setProperty(ids::from, region.from, nullptr);
+        fresh.setProperty(ids::to, region.to, nullptr);
+        fresh.appendChild(juce::ValueTree(ids::spectralEdit), nullptr);
+        clip.appendChild(fresh, um);
+        edit = fresh;
+    }
+    auto spectralTree = edit.getChildWithName(ids::spectralEdit);
+    if (!spectralTree.isValid())
+    {
+        spectralTree = juce::ValueTree(ids::spectralEdit);
+        edit.appendChild(spectralTree, um);
+    }
+    // Seconds of the clip to seconds of the source.
+    const double a = clip::sourceAt(clip, std::min(op.start, op.end));
+    const double b = clip::sourceAt(clip, std::max(op.start, op.end));
+    op.start = std::min(a, b);
+    op.end = std::max(a, b);
+    auto tree = audioedits::makeOperation(op);
+    spectralTree.appendChild(tree, um);
+    return tree;
+}
+
+std::vector<float> AudioEdits::learnNoise(const juce::ValueTree& clip, double clipStart, double clipEnd, juce::String& error)
+{
+    Region region;
+    if (!regionOf(clip, region, error))
+        return {};
+    auto material = materialFor(clip::getId(clip), region);
+    if (material == nullptr)
+    {
+        material = Material::load(assets_.getFormatManager(), region.source, region.from, region.to, error);
+        if (material == nullptr)
+            return {};
+        entries_[clip::getId(clip)].material = material;
+    }
+    const double a = clip::sourceAt(clip, std::min(clipStart, clipEnd)) - region.from;
+    const double b = clip::sourceAt(clip, std::max(clipStart, clipEnd)) - region.from;
+    if (b - a < 0.02)
+    {
+        error = "Select at least 20 ms of noise alone.";
+        return {};
+    }
+    return spectral::learnProfile(material->audio, material->sampleRate, a, b);
+}
+
+std::shared_ptr<const spectral::Spectrogram> AudioEdits::getSpectrogram(const juce::ValueTree& clip)
+{
+    Region region;
+    juce::String error;
+    if (!regionOf(clip, region, error))
+        return {};
+    std::vector<spectral::Operation> ops;
+    for (const auto& op : audioedits::getSpectralOperations(clip))
+        ops.push_back(audioedits::toOperation(op, region.from));
+    const auto id = clip::getId(clip);
+    auto& entry = entries_[id];
+    const auto key = static_cast<std::uint64_t>((region.source.getFullPathName() + ":" + juce::String(region.from) + ":" + juce::String(region.to) + ":"
+                                                  + juce::String(static_cast<juce::int64>(spectral::keyOf(ops))))
+                                                     .hashCode64());
+    if (entry.spectrogramKey == key || entry.spectrogramWanted == key)
+        return entry.spectrogram;
+    entry.spectrogramWanted = key;
+    ++pendingSpectrograms_;
+    pool_.addJob([weak = juce::WeakReference<AudioEdits>(this), formats = &assets_.getFormatManager(), id, key, region, ops,
+                  material = materialFor(id, region)]() mutable
+                 {
+                     juce::String problem;
+                     if (material == nullptr)
+                         material = Material::load(*formats, region.source, region.from, region.to, problem);
+                     std::shared_ptr<spectral::Spectrogram> result;
+                     if (material != nullptr)
+                     {
+                         std::shared_ptr<const juce::AudioBuffer<float>> input;
+                         {
+                             const std::lock_guard<std::mutex> lock(material->lock);
+                             input = material->withSpectral(ops, nullptr);
+                         }
+                         if (input != nullptr)
+                             result = std::make_shared<spectral::Spectrogram>(spectral::analyse(*input, material->sampleRate));
+                     }
+                     juce::MessageManager::callAsync([weak, id, key, material, result, from = region.from]
+                                                     {
+                                                         auto* self = weak.get();
+                                                         if (self == nullptr)
+                                                             return;
+                                                         --self->pendingSpectrograms_;
+                                                         auto& e = self->entries_[id];
+                                                         if (e.spectrogramWanted == key && result != nullptr)
+                                                         {
+                                                             e.spectrogram = result;
+                                                             e.spectrogramKey = key;
+                                                             e.spectrogramStart = from;
+                                                             if (e.material == nullptr && material != nullptr)
+                                                                 e.material = material;
+                                                         }
+                                                         if (e.spectrogramWanted == key)
+                                                             e.spectrogramWanted = 0;
+                                                         self->sendChangeMessage();
+                                                     });
+                     return juce::ThreadPoolJob::jobHasFinished;
+                 });
+    return entry.spectrogram;
+}
+
+double AudioEdits::getSpectrogramStart(const juce::ValueTree& clip) const
+{
+    const auto found = entries_.find(clip::getId(clip));
+    return found != entries_.end() ? found->second.spectrogramStart : 0.0;
+}
+
 // --- Rendering ---------------------------------------------------------------------------------------------
 
 void AudioEdits::markDirty(const juce::ValueTree& clip)
@@ -369,8 +591,10 @@ void AudioEdits::startRender(const juce::ValueTree& clip, Entry& entry)
     std::vector<pitch::Edit> edits;
     for (const auto& note : audioedits::getPitchNotes(clip))
         edits.push_back(audioedits::toEdit(note));
-    const bool anyEdit = std::any_of(edits.begin(), edits.end(), [](const pitch::Edit& e) { return e.edited(); });
-    if (isBypassed(clip) || !anyEdit)
+    const auto ops = spectralOperationsOf(clip);
+    const bool anyPitchEdit = std::any_of(edits.begin(), edits.end(), [](const pitch::Edit& e) { return e.edited(); });
+    const bool anySpectralEdit = std::any_of(ops.begin(), ops.end(), [](const spectral::Operation& o) { return o.enabled; });
+    if (isBypassed(clip) || (!anyPitchEdit && !anySpectralEdit))
     {
         play(clip, source);
         entry.status = Status::idle;
@@ -400,7 +624,7 @@ void AudioEdits::startRender(const juce::ValueTree& clip, Entry& entry)
     entry.problem.clear();
     pool_.addJob(
         [weak = juce::WeakReference<AudioEdits>(this), formats = &assets_.getFormatManager(), id = clip::getId(clip), generation = entry.generation,
-         cancel = entry.cancel, material, source, from, to, noteEdits = std::move(edits), options, target]() mutable
+         cancel = entry.cancel, material, source, from, to, noteEdits = std::move(edits), ops, options, target]() mutable
         {
             juce::String problem;
             if (material == nullptr)
@@ -410,7 +634,14 @@ void AudioEdits::startRender(const juce::ValueTree& clip, Entry& entry)
             {
                 const std::lock_guard<std::mutex> lock(material->lock);
                 juce::AudioBuffer<float> rendered;
-                if (material->pitch.render(material->audio, material->sampleRate, noteEdits, options, rendered, cancel.get()))
+                // The spectral edits first, then the pitch edits on what they leave.
+                const auto input = material->withSpectral(ops, cancel.get());
+                if (input != nullptr && material->pitchInputKey != material->processedKey)
+                {
+                    material->pitch.clear();
+                    material->pitchInputKey = material->processedKey;
+                }
+                if (input != nullptr && material->pitch.render(*input, material->sampleRate, noteEdits, options, rendered, cancel.get()))
                 {
                     // The whole source, with the analysed part replaced by its render.
                     std::unique_ptr<juce::AudioFormatReader> reader(formats->createReaderFor(source));
@@ -566,13 +797,15 @@ void AudioEdits::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Ide
 {
     if (property == ids::rendered)
         return;
-    if (tree.hasType(ids::pitchNote) || tree.hasType(ids::pitchEdit) || tree.hasType(ids::audioEdit))
+    if (tree.hasType(ids::pitchNote) || tree.hasType(ids::pitchEdit) || tree.hasType(ids::audioEdit) || tree.hasType(ids::spectralEdit)
+        || tree.hasType(ids::spectralOp))
         markDirty(clipOf(tree));
 }
 
 void AudioEdits::valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child)
 {
-    if (child.hasType(ids::audioEdit) || child.hasType(ids::pitchEdit) || child.hasType(ids::pitchNote))
+    if (child.hasType(ids::audioEdit) || child.hasType(ids::pitchEdit) || child.hasType(ids::pitchNote) || child.hasType(ids::spectralEdit)
+        || child.hasType(ids::spectralOp))
         markDirty(clipOf(parent));
 }
 
@@ -598,7 +831,7 @@ void AudioEdits::valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree&
         sendChangeMessage();
         return;
     }
-    if (child.hasType(ids::pitchEdit) || child.hasType(ids::pitchNote))
+    if (child.hasType(ids::pitchEdit) || child.hasType(ids::pitchNote) || child.hasType(ids::spectralEdit) || child.hasType(ids::spectralOp))
         markDirty(clipOf(parent));
 }
 
@@ -642,6 +875,107 @@ std::vector<juce::ValueTree> getPitchNotes(const juce::ValueTree& clip)
             notes.push_back(n);
     return notes;
 }
+
+juce::ValueTree getSpectral(const juce::ValueTree& clip) { return getEdit(clip).getChildWithName(ids::spectralEdit); }
+
+std::vector<juce::ValueTree> getSpectralOperations(const juce::ValueTree& clip)
+{
+    std::vector<juce::ValueTree> ops;
+    for (const auto& op : getSpectral(clip))
+        if (op.hasType(ids::spectralOp))
+            ops.push_back(op);
+    return ops;
+}
+
+juce::String kindName(spectral::Kind kind)
+{
+    switch (kind)
+    {
+        case spectral::Kind::gain: return "gain";
+        case spectral::Kind::erase: return "erase";
+        case spectral::Kind::repair: return "repair";
+        case spectral::Kind::denoise: return "denoise";
+        case spectral::Kind::dehum: return "dehum";
+    }
+    return "gain";
+}
+
+spectral::Operation toOperation(const juce::ValueTree& op, double from)
+{
+    spectral::Operation o;
+    const auto kind = op.getProperty(ids::kind).toString();
+    for (const auto k : {spectral::Kind::gain, spectral::Kind::erase, spectral::Kind::repair, spectral::Kind::denoise, spectral::Kind::dehum})
+        if (kind == kindName(k))
+            o.kind = k;
+    o.start = static_cast<double>(op.getProperty(ids::start, 0.0)) - from;
+    o.end = static_cast<double>(op.getProperty(ids::end, 0.0)) - from;
+    o.low = static_cast<double>(op.getProperty(ids::low, 0.0));
+    o.high = static_cast<double>(op.getProperty(ids::high, 1.0e6));
+    o.gainDb = static_cast<double>(op.getProperty(ids::gain, -12.0));
+    o.amount = static_cast<double>(op.getProperty(ids::amount, 1.0));
+    o.profile = decodeCurve(op.getProperty(ids::profile));
+    o.reductionDb = static_cast<double>(op.getProperty(ids::reduction, 18.0));
+    o.sensitivity = static_cast<double>(op.getProperty(ids::sensitivity, 1.5));
+    o.humHz = static_cast<double>(op.getProperty(ids::hum, 0.0));
+    o.harmonics = static_cast<int>(op.getProperty(ids::harmonics, 8));
+    o.depthDb = static_cast<double>(op.getProperty(ids::depth, 40.0));
+    o.enabled = static_cast<bool>(op.getProperty(ids::enabled, true));
+    return o;
+}
+
+juce::ValueTree makeOperation(const spectral::Operation& o)
+{
+    juce::ValueTree op(ids::spectralOp);
+    op.setProperty(ids::kind, kindName(o.kind), nullptr);
+    op.setProperty(ids::start, o.start, nullptr);
+    op.setProperty(ids::end, o.end, nullptr);
+    op.setProperty(ids::low, o.low, nullptr);
+    op.setProperty(ids::high, o.high, nullptr);
+    op.setProperty(ids::amount, o.amount, nullptr);
+    switch (o.kind)
+    {
+        case spectral::Kind::gain:
+            op.setProperty(ids::gain, o.gainDb, nullptr);
+            break;
+        case spectral::Kind::denoise:
+            op.setProperty(ids::profile, encodeCurve(o.profile), nullptr);
+            op.setProperty(ids::reduction, o.reductionDb, nullptr);
+            op.setProperty(ids::sensitivity, o.sensitivity, nullptr);
+            break;
+        case spectral::Kind::dehum:
+            op.setProperty(ids::hum, o.humHz, nullptr);
+            op.setProperty(ids::harmonics, o.harmonics, nullptr);
+            op.setProperty(ids::depth, o.depthDb, nullptr);
+            break;
+        case spectral::Kind::erase:
+        case spectral::Kind::repair:
+            break;
+    }
+    if (!o.enabled)
+        op.setProperty(ids::enabled, false, nullptr);
+    return op;
+}
+
+juce::String describe(const juce::ValueTree& op)
+{
+    const auto o = toOperation(op, 0.0);
+    const auto hz = [](double f) { return f >= 1000.0 ? juce::String(f / 1000.0, 1) + "k" : juce::String(juce::roundToInt(f)); };
+    juce::String text;
+    switch (o.kind)
+    {
+        case spectral::Kind::gain: text << (o.gainDb >= 0.0 ? "Boost " : "Attenuate ") << juce::String(o.gainDb, 1) << " dB"; break;
+        case spectral::Kind::erase: text << "Erase"; break;
+        case spectral::Kind::repair: text << "Repair"; break;
+        case spectral::Kind::denoise: text << "De-noise " << juce::roundToInt(o.reductionDb) << " dB"; break;
+        case spectral::Kind::dehum: text << "De-hum " << (o.humHz > 0.0 ? juce::String(juce::roundToInt(o.humHz)) + " Hz" : juce::String("auto")); break;
+    }
+    text << "   " << juce::String(o.start, 2) << "-" << juce::String(o.end, 2) << " s";
+    if (o.kind != spectral::Kind::dehum && (o.low > 1.0 || o.high < 20000.0))
+        text << "   " << hz(o.low) << "-" << hz(std::min(o.high, 99000.0)) << " Hz";
+    return text;
+}
+
+void setOperationEnabled(juce::ValueTree op, bool enabled, juce::UndoManager* um) { op.setProperty(ids::enabled, enabled, um); }
 
 pitch::Edit toEdit(const juce::ValueTree& note)
 {

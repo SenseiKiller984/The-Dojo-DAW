@@ -1487,6 +1487,7 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     , score_(project.getSession())
     , inspector_(project.getSession())
     , pitch_(project)
+    , spectral_(project)
 {
     setOpaque(true);
 
@@ -1577,7 +1578,7 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     score_.onPreview = preview;
 
     // An ARA plug-in's editor (Melodyne, VocAlign...) for the clips its track plays, or the inspector.
-    for (auto* b : {&araButton_, &clipButton_, &pitchButton_})
+    for (auto* b : {&araButton_, &clipButton_, &pitchButton_, &spectralButton_})
     {
         b->setRadioGroupId(4243);
         b->setClickingTogglesState(true);
@@ -1591,7 +1592,10 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     araButton_.onClick = [this] { showAudioView(AudioView::plugin); };
     clipButton_.onClick = [this] { showAudioView(AudioView::inspector); };
     pitchButton_.onClick = [this] { showAudioView(AudioView::pitch); };
+    spectralButton_.setTooltip("Spectral editing: the clip's spectrogram; attenuate, erase or repair regions, de-noise, de-hum");
+    spectralButton_.onClick = [this] { showAudioView(AudioView::spectral); };
     addChildComponent(pitch_);
+    addChildComponent(spectral_);
     araNote_.setFont(theme::sans(12.0f));
     araNote_.setColour(juce::Label::textColourId, theme::colour::textSecondary);
     addChildComponent(araNote_);
@@ -1619,6 +1623,8 @@ void ClipEditor::setPlayhead(double seconds)
         score_.setPlayhead(seconds);
     if (pitch_.isVisible())
         pitch_.setPlayhead(seconds);
+    if (spectral_.isVisible())
+        spectral_.setPlayhead(seconds);
 }
 
 void ClipEditor::showAudioView(AudioView view)
@@ -1669,9 +1675,11 @@ void ClipEditor::showClip()
     araButton_.setVisible(araClip);
     clipButton_.setVisible(audio);
     pitchButton_.setVisible(audio);
+    spectralButton_.setVisible(audio);
     araButton_.setToggleState(view == AudioView::plugin, juce::dontSendNotification);
     clipButton_.setToggleState(view == AudioView::inspector, juce::dontSendNotification);
     pitchButton_.setToggleState(view == AudioView::pitch, juce::dontSendNotification);
+    spectralButton_.setToggleState(view == AudioView::spectral, juce::dontSendNotification);
     if (araClip)
     {
         juce::String note = ara.plugin + ": " + juce::String(ara.regions) + (ara.regions == 1 ? " clip" : " clips") + " on this track";
@@ -1680,7 +1688,7 @@ void ClipEditor::showClip()
         araNote_.setText(note, juce::dontSendNotification);
         project_.getAra().showSelection(session::track::getId(track), {session::clip::getId(clip_)});
     }
-    araNote_.setVisible(araClip && view != AudioView::pitch);
+    araNote_.setVisible(araClip && view != AudioView::pitch && view != AudioView::spectral);
 
     pianoRoll_.setClip(midi ? clip_ : juce::ValueTree());
     steps_.setClip(midi ? clip_ : juce::ValueTree());
@@ -1693,6 +1701,8 @@ void ClipEditor::showClip()
     pitch_.setClip(audio ? clip_ : juce::ValueTree());
     inspector_.setVisible(audio && view == AudioView::inspector);
     pitch_.setVisible(audio && view == AudioView::pitch);
+    spectral_.setVisible(audio && view == AudioView::spectral);
+    spectral_.setClip(audio && view == AudioView::spectral ? clip_ : juce::ValueTree());
 
     for (auto* c : std::initializer_list<juce::Component*>{&notesButton_, &stepsButton_, &scoreButton_})
         c->setVisible(midi);
@@ -1737,6 +1747,7 @@ void ClipEditor::resized()
         araButton_.setBounds(araBar.removeFromLeft(56));
         clipButton_.setBounds(araBar.removeFromLeft(56));
         pitchButton_.setBounds(araBar.removeFromLeft(60));
+        spectralButton_.setBounds(araBar.removeFromLeft(80));
         araBar.removeFromLeft(12);
         araNote_.setBounds(araBar);
     }
@@ -1760,6 +1771,7 @@ void ClipEditor::resized()
     score_.setBounds(area);
     inspector_.setBounds(area);
     pitch_.setBounds(area);
+    spectral_.setBounds(area);
     if (araEditor_ != nullptr)
         araEditor_->setBounds(area);
 }

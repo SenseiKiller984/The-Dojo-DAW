@@ -54,6 +54,8 @@ add_library(dojo_ui STATIC
     components/InlineValueEditor.h
     components/PitchEditor.cpp
     components/PitchEditor.h
+    components/SpectralEditor.cpp
+    components/SpectralEditor.h
     components/MixerPanel.cpp
     components/MixerPanel.h
     components/StatusBar.cpp

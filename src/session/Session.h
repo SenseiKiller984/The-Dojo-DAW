@@ -47,6 +47,10 @@ using engine::TrackKind;
                   PNOTE       start, end, pitch (as analysed; seconds from `from`, MIDI), hop, driftCurve,
                               levelCurve (base64 float32 every `hop`), newStart, newEnd, newPitch, drift
                               (0..2 of the drift kept), gainDb
+                SPECTRAL
+                  SPOP        kind (gain|erase|repair|denoise|dehum), start, end (seconds of the source),
+                              low, high (Hz), gainDb, amount (0..1), profile (denoise: base64 float32 per
+                              bin), reduction, sensitivity, hum (Hz; 0 found), harmonics, depth, enabled
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
                         (and rating, groups, looped, loopLength, syncPoint, userNamed)
             MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above),
@@ -252,6 +256,18 @@ inline const juce::Identifier drift        {"drift"};
 inline const juce::Identifier hop          {"hop"};
 inline const juce::Identifier driftCurve   {"driftCurve"};
 inline const juce::Identifier levelCurve   {"levelCurve"};
+inline const juce::Identifier spectralEdit {"SPECTRAL"};
+inline const juce::Identifier spectralOp   {"SPOP"};
+inline const juce::Identifier low          {"low"};
+inline const juce::Identifier high         {"high"};
+inline const juce::Identifier amount       {"amount"};
+inline const juce::Identifier profile      {"profile"};
+inline const juce::Identifier reduction    {"reduction"};
+inline const juce::Identifier sensitivity  {"sensitivity"};
+inline const juce::Identifier hum          {"hum"};
+inline const juce::Identifier harmonics    {"harmonics"};
+inline const juce::Identifier depth        {"depth"};
+inline const juce::Identifier enabled      {"enabled"};
 // clang-format on
 } // namespace ids
 

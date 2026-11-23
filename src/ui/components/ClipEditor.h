@@ -4,6 +4,7 @@
 #include "session/Project.h"
 #include "ui/EditorState.h"
 #include "ui/components/PitchEditor.h"
+#include "ui/components/SpectralEditor.h"
 #include "ui/score/ScoreView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -279,12 +280,15 @@ public:
     [[nodiscard]] StepSequencer& getStepSequencer() noexcept { return steps_; }
     [[nodiscard]] ScoreView& getScoreView() noexcept { return score_; }
     [[nodiscard]] PitchEditor& getPitchEditor() noexcept { return pitch_; }
-    /** An audio clip's view: its ARA plug-in's editor (when it has one), CLIP (its settings) or PITCH. */
+    [[nodiscard]] SpectralEditor& getSpectralEditor() noexcept { return spectral_; }
+    /** An audio clip's view: its ARA plug-in's editor (when it has one), CLIP (its settings), PITCH or
+        SPECTRAL. */
     enum class AudioView
     {
         plugin,
         inspector,
         pitch,
+        spectral,
     };
     void showAudioView(AudioView view);
     /** NOTES, STEPS or SCORE (as their buttons). */
@@ -331,11 +335,13 @@ private:
     ScoreView score_;
     AudioClipInspector inspector_;
     PitchEditor pitch_;
+    SpectralEditor spectral_;
     MidiView midiView_ = MidiView::notes;
 
     juce::TextButton araButton_{"ARA"};
     juce::TextButton clipButton_{"CLIP"};
     juce::TextButton pitchButton_{"PITCH"};
+    juce::TextButton spectralButton_{"SPECTRAL"};
     juce::Label araNote_;                               ///< the plug-in and its regions, or why there is no editor
     std::unique_ptr<juce::AudioProcessorEditor> araEditor_;
     std::uint32_t araDevice_ = 0;                       ///< whose editor it is
