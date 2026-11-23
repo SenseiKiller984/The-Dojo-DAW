@@ -42,7 +42,9 @@ using engine::TrackKind;
                         autoNameSuffix (Auto Rename), take (the take lane a comp clip was comped from)
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
                         (and rating, groups, looped, loopLength, syncPoint, userNamed)
-            MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above)
+            MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above),
+                        scoreClef (automatic|treble|bass|grand), scoreKey (fifths; none: detected),
+                        scoreGrid (beats): how the score editor shows it
               NOTE        start, length (beats, relative to the clip content), note, velocity, channel,
                           mpePitch / mpePressure / mpeSlide (per-note expression: "beat:value;..." with
                           beats from the note's start; pitch in semitones, pressure and slide 0..1)
@@ -222,6 +224,9 @@ inline const juce::Identifier bend         {"bend"};
 inline const juce::Identifier bar          {"bar"};
 inline const juce::Identifier numerator    {"numerator"};
 inline const juce::Identifier denominator  {"denominator"};
+inline const juce::Identifier scoreClef    {"scoreClef"};
+inline const juce::Identifier scoreKey     {"scoreKey"};
+inline const juce::Identifier scoreGrid    {"scoreGrid"};
 // clang-format on
 } // namespace ids
 

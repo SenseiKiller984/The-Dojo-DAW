@@ -1484,13 +1484,16 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     , editor_(editor)
     , pianoRoll_(project.getSession(), editor)
     , steps_(project, editor)
+    , score_(project.getSession())
     , inspector_(project.getSession())
 {
     setOpaque(true);
 
     notesButton_.setButtonText("NOTES");
     stepsButton_.setButtonText("STEPS");
-    for (auto* b : {&notesButton_, &stepsButton_})
+    scoreButton_.setButtonText("SCORE");
+    scoreButton_.setTooltip("The clip in staff notation: write and edit notes on the staff, export MusicXML");
+    for (auto* b : {&notesButton_, &stepsButton_, &scoreButton_})
     {
         b->setRadioGroupId(4242);
         b->setClickingTogglesState(true);
@@ -1498,16 +1501,9 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
         addAndMakeVisible(b);
     }
     notesButton_.setToggleState(true, juce::dontSendNotification);
-    notesButton_.onClick = [this]
-    {
-        showSteps_ = false;
-        showClip();
-    };
-    stepsButton_.onClick = [this]
-    {
-        showSteps_ = true;
-        showClip();
-    };
+    notesButton_.onClick = [this] { showMidiView(MidiView::notes); };
+    stepsButton_.onClick = [this] { showMidiView(MidiView::steps); };
+    scoreButton_.onClick = [this] { showMidiView(MidiView::score); };
 
     const std::array<std::pair<const char*, double>, 7> grids{{{"1/4", 1.0}, {"1/8", 0.5}, {"1/16", 0.25}, {"1/32", 0.125},
                                                                {"1/8T", 1.0 / 3.0}, {"1/16T", 1.0 / 6.0}, {"1 bar", 4.0}}};
@@ -1565,6 +1561,7 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
 
     addChildComponent(pianoRoll_);
     addChildComponent(steps_);
+    addChildComponent(score_);
     addChildComponent(inspector_);
     const auto preview = [this](const juce::MidiMessage& message)
     {
@@ -1576,6 +1573,7 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     };
     pianoRoll_.onPreview = preview;
     steps_.onPreview = preview;
+    score_.onPreview = preview;
 
     // An ARA plug-in's editor (Melodyne, VocAlign...) for the clips its track plays, or the inspector.
     for (auto* b : {&araButton_, &clipButton_})
@@ -1621,6 +1619,17 @@ void ClipEditor::setPlayhead(double seconds)
     pianoRoll_.setPlayhead(seconds);
     if (steps_.isVisible())
         steps_.setPlayhead(seconds);
+    if (score_.isVisible())
+        score_.setPlayhead(seconds);
+}
+
+void ClipEditor::showMidiView(MidiView view)
+{
+    midiView_ = view;
+    notesButton_.setToggleState(view == MidiView::notes, juce::dontSendNotification);
+    stepsButton_.setToggleState(view == MidiView::steps, juce::dontSendNotification);
+    scoreButton_.setToggleState(view == MidiView::score, juce::dontSendNotification);
+    showClip();
 }
 
 void ClipEditor::editorStateChanged()
@@ -1668,17 +1677,20 @@ void ClipEditor::showClip()
 
     pianoRoll_.setClip(midi ? clip_ : juce::ValueTree());
     steps_.setClip(midi ? clip_ : juce::ValueTree());
+    score_.setClip(midi ? clip_ : juce::ValueTree());
     inspector_.setClip(audio ? clip_ : juce::ValueTree());
 
-    pianoRoll_.setVisible(midi && !showSteps_);
-    steps_.setVisible(midi && showSteps_);
+    pianoRoll_.setVisible(midi && midiView_ == MidiView::notes);
+    steps_.setVisible(midi && midiView_ == MidiView::steps);
+    score_.setVisible(midi && midiView_ == MidiView::score);
     inspector_.setVisible(audio && (!araClip || showInspector_));
 
-    for (auto* c : std::initializer_list<juce::Component*>{&notesButton_, &stepsButton_, &gridBox_})
+    for (auto* c : std::initializer_list<juce::Component*>{&notesButton_, &stepsButton_, &scoreButton_})
         c->setVisible(midi);
+    gridBox_.setVisible(midi && midiView_ != MidiView::score);
     for (auto* c : std::initializer_list<juce::Component*>{&laneBox_, &quantiseButton_, &strengthSlider_, &endsToggle_})
-        c->setVisible(midi && !showSteps_);
-    baseNoteBox_.setVisible(midi && showSteps_ && !steps_.usesDrumRack());
+        c->setVisible(midi && midiView_ == MidiView::notes);
+    baseNoteBox_.setVisible(midi && midiView_ == MidiView::steps && !steps_.usesDrumRack());
     resized();
     repaint();
 }
@@ -1720,6 +1732,7 @@ void ClipEditor::resized()
     }
     notesButton_.setBounds(toolbar.removeFromLeft(64));
     stepsButton_.setBounds(toolbar.removeFromLeft(64));
+    scoreButton_.setBounds(toolbar.removeFromLeft(64));
     toolbar.removeFromLeft(10);
     gridBox_.setBounds(toolbar.removeFromLeft(80));
     toolbar.removeFromLeft(10);
@@ -1734,6 +1747,7 @@ void ClipEditor::resized()
 
     pianoRoll_.setBounds(area);
     steps_.setBounds(area);
+    score_.setBounds(area);
     inspector_.setBounds(area);
     if (araEditor_ != nullptr)
         araEditor_->setBounds(area);

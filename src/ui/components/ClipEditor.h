@@ -3,6 +3,7 @@
 #include "engine/EngineController.h"
 #include "session/Project.h"
 #include "ui/EditorState.h"
+#include "ui/score/ScoreView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -275,6 +276,16 @@ public:
     std::function<void(std::uint32_t trackId, const juce::MidiMessage&)> onPreviewMidi;
     [[nodiscard]] PianoRoll& getPianoRoll() noexcept { return pianoRoll_; }
     [[nodiscard]] StepSequencer& getStepSequencer() noexcept { return steps_; }
+    [[nodiscard]] ScoreView& getScoreView() noexcept { return score_; }
+    /** NOTES, STEPS or SCORE (as their buttons). */
+    enum class MidiView
+    {
+        notes,
+        steps,
+        score,
+    };
+    void showMidiView(MidiView view);
+    [[nodiscard]] MidiView getMidiView() const noexcept { return midiView_; }
     /** The ARA plug-in's editor shown for the clip (null when there is none). */
     [[nodiscard]] juce::AudioProcessorEditor* getAraEditor() const noexcept { return araEditor_.get(); }
 
@@ -296,6 +307,7 @@ private:
 
     juce::TextButton notesButton_;
     juce::TextButton stepsButton_;
+    juce::TextButton scoreButton_;
     juce::ComboBox gridBox_;
     juce::ComboBox laneBox_;
     juce::TextButton quantiseButton_;
@@ -306,8 +318,9 @@ private:
     std::uint32_t previewTrack_ = 0; ///< the track the previewed note plays on
     PianoRoll pianoRoll_;
     StepSequencer steps_;
+    ScoreView score_;
     AudioClipInspector inspector_;
-    bool showSteps_ = false;
+    MidiView midiView_ = MidiView::notes;
 
     juce::TextButton araButton_{"ARA"};
     juce::TextButton clipButton_{"CLIP"};

@@ -68,6 +68,12 @@ add_library(dojo_ui STATIC
     devices/ConsoleLookAndFeel.h
     devices/HardwarePainting.cpp
     devices/HardwarePainting.h
+    score/MusicXml.cpp
+    score/MusicXml.h
+    score/Notation.cpp
+    score/Notation.h
+    score/ScoreView.cpp
+    score/ScoreView.h
     surfaces/ControlSurfaces.cpp
     surfaces/ControlSurfaces.h
     surfaces/DevicePorts.h
