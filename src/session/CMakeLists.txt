@@ -3,6 +3,12 @@ add_library(dojo_session STATIC
     AdmOscBridge.h
     AraHost.cpp
     AraHost.h
+    audioedit/PitchAnalysis.cpp
+    audioedit/PitchAnalysis.h
+    audioedit/PitchRender.cpp
+    audioedit/PitchRender.h
+    audioedit/Stft.cpp
+    audioedit/Stft.h
     AudioAssetCache.cpp
     AudioAssetCache.h
     DeviceManager.cpp

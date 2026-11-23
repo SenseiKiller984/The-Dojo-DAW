@@ -37,6 +37,7 @@ add_executable(dojo_tests
     LfoTests.cpp
     LimiterTests.cpp
     MidiEffectTests.cpp
+    PitchEditTests.cpp
     PluginTests.cpp
     PreferencesTests.cpp
     PresetChainTests.cpp
