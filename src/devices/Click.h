@@ -76,7 +76,7 @@ private:
     };
     Voice voice_;
     juce::Random random_{0x5eed};
-    long long lastTick_ = -1; ///< index of the last tick played (in subdivisions), to never play one twice
+    double lastTickPpq_ = -1.0e18; ///< the last tick played (quarter notes), so a block edge never doubles it
 };
 
 } // namespace dojo::devices

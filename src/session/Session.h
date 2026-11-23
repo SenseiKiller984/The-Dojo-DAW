@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/TempoMap.h"
 #include "core/WarpMap.h"
 #include "engine/RenderGraph.h"
 
@@ -8,6 +9,8 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -52,6 +55,11 @@ using engine::TrackKind;
             TAKELANE    id, name: a take lane (playlist) holding takes, CLIP / MIDICLIP children that do
                         not play; the comp (what plays) is the track's own clips
             TRACK ...   (folders contain tracks)
+          TEMPOMAP      shape, bend (how the start tempo, `tempo`, goes to the first change)
+            TEMPO         beat (quarter notes from the start), bpm, shape (jump|linear|curve), bend (-1..1):
+                          a tempo change, holding or ramping to the next
+            SIGNATURE     bar (1-based), numerator, denominator: a time signature from that bar on
+                          (4/4 from bar 1 unless one is given there)
           CLIPGROUPS    the clip groups: CLIPGROUP id, name
           ARA_DOCUMENTS the ARA plug-ins' documents (their edits): ARA_DOCUMENT factory (the plug-in's
                         ARA factory id), archive (base64), written when the session is saved
@@ -59,8 +67,10 @@ using engine::TrackKind;
                         imported or recorded file): CLIP / MIDICLIP / VIDEOCLIP, start 0
           AUTONAMES     Auto Rename counters: AUTONAME name (the root), next
 
-    Timeline times are in seconds; MIDI content is in beats (quarter notes). A folder is a bus track
-    whose child tracks are summed into it.
+    Timeline times are in seconds; MIDI content is in beats (quarter notes). The tempo map relates
+    the two: MIDI clips keep their place in bars when it changes (their start and length in seconds
+    follow), audio and video clips and automation keep their time. A folder is a bus track whose
+    child tracks are summed into it.
 */
 namespace ids
 {
@@ -203,6 +213,15 @@ inline const juce::Identifier sourceLeft   {"sourceLeft"};
 inline const juce::Identifier sourceRight  {"sourceRight"};
 inline const juce::Identifier visible      {"visible"};
 inline const juce::Identifier time         {"time"};
+inline const juce::Identifier tempoMap     {"TEMPOMAP"};
+inline const juce::Identifier tempoPoint   {"TEMPO"};
+inline const juce::Identifier signature    {"SIGNATURE"};
+inline const juce::Identifier bpm          {"bpm"};
+inline const juce::Identifier shape        {"shape"};
+inline const juce::Identifier bend         {"bend"};
+inline const juce::Identifier bar          {"bar"};
+inline const juce::Identifier numerator    {"numerator"};
+inline const juce::Identifier denominator  {"denominator"};
 // clang-format on
 } // namespace ids
 
@@ -623,6 +642,9 @@ class Session final
 {
 public:
     Session();
+    ~Session();
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
 
     [[nodiscard]] juce::ValueTree& getState() noexcept { return state_; }
     [[nodiscard]] const juce::ValueTree& getState() const noexcept { return state_; }
@@ -632,8 +654,47 @@ public:
     void beginTransaction(const juce::String& name) { undo_.beginNewTransaction(name); }
 
     // --- Global ----------------------------------------------------------------------------------
+    /** The start tempo (at the beginning of the timeline; the project tempo without tempo changes). */
     [[nodiscard]] double getTempo() const;
+    /** Sets the start tempo. MIDI clips keep their bars (undoable). */
     void setTempo(double bpm);
+
+    // --- Tempo map -------------------------------------------------------------------------------
+    /** The timeline's tempo points and time signatures (built from the tree, cached until it changes).
+        The reference is good until the next change to the tempo map; keep getTempoMapShared() across
+        edits. */
+    [[nodiscard]] const time::TempoMap& getTempoMap() const;
+    [[nodiscard]] std::shared_ptr<const time::TempoMap> getTempoMapShared() const;
+    [[nodiscard]] double secondsAtBeat(double beat) const { return getTempoMap().secondsAt(beat); }
+    [[nodiscard]] double beatAtSeconds(double seconds) const { return getTempoMap().beatAt(seconds); }
+    [[nodiscard]] double getTempoAt(double seconds) const { return getTempoMap().bpmAt(seconds); }
+    [[nodiscard]] time::TimeSignature getSignatureAt(double seconds) const { return getTempoMap().signatureAt(beatAtSeconds(seconds)); }
+    /** The TEMPOMAP node (created on demand). */
+    [[nodiscard]] juce::ValueTree getTempoMapNode();
+    /** The tempo changes after the start (TEMPO nodes, by beat) and the signatures (SIGNATURE, by bar). */
+    [[nodiscard]] std::vector<juce::ValueTree> getTempoChanges() const;
+    [[nodiscard]] std::vector<juce::ValueTree> getSignatureChanges() const;
+    /** How the start tempo goes to the first change. */
+    [[nodiscard]] time::TempoShape getStartTempoShape() const;
+    [[nodiscard]] double getStartTempoBend() const;
+    void setStartTempoShape(time::TempoShape shape, double bend);
+    /** Adds a tempo change at `beat` (> 0), or sets the one already there. Undoable; MIDI clips keep
+        their bars. */
+    juce::ValueTree addTempoChange(double beat, double bpm, time::TempoShape shape = time::TempoShape::jump, double bend = 0.0);
+    /** Moves a tempo change and/or sets its tempo (beat > 0). */
+    void setTempoChange(juce::ValueTree change, double beat, double bpm);
+    void setTempoChangeShape(juce::ValueTree change, time::TempoShape shape, double bend);
+    void removeTempoChange(juce::ValueTree change);
+    /** The tempo in effect at `seconds` set to `bpm`: the start tempo or the change before it. */
+    void setTempoAt(double seconds, double bpm);
+    /** A time signature from `bar` (1-based) on, or sets the one there. Undoable. */
+    juce::ValueTree addSignatureChange(int bar, int numerator, int denominator);
+    void setSignatureChange(juce::ValueTree change, int bar, int numerator, int denominator);
+    void removeSignatureChange(juce::ValueTree change);
+    /** The signature in effect at `seconds` set: the one at the start of its run (bar 1 if none). */
+    void setSignatureAt(double seconds, int numerator, int denominator);
+    /** Removes every tempo change and signature change (the start tempo stays). */
+    void clearTempoMap();
     [[nodiscard]] double getMasterVolumeDb() const;
     void setMasterVolumeDb(double db);
     /** The master's channel format (stereo, or a multichannel format for surround mixes; never mono).
@@ -1016,9 +1077,25 @@ private:
     std::uint32_t allocateId();
     void reassignIds(juce::ValueTree tree);
     juce::ValueTree insertTrackTree(juce::ValueTree track, int index);
+    /** Runs a tempo map edit; MIDI clips (not time-locked) keep their bars across it. */
+    void editTempoMap(const std::function<void()>& edit);
+
+    /** Drops the cached tempo map when the tree's tempo or tempo map changes (undo included). */
+    struct TempoMapWatcher final : juce::ValueTree::Listener
+    {
+        explicit TempoMapWatcher(Session& s) : owner(s) {}
+        void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property) override;
+        void valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child) override;
+        void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree& child, int) override;
+        void valueTreeChildOrderChanged(juce::ValueTree&, int, int) override {}
+        void valueTreeRedirected(juce::ValueTree&) override { owner.tempoMap_.reset(); }
+        Session& owner;
+    };
 
     juce::ValueTree state_;
     juce::UndoManager undo_{30000, 300};
+    mutable std::shared_ptr<const time::TempoMap> tempoMap_;
+    TempoMapWatcher tempoMapWatcher_{*this};
 };
 
 } // namespace dojo::session

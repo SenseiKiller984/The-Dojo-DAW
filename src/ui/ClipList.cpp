@@ -669,12 +669,40 @@ int exportClips(const Session& session, const std::vector<Item>& items, const ju
         }
         else if (item.kind == Kind::midi)
         {
-            // The notes the clip plays, from its start, at the session tempo.
+            // The notes the clip plays, from its start, with the tempo map from where the clip is
+            // (its tempo changes, ramps in sixteenth-note steps, and time signatures).
             constexpr int ticksPerBeat = 960;
+            const auto map = session.getTempoMapShared();
+            const double clipBeat = map->beatAt(clip::getStart(item.clip));
+            const double clipBeats = map->beatAt(clip::getEnd(item.clip)) - clipBeat;
             const double from = clip::getOffset(item.clip);
-            const double to = from + clip::getLength(item.clip) * session.getTempo() / 60.0;
+            const double to = from + clipBeats;
             juce::MidiMessageSequence sequence;
-            sequence.addEvent(juce::MidiMessage::tempoMetaEvent(juce::roundToInt(60'000'000.0 / session.getTempo())), 0.0);
+            const auto tempoEvent = [&](double beat)
+            {
+                const double bpm = map->bpmAtBeat(clipBeat + beat);
+                sequence.addEvent(juce::MidiMessage::tempoMetaEvent(juce::roundToInt(60'000'000.0 / bpm)), beat * ticksPerBeat);
+            };
+            tempoEvent(0.0);
+            const auto& points = map->getPoints();
+            for (std::size_t i = 0; i < points.size(); ++i)
+            {
+                const double at = points[i].beat - clipBeat;
+                const double next = i + 1 < points.size() ? points[i + 1].beat - clipBeat : clipBeats;
+                if (points[i].shape != time::TempoShape::jump && i + 1 < points.size())
+                    for (double b = std::max(0.0, at) + 0.25; b < std::min(next, clipBeats); b += 0.25)
+                        tempoEvent(b);
+                if (at > 0.0 && at < clipBeats)
+                    tempoEvent(at);
+            }
+            for (auto bar = map->barAt(clipBeat); map->beatOfBar(bar) < clipBeat + clipBeats; ++bar)
+                if (bar == map->barAt(clipBeat) || map->signatureOfBar(bar).numerator != map->signatureOfBar(bar - 1).numerator
+                    || map->signatureOfBar(bar).denominator != map->signatureOfBar(bar - 1).denominator)
+                {
+                    const auto signature = map->signatureOfBar(bar);
+                    sequence.addEvent(juce::MidiMessage::timeSignatureMetaEvent(signature.numerator, signature.denominator),
+                                      std::max(0.0, map->beatOfBar(bar) - clipBeat) * ticksPerBeat);
+                }
             for (const auto& n : item.clip)
             {
                 if (!n.hasType(session::ids::note))

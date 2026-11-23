@@ -196,6 +196,8 @@ bool removeSyncPoints(session::Session& session, EditorState& editor);
 /** Clip > Quantize to Grid: each selected clip moves so that its sync point (or start) sits on the
     nearest line of a `gridSeconds` grid. Time- and edit-locked clips stay. */
 bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor, double gridSeconds);
+/** The editor's grid on the session's tempo map (bars, or the signature's beats and their parts). */
+bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor);
 
 /** Clip > Warp > Detect Hitpoints: finds the attacks in the part of the file each selected audio
     clip plays (reading the files) and keeps them on the clips. `sensitivity` 0..1: higher finds
@@ -208,6 +210,8 @@ bool warpSelectedClipsAtHitpoints(session::Session& session, EditorState& editor
     way to the nearest line of a `gridSeconds` grid, the audio between them stretched to fit. A clip
     with hitpoints but no markers gets them at its hitpoints first: its attacks land on the grid. */
 bool quantizeSelectedClipsWarp(session::Session& session, EditorState& editor, double gridSeconds, double strength = 1.0);
+/** The editor's grid on the session's tempo map. */
+bool quantizeSelectedClipsWarpToGrid(session::Session& session, EditorState& editor, double strength = 1.0);
 /** Clip > Warp > Clear Warp Markers: the selected clips play straight again. */
 bool clearSelectedClipsWarp(session::Session& session, EditorState& editor);
 [[nodiscard]] bool selectionHasHitpoints(const session::Session& session, const EditorState& editor);

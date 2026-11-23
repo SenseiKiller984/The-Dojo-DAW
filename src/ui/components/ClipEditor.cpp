@@ -28,7 +28,19 @@ bool isBlackKey(int pitch)
     return n == 1 || n == 3 || n == 6 || n == 8 || n == 10;
 }
 
-double beatsPerSecond(const session::Session& session) { return session.getTempo() / 60.0; }
+/** A clip's length in beats, on the tempo map at its place. */
+double clipBeats(const session::Session& session, const juce::ValueTree& clip)
+{
+    const auto& map = session.getTempoMap();
+    return map.beatAt(session::clip::getEnd(clip)) - map.beatAt(session::clip::getStart(clip));
+}
+
+/** Content beats since a clip's start at `seconds` (on the tempo map). */
+double beatsInto(const session::Session& session, const juce::ValueTree& clip, double seconds)
+{
+    const auto& map = session.getTempoMap();
+    return map.beatAt(seconds) - map.beatAt(session::clip::getStart(clip));
+}
 } // namespace
 
 //==================================================================================================
@@ -147,7 +159,7 @@ double PianoRoll::gridBeats() const { return gridBeats_; }
 double PianoRoll::contentStart() const { return clip_.isValid() ? session::clip::getOffset(clip_) : 0.0; }
 double PianoRoll::contentEnd() const
 {
-    return clip_.isValid() ? contentStart() + session::clip::getLength(clip_) * beatsPerSecond(session_) : 4.0;
+    return clip_.isValid() ? contentStart() + clipBeats(session_, clip_) : 4.0;
 }
 
 juce::Rectangle<int> PianoRoll::keyboardArea() const
@@ -464,9 +476,17 @@ void PianoRoll::paint(juce::Graphics& g)
     const double first = std::floor(xToBeat(static_cast<float>(grid.getX())));
     const double last = xToBeat(static_cast<float>(grid.getRight()));
     const double step = gridBeats() * pixelsPerBeat_ >= 6.0 ? gridBeats() : 1.0;
+    // (bars from the tempo map at the clip's place: the arrangement's bars and signatures)
+    const auto& map = session_.getTempoMap();
+    const double clipBeat = clip_.isValid() ? map.beatAt(session::clip::getStart(clip_)) - contentStart() : 0.0;
+    const auto isBarStart = [&](double b)
+    {
+        const double timeline = clipBeat + b;
+        return std::abs(map.beatOfBar(map.barAt(timeline + 1.0e-6)) - timeline) < 1.0e-6;
+    };
     for (double b = first; b <= last; b += step)
     {
-        const bool bar = std::abs(std::fmod(b, 4.0)) < 1.0e-6;
+        const bool bar = isBarStart(b);
         const bool beat = std::abs(b - std::round(b)) < 1.0e-6;
         g.setColour(bar ? colour::gridBar.brighter(0.2f) : beat ? colour::gridBar : colour::gridBeat);
         g.drawVerticalLine(juce::roundToInt(beatToX(b)), static_cast<float>(grid.getY()), static_cast<float>(grid.getBottom()));
@@ -513,7 +533,7 @@ void PianoRoll::paint(juce::Graphics& g)
 
     // Playhead.
     const auto parent = clip_.getParent();
-    const double playheadBeat = contentStart() + (playheadSeconds_ - session::clip::getStart(clip_)) * beatsPerSecond(session_);
+    const double playheadBeat = contentStart() + beatsInto(session_, clip_, playheadSeconds_);
     if (parent.isValid() && playheadBeat >= contentStart() && playheadBeat <= contentEnd())
     {
         g.setColour(colour::playhead);
@@ -531,12 +551,12 @@ void PianoRoll::paint(juce::Graphics& g)
     g.reduceClipRegion(ruler);
     for (double b = std::ceil(first); b <= last; b += 1.0)
     {
-        if (pixelsPerBeat_ < 20.0 && std::abs(std::fmod(b, 4.0)) > 1.0e-6)
+        if (pixelsPerBeat_ < 20.0 && !isBarStart(b))
             continue;
-        const int bar = static_cast<int>(std::floor(b / 4.0)) + 1;
-        const int beatInBar = static_cast<int>(std::round(b - (bar - 1) * 4.0)) + 1;
-        g.drawText(juce::String(bar) + "." + juce::String(beatInBar), juce::Rectangle<float>(beatToX(b) + 2.0f, 2.0f, 40.0f, 14.0f),
-                   juce::Justification::centredLeft, false);
+        const auto position = map.toBarsBeatsTicks(std::max(0.0, clipBeat + b));
+        g.drawText(position.beat == 1 && position.tick == 0 ? juce::String(position.bar)
+                                                            : juce::String(position.bar) + "." + juce::String(position.beat),
+                   juce::Rectangle<float>(beatToX(b) + 2.0f, 2.0f, 40.0f, 14.0f), juce::Justification::centredLeft, false);
     }
     g.restoreState();
 
@@ -1122,7 +1142,7 @@ int StepSequencer::numSteps() const
 {
     if (!clip_.isValid())
         return 16;
-    const double beats = session::clip::getLength(clip_) * project_.getSession().getTempo() / 60.0;
+    const double beats = clipBeats(project_.getSession(), clip_);
     return juce::jlimit(1, 256, static_cast<int>(std::floor(beats / stepBeats_ + 1.0e-6)));
 }
 
@@ -1183,8 +1203,7 @@ void StepSequencer::paint(juce::Graphics& g)
 
     const int steps = numSteps();
     const auto trackColour = session::track::getColour(clip_.getParent());
-    const double bps = project_.getSession().getTempo() / 60.0;
-    const double playBeat = (playheadSeconds_ - session::clip::getStart(clip_)) * bps;
+    const double playBeat = beatsInto(project_.getSession(), clip_, playheadSeconds_);
     const int playStep = playBeat >= 0.0 ? static_cast<int>(std::floor(playBeat / stepBeats_)) : -1;
 
     g.setColour(colour::panelHeader);

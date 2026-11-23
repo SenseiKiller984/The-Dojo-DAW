@@ -435,7 +435,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    compCrossfade5,
                                    compCrossfade10,
                                    compCrossfade20,
-                                   compCrossfade50};
+                                   compCrossfade50,
+                                   toggleTempoTrack};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
@@ -633,6 +634,11 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     case toggleClipRatings:
         info.setInfo("Clip Ratings", "Show the rating (stars) of clips in their title bars", categories::view, 0);
         info.setTicked(editor_.isShowingClipRatings());
+        break;
+    case toggleTempoTrack:
+        info.setInfo("Tempo Track", "Show the tempo track: tempo changes, ramps and time signatures", categories::view, 0);
+        info.setTicked(editor_.isShowingTempoTrack());
+        info.addDefaultKeypress('t', cmd | alt);
         break;
     case groupClips:
         info.setInfo("Group", "Make a clip group of the selected clips (and groups), on any tracks", categories::clip, 0);
@@ -1022,6 +1028,10 @@ bool MainComponent::perform(const InvocationInfo& invocation)
     case clipRating5:
         actions::setSelectedClipsRating(session, editor_, static_cast<int>(invocation.commandID - clipRatingNone));
         break;
+    case toggleTempoTrack:
+        editor_.setShowingTempoTrack(!editor_.isShowingTempoTrack());
+        commandManager_.commandStatusChanged();
+        break;
     case toggleClipRatings:
         editor_.setShowingClipRatings(!editor_.isShowingClipRatings());
         break;
@@ -1057,7 +1067,7 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         actions::removeSyncPoints(session, editor_);
         break;
     case quantizeClipsToGrid:
-        actions::quantizeSelectedClipsToGrid(session, editor_, editor_.getGridBeats() * 60.0 / session.getTempo());
+        actions::quantizeSelectedClipsToGrid(session, editor_);
         break;
     case detectHitpoints:
     {
@@ -1070,7 +1080,7 @@ bool MainComponent::perform(const InvocationInfo& invocation)
         actions::warpSelectedClipsAtHitpoints(session, editor_);
         break;
     case quantizeWarpMarkers:
-        actions::quantizeSelectedClipsWarp(session, editor_, editor_.getGridBeats() * 60.0 / session.getTempo());
+        actions::quantizeSelectedClipsWarpToGrid(session, editor_);
         break;
     case clearWarpMarkers:
         actions::clearSelectedClipsWarp(session, editor_);

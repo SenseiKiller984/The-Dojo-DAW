@@ -920,7 +920,7 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
     const int numSamples = currentNumSamples_;
     const double t0 = blockStartSeconds_;
     const double t1 = t0 + numSamples * secondsPerSample_;
-    const double tempoBeatsPerSecond = graph_->tempo / 60.0;
+    const auto& map = *graph_->tempoMap;
 
     const auto offsetOf = [&](double seconds)
     {
@@ -952,11 +952,13 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
     // One clip (or one iteration of a looped one) from clipStart to clipEnd.
     const auto schedule = [&](const RenderMidiClip& clip, double clipStart, double clipEnd)
     {
-        const double beatsPerSecond = tempoBeatsPerSecond * (clip.rate > 0.0 ? clip.rate : 1.0);
+        // Content beats follow the tempo map (ramps included), `rate` x as fast (per-track speed).
+        const double rate = clip.rate > 0.0 ? clip.rate : 1.0;
+        const double startBeat = map.beatAt(clipStart);
         const auto beatAt = [&](double seconds)
-        { return clip.contentStartBeat + (seconds - clipStart) * beatsPerSecond; };
+        { return clip.contentStartBeat + (map.beatAt(seconds) - startBeat) * rate; };
         const auto timeOf = [&](double beat)
-        { return clipStart + (beat - clip.contentStartBeat) / beatsPerSecond; };
+        { return map.secondsAt(startBeat + (beat - clip.contentStartBeat) / rate); };
 
         const double beginBeat = beatAt(std::max(t0, clipStart));
         const double endBeat = beatAt(std::min(t1, clipEnd));
@@ -1078,13 +1080,17 @@ void AudioEngine::renderMidiClips(const RenderTrack& track, SlotState& slot) noe
 
         if (clip.loopLength > 0.0 && clip.loopLength < clip.endSeconds - clip.startSeconds - 1.0e-9)
         {
-            // Looped: every iteration replays the first loopLength seconds of content.
-            const auto first = static_cast<long long>(std::max(0.0, std::floor((t0 - clip.startSeconds) / clip.loopLength)));
-            const auto last = static_cast<long long>(std::floor((std::min(t1, clip.endSeconds) - clip.startSeconds) / clip.loopLength));
+            // Looped: every iteration replays the content of the first one, an iteration being the
+            // same number of timeline beats (so loops keep their bars through tempo changes).
+            const double startBeat = map.beatAt(clip.startSeconds);
+            const double loopBeats = clip.loopBeats > 0.0 ? clip.loopBeats : clip.loopLength * map.bpmAt(clip.startSeconds) / 60.0;
+            const auto first = static_cast<long long>(std::max(0.0, std::floor((map.beatAt(t0) - startBeat) / loopBeats)));
+            const auto last =
+                static_cast<long long>(std::floor((map.beatAt(std::min(t1, clip.endSeconds)) - startBeat) / loopBeats + 1.0e-9));
             for (auto k = first; k <= last; ++k)
             {
-                const double iterationStart = clip.startSeconds + static_cast<double>(k) * clip.loopLength;
-                const double iterationEnd = std::min(iterationStart + clip.loopLength, clip.endSeconds);
+                const double iterationStart = map.secondsAt(startBeat + static_cast<double>(k) * loopBeats);
+                const double iterationEnd = std::min(map.secondsAt(startBeat + static_cast<double>(k + 1) * loopBeats), clip.endSeconds);
                 if (iterationEnd > t0 && iterationStart < t1 && iterationEnd > iterationStart)
                     schedule(clip, iterationStart, iterationEnd);
             }
@@ -1296,7 +1302,8 @@ void AudioEngine::applyModulators(int numSamples) noexcept
     if (graph_ == nullptr || graph_->modulators.empty())
         return;
     constexpr double none = std::numeric_limits<double>::quiet_NaN();
-    const double ppq = positionSeconds_ * graph_->tempo / 60.0;
+    const double ppq = graph_->tempoMap->beatAt(positionSeconds_);
+    const double bpm = graph_->tempoMap->bpmAtBeat(ppq);
     for (const auto& modulator : graph_->modulators)
     {
         if (modulator.source == nullptr)
@@ -1304,7 +1311,7 @@ void AudioEngine::applyModulators(int numSamples) noexcept
         // Bypassed: the targets go back to their own values (parameters stay where they are).
         const bool bypassed = modulator.node != nullptr && modulator.node->isBypassed();
         const double value =
-            bypassed ? 0.0 : std::clamp(modulator.source->advanceModulation(numSamples, sampleRate_, graph_->tempo, ppq, playing_), 0.0, 1.0);
+            bypassed ? 0.0 : std::clamp(modulator.source->advanceModulation(numSamples, sampleRate_, bpm, ppq, playing_), 0.0, 1.0);
         for (const auto& target : modulator.targets)
         {
             const double mapped = std::clamp(target.minimum + (target.maximum - target.minimum) * value, 0.0, 1.0);
@@ -2090,21 +2097,25 @@ void AudioEngine::publishLoad(Clock::duration elapsed, int numSamples) noexcept
 
 void AudioEngine::updatePlayHead() noexcept
 {
-    const double tempo = graph_ != nullptr ? graph_->tempo : 120.0;
-    const double beatsPerSecond = tempo / 60.0;
-    const double ppq = positionSeconds_ * beatsPerSecond;
+    // The tempo map at the block's start: its tempo (within a ramp, the tempo there), signature
+    // and bar.
+    static const time::TempoMap fallback;
+    const auto& map = graph_ != nullptr && graph_->tempoMap != nullptr ? *graph_->tempoMap : fallback;
+    const double ppq = map.beatAt(positionSeconds_);
+    const auto signature = map.signatureAt(ppq);
 
     juce::AudioPlayHead::PositionInfo info;
-    info.setBpm(tempo);
-    info.setTimeSignature(juce::AudioPlayHead::TimeSignature{4, 4});
+    info.setBpm(map.bpmAtBeat(ppq));
+    info.setTimeSignature(juce::AudioPlayHead::TimeSignature{signature.numerator, signature.denominator});
     info.setTimeInSeconds(positionSeconds_);
     info.setTimeInSamples(static_cast<juce::int64>(std::llround(positionSeconds_ * sampleRate_)));
     info.setPpqPosition(ppq);
-    info.setPpqPositionOfLastBarStart(std::floor(ppq / 4.0) * 4.0);
+    info.setPpqPositionOfLastBarStart(map.beatOfBar(map.barAt(ppq)));
+    info.setBarCount(map.barAt(ppq));
     info.setIsPlaying(playing_);
     info.setIsRecording(capture_ != nullptr && (!capture_->inputs.empty() || capture_->captureMidi));
     info.setIsLooping(loopEnabled_);
-    info.setLoopPoints(juce::AudioPlayHead::LoopPoints{loopStart_ * beatsPerSecond, loopEnd_ * beatsPerSecond});
+    info.setLoopPoints(juce::AudioPlayHead::LoopPoints{map.beatAt(loopStart_), map.beatAt(loopEnd_)});
     playHead_.info = info;
 }
 

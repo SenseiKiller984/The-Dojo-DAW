@@ -144,6 +144,7 @@ private:
     void moveSelection(int delta);
     void shuttle(int direction);
     [[nodiscard]] double beatSeconds() const;
+    [[nodiscard]] double barSeconds() const;
     void send(Unit& unit, const juce::MidiMessage& message);
     void sendLed(Unit& unit, Key key, int strip, bool on, bool force);
     void refreshUnit(Unit& unit, bool force);

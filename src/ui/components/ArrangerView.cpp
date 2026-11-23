@@ -35,7 +35,6 @@ constexpr float kHitpointTickHeight = 7.0f;
 constexpr float kPointRadius = 4.5f;
 constexpr double kMinPixelsPerSecond = 2.0;
 constexpr double kMaxPixelsPerSecond = 2000.0;
-constexpr int kBeatsPerBar = 4;
 
 const char* const kColourNames[] = {"Vermilion", "Persimmon", "Gold", "Matcha", "Jade", "Indigo", "Wisteria", "Sakura"};
 
@@ -260,9 +259,9 @@ void ArrangerView::ensureRows() const
 
 int ArrangerView::rowAt(int y) const
 {
-    if (y < theme::metrics::rulerHeight)
+    if (y < topHeight())
         return -1;
-    const int contentY = y - theme::metrics::rulerHeight + scrollY_;
+    const int contentY = y - topHeight() + scrollY_;
     const auto& all = rows();
     for (std::size_t i = 0; i < all.size(); ++i)
         if (contentY >= all[i].top && contentY < all[i].top + all[i].height)
@@ -372,17 +371,459 @@ juce::Rectangle<int> ArrangerView::getLoopStrip() const
     return getRulerArea().withHeight(kLoopStripHeight);
 }
 
+// --- Tempo track ------------------------------------------------------------------------------------
+
+namespace
+{
+constexpr int kTempoTrackHeight = 72;
+constexpr int kSignatureStripHeight = 16;
+constexpr float kTempoPointRadius = 4.5f;
+
+juce::String shapeLabel(time::TempoShape shape, double bend)
+{
+    switch (shape)
+    {
+        case time::TempoShape::linear: return "ramp";
+        case time::TempoShape::curve: return bend >= 0.0 ? "curve, slow start" : "curve, fast start";
+        case time::TempoShape::jump: break;
+    }
+    return "jump";
+}
+} // namespace
+
+int ArrangerView::topHeight() const
+{
+    return theme::metrics::rulerHeight + (editor_.isShowingTempoTrack() ? kTempoTrackHeight : 0);
+}
+
+void ArrangerView::editorStateChanged()
+{
+    const int top = topHeight();
+    if (top != shownTopHeight_)
+    {
+        shownTopHeight_ = top;
+        rowsDirty_ = true;
+        resized();
+    }
+    repaint();
+}
+
+juce::Rectangle<int> ArrangerView::getTempoTrackArea() const
+{
+    if (!editor_.isShowingTempoTrack())
+        return {};
+    return {theme::metrics::trackHeaderWidth, theme::metrics::rulerHeight,
+            juce::jmax(0, getWidth() - theme::metrics::trackHeaderWidth - kScrollbarThickness), kTempoTrackHeight};
+}
+
+juce::Rectangle<int> ArrangerView::getSignatureStripArea() const { return getTempoTrackArea().withHeight(kSignatureStripHeight); }
+
+juce::Rectangle<int> ArrangerView::getTempoCurveArea() const
+{
+    return getTempoTrackArea().withTrimmedTop(kSignatureStripHeight).reduced(0, 7);
+}
+
+std::pair<double, double> ArrangerView::tempoRange() const
+{
+    if (dragMode_ == DragMode::tempoPoint && tempoDragRange_.second > tempoDragRange_.first)
+        return tempoDragRange_; // (the scale holds still under the mouse)
+    double lo = 1.0e9, hi = 0.0;
+    for (const auto& p : session_.getTempoMap().getPoints())
+    {
+        lo = std::min(lo, p.bpm);
+        hi = std::max(hi, p.bpm);
+    }
+    const double middle = (lo + hi) * 0.5;
+    const double half = std::max(40.0, (hi - lo) * 0.5 * 1.3);
+    return {std::max(session::kMinTempo, middle - half), std::min(session::kMaxTempo, middle + half)};
+}
+
+float ArrangerView::tempoToY(double bpm) const
+{
+    const auto area = getTempoCurveArea().toFloat();
+    const auto [lo, hi] = tempoRange();
+    const double x = hi > lo ? (bpm - lo) / (hi - lo) : 0.5;
+    return area.getBottom() - static_cast<float>(std::clamp(x, 0.0, 1.0)) * area.getHeight();
+}
+
+double ArrangerView::yToTempo(float y) const
+{
+    const auto area = getTempoCurveArea().toFloat();
+    const auto [lo, hi] = tempoRange();
+    const double x = area.getHeight() > 0.0f ? (area.getBottom() - y) / area.getHeight() : 0.5;
+    return juce::jlimit(session::kMinTempo, session::kMaxTempo, lo + (hi - lo) * std::clamp(x, 0.0, 1.0));
+}
+
+juce::Point<float> ArrangerView::getTempoPointPosition(int index) const
+{
+    const auto& map = session_.getTempoMap();
+    const auto& points = map.getPoints();
+    if (index < 0 || index >= static_cast<int>(points.size()))
+        return {};
+    const auto& p = points[static_cast<std::size_t>(index)];
+    return {timeToX(map.secondsAt(p.beat)), tempoToY(p.bpm)};
+}
+
+int ArrangerView::tempoPointAt(juce::Point<float> position) const
+{
+    if (!getTempoCurveArea().expanded(0, 7).toFloat().contains(position))
+        return -1;
+    const auto count = static_cast<int>(session_.getTempoMap().getPoints().size());
+    int best = -1;
+    float bestDistance = kTempoPointRadius + 3.0f;
+    for (int i = 0; i < count; ++i)
+    {
+        const float d = getTempoPointPosition(i).getDistanceFrom(position);
+        if (d <= bestDistance)
+        {
+            best = i;
+            bestDistance = d;
+        }
+    }
+    return best;
+}
+
+juce::ValueTree ArrangerView::tempoChangeOfPoint(int index) const
+{
+    const auto& points = session_.getTempoMap().getPoints();
+    if (index <= 0 || index >= static_cast<int>(points.size()))
+        return {};
+    juce::ValueTree found;
+    for (const auto& change : session_.getTempoChanges())
+        if (std::abs(static_cast<double>(change.getProperty(session::ids::beat)) - points[static_cast<std::size_t>(index)].beat) < 1.0e-9)
+            found = change; // (the later of two at a beat is the one in force)
+    return found;
+}
+
+juce::ValueTree ArrangerView::signatureChangeAt(juce::Point<int> position) const
+{
+    if (!getSignatureStripArea().contains(position))
+        return {};
+    const auto& map = session_.getTempoMap();
+    for (const auto& change : session_.getSignatureChanges())
+    {
+        const int bar = static_cast<int>(change.getProperty(session::ids::bar)) - 1;
+        const float x = timeToX(map.secondsAt(map.beatOfBar(bar)));
+        const auto px = static_cast<float>(position.x);
+        if (px >= x - 3.0f && px <= x + 34.0f)
+            return change;
+    }
+    return {};
+}
+
+void ArrangerView::paintTempoTrack(juce::Graphics& g) const
+{
+    if (!editor_.isShowingTempoTrack())
+        return;
+    using namespace theme;
+    const auto area = getTempoTrackArea();
+    const auto map = session_.getTempoMapShared();
+
+    // Header: the tempo and signature at the playhead.
+    const juce::Rectangle<int> corner(0, area.getY(), metrics::trackHeaderWidth, area.getHeight());
+    g.setColour(colour::panelHeader);
+    g.fillRect(corner);
+    auto text = corner.reduced(14, 8);
+    g.setColour(colour::textSecondary);
+    g.setFont(label(11.0f));
+    g.drawText("TEMPO", text.removeFromTop(16), juce::Justification::centredLeft, false);
+    const double beat = map->beatAt(playheadSeconds_);
+    const auto signature = map->signatureAt(beat);
+    g.setColour(colour::gold);
+    g.setFont(mono(13.0f));
+    g.drawText(juce::String(map->bpmAtBeat(beat), 2) + " BPM", text.removeFromTop(18), juce::Justification::centredLeft, false);
+    g.setColour(colour::textMuted);
+    g.setFont(sans(11.0f));
+    g.drawText(juce::String(signature.numerator) + "/" + juce::String(signature.denominator) + "   double-click to add",
+               text.removeFromTop(16), juce::Justification::centredLeft, false);
+
+    g.setColour(colour::panelRaised);
+    g.fillRect(area.withWidth(area.getWidth() + kScrollbarThickness));
+    g.saveState();
+    g.reduceClipRegion(area);
+
+    // Time signatures, where their bars start.
+    const auto strip = getSignatureStripArea();
+    g.setColour(colour::panel);
+    g.fillRect(strip);
+    for (const auto& s : map->getSignatures())
+    {
+        const float x = timeToX(map->secondsAt(map->beatOfBar(s.bar)));
+        g.setColour(colour::gold.withAlpha(0.8f));
+        g.fillRect(x, static_cast<float>(strip.getY()) + 2.0f, 1.5f, static_cast<float>(strip.getHeight()) - 2.0f);
+        g.setFont(mono(10.5f));
+        g.drawText(juce::String(s.signature.numerator) + "/" + juce::String(s.signature.denominator),
+                   juce::Rectangle<float>(x + 4.0f, static_cast<float>(strip.getY()), 40.0f, static_cast<float>(strip.getHeight())),
+                   juce::Justification::centredLeft, false);
+    }
+
+    // The tempo over time: the curve, filled below; the points; the scale.
+    const auto curve = getTempoCurveArea();
+    juce::Path line;
+    for (int x = area.getX() - 2; x <= area.getRight() + 2; x += 2)
+    {
+        const double t = std::max(0.0, xToTime(static_cast<float>(x)));
+        const float y = tempoToY(map->bpmAt(t));
+        if (line.isEmpty())
+            line.startNewSubPath(static_cast<float>(x), y);
+        else
+            line.lineTo(static_cast<float>(x), y);
+    }
+    juce::Path fill(line);
+    fill.lineTo(static_cast<float>(area.getRight() + 2), static_cast<float>(area.getBottom()));
+    fill.lineTo(static_cast<float>(area.getX() - 2), static_cast<float>(area.getBottom()));
+    fill.closeSubPath();
+    g.setColour(colour::gold.withAlpha(0.08f));
+    g.fillPath(fill);
+    g.setColour(colour::gold.withAlpha(0.85f));
+    g.strokePath(line, juce::PathStrokeType(1.5f));
+
+    const auto& points = map->getPoints();
+    for (int i = 0; i < static_cast<int>(points.size()); ++i)
+    {
+        const auto position = getTempoPointPosition(i);
+        const auto& p = points[static_cast<std::size_t>(i)];
+        const bool dragged = dragMode_ == DragMode::tempoPoint && dragTempoIndex_ == i;
+        g.setColour(dragged ? colour::accentBright : colour::gold);
+        if (p.shape == time::TempoShape::jump)
+            g.fillEllipse(position.x - kTempoPointRadius, position.y - kTempoPointRadius, kTempoPointRadius * 2.0f, kTempoPointRadius * 2.0f);
+        else
+            g.drawEllipse(position.x - kTempoPointRadius, position.y - kTempoPointRadius, kTempoPointRadius * 2.0f, kTempoPointRadius * 2.0f,
+                          1.8f);
+        g.setColour(colour::textSecondary);
+        g.setFont(mono(10.0f));
+        const float labelY = position.y < static_cast<float>(curve.getCentreY()) ? position.y + 4.0f : position.y - 16.0f;
+        g.drawText(juce::String(p.bpm, p.bpm == std::round(p.bpm) ? 0 : 2), juce::Rectangle<float>(position.x + 6.0f, labelY, 60.0f, 12.0f),
+                   juce::Justification::centredLeft, false);
+    }
+
+    const auto [lo, hi] = tempoRange();
+    g.setColour(colour::textMuted);
+    g.setFont(mono(9.0f));
+    g.drawText(juce::String(juce::roundToInt(hi)), juce::Rectangle<int>(area.getRight() - 34, curve.getY() - 6, 30, 11),
+               juce::Justification::centredRight, false);
+    g.drawText(juce::String(juce::roundToInt(lo)), juce::Rectangle<int>(area.getRight() - 34, curve.getBottom() - 6, 30, 11),
+               juce::Justification::centredRight, false);
+    g.restoreState();
+
+    g.setColour(colour::outline);
+    g.fillRect(0, area.getBottom() - 1, getWidth(), 1);
+}
+
+juce::PopupMenu ArrangerView::buildSignatureMenu(int bar)
+{
+    juce::Component::SafePointer<ArrangerView> safe(this);
+    const auto current = session_.getTempoMap().signatureOfBar(bar - 1);
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Time Signature from Bar " + juce::String(bar));
+    for (const auto& offered : std::vector<std::pair<int, int>>{{2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 4}, {7, 4}, {3, 8}, {5, 8}, {6, 8},
+                                                                {7, 8}, {9, 8}, {11, 8}, {12, 8}, {2, 2}, {3, 2}})
+    {
+        const int n = offered.first, d = offered.second;
+        menu.addItem(juce::String(n) + "/" + juce::String(d), true, current.numerator == n && current.denominator == d,
+                     [safe, bar, n, d]
+                     {
+                         if (safe == nullptr)
+                             return;
+                         safe->session_.beginTransaction("Time Signature");
+                         safe->session_.addSignatureChange(bar, n, d);
+                     });
+    }
+    return menu;
+}
+
+juce::PopupMenu ArrangerView::buildTempoMenu(juce::Point<int> position)
+{
+    juce::Component::SafePointer<ArrangerView> safe(this);
+    juce::PopupMenu menu;
+    const auto& map = session_.getTempoMap();
+
+    // A signature change: change it, or remove it.
+    if (auto signature = signatureChangeAt(position); signature.isValid())
+    {
+        const int bar = signature.getProperty(session::ids::bar);
+        menu = buildSignatureMenu(bar);
+        menu.addSeparator();
+        menu.addItem("Remove Time Signature", [safe, signature]
+                     {
+                         if (safe == nullptr)
+                             return;
+                         safe->session_.beginTransaction("Remove Time Signature");
+                         safe->session_.removeSignatureChange(signature);
+                     });
+        return menu;
+    }
+
+    const int index = tempoPointAt(position.toFloat());
+    if (index >= 0)
+    {
+        // A tempo point: how it goes to the next one, its tempo, removing it.
+        const auto& p = map.getPoints()[static_cast<std::size_t>(index)];
+        auto change = tempoChangeOfPoint(index);
+        menu.addSectionHeader((index == 0 ? juce::String("Start Tempo") : "Tempo Change") + ": " + juce::String(p.bpm, 2) + " BPM, "
+                              + shapeLabel(p.shape, p.bend));
+        const auto setShape = [safe, index, change](time::TempoShape shape, double bend)
+        {
+            return [safe, index, change, shape, bend]
+            {
+                if (safe == nullptr)
+                    return;
+                safe->session_.beginTransaction("Tempo Shape");
+                if (index == 0)
+                    safe->session_.setStartTempoShape(shape, bend);
+                else
+                    safe->session_.setTempoChangeShape(change, shape, bend);
+            };
+        };
+        const bool last = index + 1 >= static_cast<int>(map.getPoints().size());
+        menu.addItem("Jump (hold, then change)", true, p.shape == time::TempoShape::jump, setShape(time::TempoShape::jump, 0.0));
+        menu.addItem("Linear Ramp to the Next", !last, p.shape == time::TempoShape::linear, setShape(time::TempoShape::linear, 0.0));
+        menu.addItem("Curve to the Next: Slow Start", !last, p.shape == time::TempoShape::curve && p.bend > 0.0 && p.bend < 0.75,
+                     setShape(time::TempoShape::curve, 0.5));
+        menu.addItem("Curve to the Next: Very Slow Start", !last, p.shape == time::TempoShape::curve && p.bend >= 0.75,
+                     setShape(time::TempoShape::curve, 0.9));
+        menu.addItem("Curve to the Next: Fast Start", !last, p.shape == time::TempoShape::curve && p.bend < 0.0 && p.bend > -0.75,
+                     setShape(time::TempoShape::curve, -0.5));
+        menu.addItem("Curve to the Next: Very Fast Start", !last, p.shape == time::TempoShape::curve && p.bend <= -0.75,
+                     setShape(time::TempoShape::curve, -0.9));
+        menu.addSeparator();
+        menu.addItem("Set Tempo...", [safe, index] { if (safe != nullptr) safe->showTempoValueEditor(index); });
+        menu.addItem("Remove Tempo Change", index > 0, false, [safe, change]
+                     {
+                         if (safe == nullptr)
+                             return;
+                         safe->session_.beginTransaction("Remove Tempo Change");
+                         safe->session_.removeTempoChange(change);
+                     });
+        return menu;
+    }
+
+    // Empty space: a tempo change or a time signature here.
+    const double seconds = std::max(0.0, xToTime(static_cast<float>(position.x)));
+    const double snapped = editor_.snap(seconds, map);
+    const double beat = map.beatAt(snapped);
+    const double bpm = getTempoCurveArea().contains(position) ? std::round(yToTempo(static_cast<float>(position.y)) * 100.0) / 100.0
+                                                              : map.bpmAtBeat(beat);
+    menu.addItem("Add Tempo Change Here (" + juce::String(bpm, 2) + " BPM)", beat > 0.0, false, [safe, beat, bpm]
+                 {
+                     if (safe == nullptr)
+                         return;
+                     safe->session_.beginTransaction("Add Tempo Change");
+                     safe->session_.addTempoChange(beat, bpm);
+                 });
+    const int bar = static_cast<int>(map.barAt(map.beatAt(seconds))) + 1;
+    menu.addSubMenu("Time Signature from Bar " + juce::String(bar), buildSignatureMenu(bar));
+    menu.addSeparator();
+    menu.addItem("Clear Tempo Map", !map.isConstant(), false, [safe]
+                 {
+                     if (safe == nullptr)
+                         return;
+                     safe->session_.beginTransaction("Clear Tempo Map");
+                     safe->session_.clearTempoMap();
+                 });
+    return menu;
+}
+
+void ArrangerView::showTempoValueEditor(int index)
+{
+    const auto& points = session_.getTempoMap().getPoints();
+    if (index < 0 || index >= static_cast<int>(points.size()))
+        return;
+    auto* window = new juce::AlertWindow("Set Tempo", index == 0 ? "The start tempo (BPM):" : "This tempo change (BPM):",
+                                         juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor("bpm", juce::String(points[static_cast<std::size_t>(index)].bpm, 2));
+    window->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<ArrangerView> safe(this);
+    auto change = tempoChangeOfPoint(index);
+    const double beat = points[static_cast<std::size_t>(index)].beat;
+    window->enterModalState(true, juce::ModalCallbackFunction::create(
+                                      [safe, window, index, change, beat](int result)
+                                      {
+                                          const double bpm = window->getTextEditorContents("bpm").getDoubleValue();
+                                          if (safe == nullptr || result != 1 || bpm <= 0.0)
+                                              return;
+                                          safe->session_.beginTransaction("Set Tempo");
+                                          if (index == 0)
+                                              safe->session_.setTempo(bpm);
+                                          else
+                                              safe->session_.setTempoChange(change, beat, bpm);
+                                      }),
+                            true);
+}
+
+void ArrangerView::mouseDownOnTempoTrack(const juce::MouseEvent& e)
+{
+    const auto position = e.getPosition();
+    if (e.mods.isPopupMenu())
+    {
+        buildTempoMenu(position).showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+        return;
+    }
+    if (auto signature = signatureChangeAt(position); signature.isValid())
+    {
+        dragSignature_ = signature;
+        dragMode_ = DragMode::signatureMarker;
+        session_.beginTransaction("Move Time Signature");
+        return;
+    }
+    const int index = tempoPointAt(e.position);
+    if (index < 0)
+        return;
+    dragTempoIndex_ = index;
+    dragTempoChange_ = tempoChangeOfPoint(index);
+    tempoDragMap_ = session_.getTempoMapShared();
+    tempoDragRange_ = {0.0, 0.0};
+    tempoDragRange_ = tempoRange();
+    dragMode_ = DragMode::tempoPoint;
+    session_.beginTransaction(index == 0 ? "Change Tempo" : "Move Tempo Change");
+}
+
+void ArrangerView::dragTempoTrack(const juce::MouseEvent& e)
+{
+    if (dragMode_ == DragMode::signatureMarker)
+    {
+        if (!dragSignature_.getParent().isValid())
+            return;
+        const auto& map = session_.getTempoMap();
+        const auto bar = map.barAt(map.beatAt(std::max(0.0, xToTime(e.position.x)))) + 1;
+        if (bar != static_cast<int>(dragSignature_.getProperty(session::ids::bar)))
+            session_.setSignatureChange(dragSignature_, static_cast<int>(bar), dragSignature_.getProperty(session::ids::numerator),
+                                        dragSignature_.getProperty(session::ids::denominator));
+        dragMoved_ = true;
+        return;
+    }
+    if (dragMode_ != DragMode::tempoPoint || tempoDragMap_ == nullptr)
+        return;
+    dragMoved_ = true;
+    // Up and down: the tempo (Shift: finer); along: the beat, on the grid (Alt: free). The start
+    // tempo only goes up and down.
+    const double y = e.mods.isShiftDown() ? dragStart_.y + (e.position.y - dragStart_.y) * 0.2f : e.position.y;
+    const double bpm = std::round(yToTempo(static_cast<float>(y)) * 100.0) / 100.0;
+    if (dragTempoIndex_ == 0)
+    {
+        session_.setTempo(bpm);
+        return;
+    }
+    if (!dragTempoChange_.getParent().isValid())
+        return;
+    const double seconds = std::max(0.0, xToTime(e.position.x));
+    const double snapped = editor_.snap(seconds, *tempoDragMap_, e.mods.isAltDown());
+    const double beat = std::max(1.0 / 16.0, tempoDragMap_->beatAt(snapped));
+    session_.setTempoChange(dragTempoChange_, beat, bpm);
+}
+
 juce::Rectangle<int> ArrangerView::getHeaderArea() const
 {
-    return {0, theme::metrics::rulerHeight, theme::metrics::trackHeaderWidth,
-            juce::jmax(0, getHeight() - theme::metrics::rulerHeight - kScrollbarThickness)};
+    return {0, topHeight(), theme::metrics::trackHeaderWidth,
+            juce::jmax(0, getHeight() - topHeight() - kScrollbarThickness)};
 }
 
 juce::Rectangle<int> ArrangerView::getLaneArea() const
 {
-    return {theme::metrics::trackHeaderWidth, theme::metrics::rulerHeight,
+    return {theme::metrics::trackHeaderWidth, topHeight(),
             juce::jmax(0, getWidth() - theme::metrics::trackHeaderWidth - kScrollbarThickness),
-            juce::jmax(0, getHeight() - theme::metrics::rulerHeight - kScrollbarThickness)};
+            juce::jmax(0, getHeight() - topHeight() - kScrollbarThickness)};
 }
 
 juce::Rectangle<int> ArrangerView::getRowBounds(int row) const
@@ -391,10 +832,10 @@ juce::Rectangle<int> ArrangerView::getRowBounds(int row) const
     if (row < 0 || row >= static_cast<int>(all.size()))
     {
         const int bottom = all.empty() ? 0 : all.back().top + all.back().height;
-        return {0, theme::metrics::rulerHeight + bottom - scrollY_, getWidth() - kScrollbarThickness, kTrackHeight};
+        return {0, topHeight() + bottom - scrollY_, getWidth() - kScrollbarThickness, kTrackHeight};
     }
     const auto& r = all[static_cast<std::size_t>(row)];
-    return {0, theme::metrics::rulerHeight + r.top - scrollY_, getWidth() - kScrollbarThickness, r.height};
+    return {0, topHeight() + r.top - scrollY_, getWidth() - kScrollbarThickness, r.height};
 }
 
 float ArrangerView::timeToX(double seconds) const noexcept
@@ -476,8 +917,8 @@ void ArrangerView::selectClipsInArea(juce::Rectangle<int> area, const std::set<s
 {
     const double t0 = xToTime(static_cast<float>(area.getX()));
     const double t1 = xToTime(static_cast<float>(area.getRight()));
-    const int y0 = area.getY() - theme::metrics::rulerHeight + scrollY_;
-    const int y1 = area.getBottom() - theme::metrics::rulerHeight + scrollY_;
+    const int y0 = area.getY() - topHeight() + scrollY_;
+    const int y1 = area.getBottom() - topHeight() + scrollY_;
 
     auto selection = base;
     std::vector<juce::ValueTree> touched;
@@ -504,7 +945,7 @@ juce::Rectangle<int> ArrangerView::getMarqueeArea() const
         return {};
     const auto toScreen = [this](const TimelinePoint& p)
     {
-        return juce::Point<int>(juce::roundToInt(timeToX(p.seconds)), p.contentY + theme::metrics::rulerHeight - scrollY_);
+        return juce::Point<int>(juce::roundToInt(timeToX(p.seconds)), p.contentY + topHeight() - scrollY_);
     };
     return juce::Rectangle<int>(toScreen(marqueeAnchor_), toScreen(marqueeEnd_));
 }
@@ -539,7 +980,7 @@ void ArrangerView::dragMarquee(const juce::MouseEvent& e)
 
     const float x = juce::jlimit(static_cast<float>(lanes.getX()), static_cast<float>(lanes.getRight()), e.position.x);
     const int y = juce::jlimit(lanes.getY(), lanes.getBottom(), juce::roundToInt(e.position.y));
-    marqueeEnd_ = {xToTime(x), y - theme::metrics::rulerHeight + scrollY_};
+    marqueeEnd_ = {xToTime(x), y - topHeight() + scrollY_};
     selectClipsInArea(getMarqueeArea(), marqueeBase_);
 
     // The range dragged over is also the time selection (on the tracks it touches): Clip > Capture.
@@ -631,7 +1072,7 @@ double ArrangerView::getTempo() const
 
 double ArrangerView::snap(double seconds, const juce::ModifierKeys& mods) const
 {
-    return editor_.snap(seconds, getTempo(), mods.isAltDown() || mods.isShiftDown());
+    return editor_.snap(seconds, session_.getTempoMap(), mods.isAltDown() || mods.isShiftDown());
 }
 
 ArrangerView::ClipHit ArrangerView::hitTestClip(juce::Point<float> position) const
@@ -857,9 +1298,9 @@ void ArrangerView::setScroll(double seconds, int y)
 
     const auto& all = rows();
     const int bottom = all.empty() ? 0 : all.back().top + all.back().height;
-    const int addY = theme::metrics::rulerHeight + bottom - scrollY_ + 10;
+    const int addY = topHeight() + bottom - scrollY_ + 10;
     addTrackButton_.setBounds(12, addY, theme::metrics::trackHeaderWidth - 24, 28);
-    addTrackButton_.setVisible(addY >= theme::metrics::rulerHeight && addY + 28 <= getHeaderArea().getBottom());
+    addTrackButton_.setVisible(addY >= topHeight() && addY + 28 <= getHeaderArea().getBottom());
 
     if (renameEditor_->isVisible())
         finishRename(true);
@@ -978,6 +1419,7 @@ void ArrangerView::paint(juce::Graphics& g)
     paintLanes(g);
     paintMarquee(g);
     paintRuler(g);
+    paintTempoTrack(g);
     paintHeaders(g);
     paintInactiveTracks(g);
     paintDropIndicator(g);
@@ -994,7 +1436,7 @@ void ArrangerView::paintInactiveTracks(juce::Graphics& g) const
 {
     using namespace theme;
     const auto& all = rows();
-    const juce::Rectangle<int> content(0, metrics::rulerHeight, getWidth() - kScrollbarThickness, getLaneArea().getHeight());
+    const juce::Rectangle<int> content(0, topHeight(), getWidth() - kScrollbarThickness, getLaneArea().getHeight());
     g.saveState();
     g.reduceClipRegion(content);
     for (std::size_t i = 0; i < all.size(); ++i)
@@ -1083,21 +1525,25 @@ void ArrangerView::paintRuler(juce::Graphics& g) const
     if (session_.isPunchOutEnabled())
         punchMark(loopX1, false);
 
-    const double beatSeconds = 60.0 / getTempo();
-    const double barSeconds = beatSeconds * kBeatsPerBar;
-    const double barPixels = barSeconds * pixelsPerSecond_;
-    const double beatPixels = beatSeconds * pixelsPerSecond_;
-
+    // Bars and beats from the tempo map (signature changes, tempo changes and ramps).
+    const auto& map = session_.getTempoMap();
+    const double tStart = xToTime(static_cast<float>(ruler.getX()));
+    const double tEnd = xToTime(static_cast<float>(ruler.getRight()));
+    const auto firstBar = std::max<std::int64_t>(0, map.barAt(map.beatAt(std::max(0.0, tStart))));
+    const auto lastBar = map.barAt(map.beatAt(std::max(0.0, tEnd))) + 1;
+    // The narrowest bar on screen decides how often bars are numbered.
+    double narrowest = 1.0e9;
+    for (auto bar = firstBar; bar <= lastBar && bar - firstBar < 4096; ++bar)
+        narrowest = std::min(narrowest, (map.secondsAt(map.beatOfBar(bar + 1)) - map.secondsAt(map.beatOfBar(bar))) * pixelsPerSecond_);
     int labelEvery = 1;
-    while (static_cast<double>(labelEvery) * barPixels < 44.0)
+    while (static_cast<double>(labelEvery) * narrowest < 44.0 && labelEvery < (1 << 20))
         labelEvery *= 2;
 
-    const auto firstBar = static_cast<int>(std::floor(xToTime(static_cast<float>(ruler.getX())) / barSeconds));
-    const auto lastBar = static_cast<int>(std::ceil(xToTime(static_cast<float>(ruler.getRight())) / barSeconds));
-
-    for (int bar = juce::jmax(0, firstBar); bar <= lastBar; ++bar)
+    for (auto bar = firstBar; bar <= lastBar && bar - firstBar < 65536; ++bar)
     {
-        const double barStart = bar * barSeconds;
+        const double barBeat = map.beatOfBar(bar);
+        const double barStart = map.secondsAt(barBeat);
+        const double barPixels = (map.secondsAt(map.beatOfBar(bar + 1)) - barStart) * pixelsPerSecond_;
         const float x = timeToX(barStart);
         const bool labelled = bar % labelEvery == 0;
 
@@ -1117,11 +1563,13 @@ void ArrangerView::paintRuler(juce::Graphics& g) const
                        juce::Justification::centredLeft, false);
         }
 
-        if (beatPixels >= 8.0)
+        const auto signature = map.signatureOfBar(bar);
+        const double unit = time::beatLengthInQuarterNotes(signature);
+        if (barPixels / signature.numerator >= 8.0)
         {
             g.setColour(colour::outlineStrong);
-            for (int beat = 1; beat < kBeatsPerBar; ++beat)
-                g.drawVerticalLine(juce::roundToInt(timeToX(barStart + beat * beatSeconds)), static_cast<float>(ruler.getBottom() - 4),
+            for (int beat = 1; beat < signature.numerator; ++beat)
+                g.drawVerticalLine(juce::roundToInt(timeToX(map.secondsAt(barBeat + beat * unit))), static_cast<float>(ruler.getBottom() - 4),
                                    static_cast<float>(ruler.getBottom()));
         }
     }
@@ -1166,7 +1614,7 @@ void ArrangerView::paintHeaders(juce::Graphics& g) const
     g.restoreState();
 
     g.setColour(colour::outline);
-    g.fillRect(metrics::trackHeaderWidth - 1, metrics::rulerHeight, 1, area.getHeight());
+    g.fillRect(metrics::trackHeaderWidth - 1, topHeight(), 1, area.getHeight());
 }
 
 void ArrangerView::paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& row) const
@@ -1471,28 +1919,34 @@ void ArrangerView::paintLanes(juce::Graphics& g) const
         g.fillRect(juce::Rectangle<float>(x0, static_cast<float>(lanes.getY()), x1 - x0, static_cast<float>(lanes.getHeight())));
     }
 
-    // Grid.
-    const double beatSeconds = 60.0 / getTempo();
-    const double gridSeconds = editor_.getGridBeats() * beatSeconds;
-    const double beatPixels = beatSeconds * pixelsPerSecond_;
-    const double gridPixels = gridSeconds * pixelsPerSecond_;
-    const double barSeconds = beatSeconds * kBeatsPerBar;
-
-    const double t0 = xToTime(static_cast<float>(lanes.getX()));
-    const double t1 = xToTime(static_cast<float>(lanes.getRight()));
-    const double step = gridPixels >= 8.0 ? gridSeconds : (beatPixels >= 8.0 ? beatSeconds : barSeconds);
-
-    for (auto n = static_cast<long long>(std::floor(t0 / step)); static_cast<double>(n) * step <= t1; ++n)
+    // Grid: bars, the signature's beats, and the grid's parts of them, on the tempo map.
     {
-        if (n < 0)
-            continue;
-        const double t = static_cast<double>(n) * step;
-        const double barPosition = t / barSeconds;
-        const bool isBar = std::abs(barPosition - std::round(barPosition)) < 1.0e-6;
-        const double beatPosition = t / beatSeconds;
-        const bool isBeat = std::abs(beatPosition - std::round(beatPosition)) < 1.0e-6;
-        g.setColour(isBar ? colour::gridBar : (isBeat ? colour::gridBeat.brighter(0.15f) : colour::gridBeat));
-        g.drawVerticalLine(juce::roundToInt(timeToX(t)), static_cast<float>(lanes.getY()), static_cast<float>(lanes.getBottom()));
+        const auto& map = session_.getTempoMap();
+        const double t0 = std::max(0.0, xToTime(static_cast<float>(lanes.getX())));
+        const double t1 = xToTime(static_cast<float>(lanes.getRight()));
+        const auto lastBar = map.barAt(map.beatAt(t1)) + 1;
+        for (auto bar = std::max<std::int64_t>(0, map.barAt(map.beatAt(t0))); bar <= lastBar; ++bar)
+        {
+            const double barBeat = map.beatOfBar(bar);
+            const auto signature = map.signatureOfBar(bar);
+            const double unit = time::beatLengthInQuarterNotes(signature);
+            const double barPixels = (map.secondsAt(map.beatOfBar(bar + 1)) - map.secondsAt(barBeat)) * pixelsPerSecond_;
+            const double beatPixels = barPixels / signature.numerator;
+            const double gridUnit = editor_.getGrid() == EditorState::Grid::bar ? unit * signature.numerator : unit * editor_.getGridBeats();
+            const double gridPixels = beatPixels * gridUnit / unit;
+            const double step = gridPixels >= 8.0 ? gridUnit : (beatPixels >= 8.0 ? unit : unit * signature.numerator);
+            const int count = std::max(1, static_cast<int>(std::lround(unit * signature.numerator / step)));
+            for (int k = 0; k < count; ++k)
+            {
+                const double beat = barBeat + k * step;
+                const double inBeats = k * step / unit;
+                const bool isBar = k == 0;
+                const bool isBeat = std::abs(inBeats - std::round(inBeats)) < 1.0e-6;
+                g.setColour(isBar ? colour::gridBar : (isBeat ? colour::gridBeat.brighter(0.15f) : colour::gridBeat));
+                g.drawVerticalLine(juce::roundToInt(timeToX(map.secondsAt(beat))), static_cast<float>(lanes.getY()),
+                                   static_cast<float>(lanes.getBottom()));
+            }
+        }
     }
 
     // Recording region on armed tracks (when loop recording has come round: this pass).
@@ -2080,25 +2534,28 @@ void ArrangerView::paintMidiNotes(juce::Graphics& g, const juce::ValueTree& c, j
     lowest = std::max(0, lowest - 2);
     highest = std::min(127, highest + 2);
     const float noteHeight = std::max(1.5f, area.getHeight() / static_cast<float>(highest - lowest + 1));
-    const double beatsPerSecond = getTempo() / 60.0;
+    const auto& map = session_.getTempoMap(); // (notes follow the tempo map)
     const double clipStart = session::clip::getStart(c);
     const double contentStart = session::clip::getOffset(c);
+    const double clipBeat = map.beatAt(clipStart);
 
-    // A looped clip repeats its first loop-length of notes in every iteration.
-    const double loop = session::clip::getLoopLength(c);
+    // A looped clip repeats its first loop of notes in every iteration (a loop is so many beats).
     const double clipEnd = session::clip::getEnd(c);
-    const int iterations = session::clip::isLooped(c) ? std::max(1, static_cast<int>(std::ceil((clipEnd - clipStart) / loop - 1.0e-9))) : 1;
+    const double loopBeats = map.beatAt(clipStart + session::clip::getLoopLength(c)) - clipBeat;
+    const int iterations = session::clip::isLooped(c)
+                               ? std::max(1, static_cast<int>(std::ceil((map.beatAt(clipEnd) - clipBeat) / loopBeats - 1.0e-9)))
+                               : 1;
     g.setColour(colour);
     for (int k = 0; k < iterations; ++k)
     {
-        const double base = clipStart + k * loop;
-        const double windowEnd = iterations > 1 ? std::min(base + loop, clipEnd) : clipEnd;
+        const double baseBeat = clipBeat + k * loopBeats;
+        const double windowEnd = iterations > 1 ? std::min(map.secondsAt(baseBeat + loopBeats), clipEnd) : clipEnd;
         for (const auto& n : c)
         {
             if (!n.hasType(session::ids::note))
                 continue;
-            const double startTime = base + (session::note::getStart(n) - contentStart) / beatsPerSecond;
-            const double endTime = std::min(windowEnd, base + (session::note::getEnd(n) - contentStart) / beatsPerSecond);
+            const double startTime = map.secondsAt(baseBeat + session::note::getStart(n) - contentStart);
+            const double endTime = std::min(windowEnd, map.secondsAt(baseBeat + session::note::getEnd(n) - contentStart));
             if (startTime >= windowEnd)
                 continue;
             const float x0 = std::max(area.getX(), timeToX(startTime));
@@ -2118,7 +2575,7 @@ void ArrangerView::paintDropIndicator(juce::Graphics& g) const
 
     const auto lanes = getLaneArea();
     g.saveState();
-    g.reduceClipRegion(getLocalBounds().withTop(theme::metrics::rulerHeight));
+    g.reduceClipRegion(getLocalBounds().withTop(topHeight()));
 
     if (dropRow_ >= 0)
     {
@@ -2129,7 +2586,7 @@ void ArrangerView::paintDropIndicator(juce::Graphics& g) const
     {
         const auto& all = rows();
         const int bottom = all.empty() ? 0 : all.back().top + all.back().height;
-        const int top = theme::metrics::rulerHeight + bottom - scrollY_;
+        const int top = topHeight() + bottom - scrollY_;
         const auto zone = lanes.withTop(juce::jmax(lanes.getY(), top));
         g.setColour(theme::colour::accent.withAlpha(0.08f));
         g.fillRect(zone);
@@ -2219,6 +2676,12 @@ void ArrangerView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (getTempoTrackArea().contains(position))
+    {
+        mouseDownOnTempoTrack(e);
+        return;
+    }
+
     if (getRulerArea().contains(position))
     {
         dragMode_ = DragMode::locate;
@@ -2286,7 +2749,7 @@ void ArrangerView::mouseDown(const juce::MouseEvent& e)
         selectionAnchor_ = 0;
     }
     marqueeBase_ = additive ? editor_.getSelectedClips() : std::set<std::uint32_t>{};
-    marqueeAnchor_ = {seconds, juce::roundToInt(e.position.y) - theme::metrics::rulerHeight + scrollY_};
+    marqueeAnchor_ = {seconds, juce::roundToInt(e.position.y) - topHeight() + scrollY_};
     marqueeEnd_ = marqueeAnchor_;
     marqueeActive_ = false;
     pendingLocate_ = snap(seconds, e.mods);
@@ -2505,6 +2968,11 @@ void ArrangerView::mouseDrag(const juce::MouseEvent& e)
         locateTo(xToTime(e.position.x));
         return;
 
+    case DragMode::tempoPoint:
+    case DragMode::signatureMarker:
+        dragTempoTrack(e);
+        return;
+
     case DragMode::loopCreate:
     case DragMode::loopMove:
     case DragMode::loopStart:
@@ -2614,6 +3082,8 @@ void ArrangerView::dragLoop(const juce::MouseEvent& e)
     case DragMode::automationPoint:
     case DragMode::warpMarker:
     case DragMode::swipe:
+    case DragMode::tempoPoint:
+    case DragMode::signatureMarker:
         break;
     }
 
@@ -2650,7 +3120,9 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
         case DragMode::reorderTrack:
         case DragMode::marquee:
         case DragMode::automationPoint:
-        case DragMode::swipe: break;
+        case DragMode::swipe:
+        case DragMode::tempoPoint:
+        case DragMode::signatureMarker: break;
         }
         session_.beginTransaction(name);
     }
@@ -2661,7 +3133,7 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     auto anchorClip = session_.findClip(anchor.id);
     if (!anchorClip.isValid() || (dragMode_ != DragMode::moveClips && !session::clip::canEdit(anchorClip)))
         return;
-    const double beatsPerSecond = getTempo() / 60.0;
+    const auto& tempoMap = session_.getTempoMap();
 
     switch (dragMode_)
     {
@@ -2706,7 +3178,7 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
         session::clip::setStart(anchorClip, newStart, um);
         session::clip::setLength(anchorClip, end - newStart, um);
         if (anchor.midi)
-            session::clip::setOffset(anchorClip, anchor.offset + (newStart - anchor.start) * beatsPerSecond, um);
+            session::clip::setOffset(anchorClip, anchor.offset + tempoMap.beatAt(newStart) - tempoMap.beatAt(anchor.start), um);
         else
         {
             // The audio stays where it is: the offset follows the (warped) map, and the warp markers
@@ -2793,6 +3265,8 @@ void ArrangerView::dragClips(const juce::MouseEvent& e)
     case DragMode::marquee:
     case DragMode::automationPoint:
     case DragMode::swipe:
+    case DragMode::tempoPoint:
+    case DragMode::signatureMarker:
         break;
     }
 }
@@ -2817,6 +3291,17 @@ void ArrangerView::mouseDownOnTake(const juce::MouseEvent& e, int rowIndex)
 
 void ArrangerView::mouseUp(const juce::MouseEvent& e)
 {
+    if (dragMode_ == DragMode::tempoPoint || dragMode_ == DragMode::signatureMarker)
+    {
+        dragMode_ = DragMode::none;
+        dragTempoIndex_ = -1;
+        dragTempoChange_ = {};
+        dragSignature_ = {};
+        tempoDragMap_.reset();
+        repaint();
+        return;
+    }
+
     if (dragMode_ == DragMode::swipe && swipeLane_.isValid() && swipeLane_.getParent().isValid())
     {
         double from = std::min(swipeAnchor_, swipeEnd_);
@@ -2906,6 +3391,18 @@ void ArrangerView::mouseMove(const juce::MouseEvent& e)
     auto newCursor = juce::MouseCursor::NormalCursor;
     const auto position = e.getPosition();
 
+    if (getTempoTrackArea().contains(position))
+    {
+        if (signatureChangeAt(position).isValid())
+            newCursor = juce::MouseCursor::LeftRightResizeCursor;
+        else if (const int index = tempoPointAt(e.position); index == 0)
+            newCursor = juce::MouseCursor::UpDownResizeCursor;
+        else if (index > 0)
+            newCursor = juce::MouseCursor::DraggingHandCursor;
+        setMouseCursor(newCursor);
+        return;
+    }
+
     if (getLoopStrip().contains(position))
     {
         const float x0 = timeToX(session_.getLoopStart());
@@ -2955,6 +3452,32 @@ void ArrangerView::mouseDoubleClick(const juce::MouseEvent& e)
 {
     const auto position = e.getPosition();
     const int row = rowAt(position.y);
+
+    // The tempo track: a time signature from the bar (signature strip), a tempo change (curve), or
+    // a point's exact tempo.
+    if (getSignatureStripArea().contains(position))
+    {
+        const auto& map = session_.getTempoMap();
+        const int bar = static_cast<int>(map.barAt(map.beatAt(std::max(0.0, xToTime(e.position.x))))) + 1;
+        buildSignatureMenu(bar).showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+        return;
+    }
+    if (getTempoCurveArea().expanded(0, 7).contains(position))
+    {
+        if (const int index = tempoPointAt(e.position); index >= 0)
+        {
+            showTempoValueEditor(index);
+            return;
+        }
+        const auto& map = session_.getTempoMap();
+        const double beat = map.beatAt(editor_.snap(std::max(0.0, xToTime(e.position.x)), map, e.mods.isAltDown()));
+        if (beat > 0.0)
+        {
+            session_.beginTransaction("Add Tempo Change");
+            session_.addTempoChange(beat, std::round(yToTempo(e.position.y) * 100.0) / 100.0);
+        }
+        return;
+    }
 
     if (getLoopStrip().contains(position))
     {
@@ -3060,7 +3583,10 @@ void ArrangerView::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
 
 void ArrangerView::createMidiClipAt(const juce::ValueTree& t, double seconds)
 {
-    const double barSeconds = kBeatsPerBar * 60.0 / getTempo();
+    // A bar long (the bar it starts in, on the tempo map).
+    const auto& map = session_.getTempoMap();
+    const double beat = map.beatAt(seconds);
+    const double barSeconds = map.secondsAt(beat + map.barLength(map.barAt(beat))) - seconds;
     session_.beginTransaction("New MIDI Clip");
     auto c = session_.addMidiClip(t, seconds, barSeconds);
     editor_.selectClip(session::clip::getId(c), false);
@@ -3782,7 +4308,7 @@ void ArrangerView::showLaneMenu(int row, double seconds)
                          if (safe == nullptr)
                              return;
                          if (auto tree = safe->session_.findTrack(trackId); tree.isValid())
-                             safe->createMidiClipAt(tree, safe->editor_.snap(seconds, safe->getTempo()));
+                             safe->createMidiClipAt(tree, safe->editor_.snap(seconds, safe->session_.getTempoMap()));
                      });
     menu.addItem("Add Audio Track", [safe] { if (safe != nullptr) actions::addTrack(safe->session_, safe->editor_); });
     menu.addItem("Import Audio...", [safe]
@@ -3799,10 +4325,12 @@ void ArrangerView::showLaneMenu(int row, double seconds)
                  {
                      if (safe == nullptr)
                          return;
-                     const double bar = kBeatsPerBar * 60.0 / safe->getTempo();
-                     const double start = std::floor(seconds / bar) * bar;
+                     const auto& map = safe->session_.getTempoMap();
+                     const auto bar = map.barAt(map.beatAt(seconds));
+                     const double start = map.secondsAt(map.beatOfBar(bar));
+                     const double end = map.secondsAt(map.beatOfBar(bar + 1));
                      safe->session_.beginTransaction("Set Loop");
-                     safe->session_.setLoop(true, start, start + bar);
+                     safe->session_.setLoop(true, start, end);
                  });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
@@ -3855,7 +4383,7 @@ void ArrangerView::updateDropTarget(int x, int y)
     dropRow_ = rowAt(y);
     if (dropRow_ >= 0 && rows()[static_cast<std::size_t>(dropRow_)].kind != Row::Kind::track)
         dropRow_ = rowOfTrack(rows()[static_cast<std::size_t>(dropRow_)].track);
-    dropTime_ = editor_.snap(juce::jmax(0.0, xToTime(static_cast<float>(x))), getTempo());
+    dropTime_ = editor_.snap(juce::jmax(0.0, xToTime(static_cast<float>(x))), session_.getTempoMap());
     repaint();
 }
 

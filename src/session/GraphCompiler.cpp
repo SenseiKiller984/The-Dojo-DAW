@@ -300,6 +300,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
     auto graph = std::make_unique<engine::RenderGraph>();
     graph->tempo = session.getTempo();
+    graph->tempoMap = session.getTempoMapShared();
     graph->speed = session.getSpeed();
     graph->loopEnabled = session.isLoopEnabled();
     graph->loopStart = session.getLoopStart();
@@ -784,6 +785,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                 mc.contentStartBeat = clip::getOffset(c);
                 mc.rate = trackSpeed;
                 mc.loopLength = clip::isLooped(c) ? clip::getLoopLength(c) : 0.0;
+                if (mc.loopLength > 0.0)
+                {
+                    const auto& map = session.getTempoMap();
+                    mc.loopBeats = map.beatAt(mc.startSeconds + mc.loopLength) - map.beatAt(mc.startSeconds);
+                }
 
                 // Per-note expression makes the clip MPE: every note on a channel of its own.
                 mc.mpe = std::any_of(c.begin(), c.end(), [](const juce::ValueTree& n) { return n.hasType(ids::note) && note::hasExpression(n); });

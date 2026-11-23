@@ -174,6 +174,14 @@ void EditorState::setShowingClipRatings(bool show)
     notify();
 }
 
+void EditorState::setShowingTempoTrack(bool show)
+{
+    if (show == showTempoTrack_)
+        return;
+    showTempoTrack_ = show;
+    notify();
+}
+
 void EditorState::setTimeSelection(TimeSelection selection)
 {
     timeSelection_ = std::move(selection);
@@ -212,6 +220,31 @@ double EditorState::snap(double seconds, double tempoBpm, bool bypass) const noe
 
     const double gridSeconds = getGridBeats() * 60.0 / tempoBpm;
     return std::round(seconds / gridSeconds) * gridSeconds;
+}
+
+double EditorState::snap(double seconds, const time::TempoMap& map, bool bypass) const noexcept
+{
+    if (!snapEnabled_ || bypass)
+        return seconds;
+    return nearestGridLine(seconds, map);
+}
+
+double EditorState::nearestGridLine(double seconds, const time::TempoMap& map) const noexcept
+{
+    const double beat = map.beatAt(std::max(0.0, seconds));
+    const auto bar = map.barAt(beat);
+    const double barStart = map.beatOfBar(bar);
+    if (grid_ == Grid::bar)
+    {
+        const double from = map.secondsAt(barStart);
+        const double to = map.secondsAt(map.beatOfBar(bar + 1));
+        return seconds - from <= to - seconds ? from : to;
+    }
+    // A grid "beat" is the signature's beat (a quarter in 4/4, an eighth in 6/8).
+    const double unit = time::beatLengthInQuarterNotes(map.signatureOfBar(bar)) * getGridBeats();
+    const double nextBar = map.beatOfBar(bar + 1);
+    const double snapped = std::min(nextBar, barStart + std::round((beat - barStart) / unit) * unit);
+    return map.secondsAt(snapped);
 }
 
 } // namespace dojo::ui

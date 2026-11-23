@@ -575,7 +575,18 @@ void ControlSurfaces::moveSelection(int delta)
 
 double ControlSurfaces::beatSeconds() const
 {
-    return 60.0 / std::max(1.0, project_.getSession().getTempo());
+    const double at = host_.playhead ? std::max(0.0, host_.playhead()) : 0.0;
+    return 60.0 / std::max(1.0, project_.getSession().getTempoAt(at));
+}
+
+double ControlSurfaces::barSeconds() const
+{
+    // The bar at the play head, on the tempo map.
+    const auto& session = project_.getSession();
+    const double at = host_.playhead ? std::max(0.0, host_.playhead()) : 0.0;
+    const auto& map = session.getTempoMap();
+    const auto bar = map.barAt(map.beatAt(at));
+    return map.secondsAt(map.beatOfBar(bar + 1)) - map.secondsAt(map.beatOfBar(bar));
 }
 
 void ControlSurfaces::shuttle(int direction)
@@ -583,7 +594,7 @@ void ControlSurfaces::shuttle(int direction)
     shuttle_ = direction;
     shuttleWait_ = kShuttleDelay;
     if (host_.locate && host_.playhead)
-        host_.locate(std::max(0.0, host_.playhead() + direction * 4.0 * beatSeconds())); // (a bar of 4/4)
+        host_.locate(std::max(0.0, host_.playhead() + direction * barSeconds()));
 }
 
 void ControlSurfaces::tick(double seconds)
@@ -595,7 +606,7 @@ void ControlSurfaces::tick(double seconds)
         while (shuttleWait_ <= 0.0)
         {
             if (host_.locate && host_.playhead)
-                host_.locate(std::max(0.0, host_.playhead() + shuttle_ * 4.0 * beatSeconds()));
+                host_.locate(std::max(0.0, host_.playhead() + shuttle_ * barSeconds()));
             shuttleWait_ += kShuttleRepeat;
         }
     }
@@ -676,10 +687,14 @@ juce::String ControlSurfaces::timeText(bool hui) const
     const double seconds = host_.playhead ? std::max(0.0, host_.playhead()) : 0.0;
     if (showBeats_)
     {
-        const double beats = seconds / beatSeconds();
-        const auto bar = static_cast<int>(beats / 4.0) + 1;
-        const auto beat = static_cast<int>(std::fmod(beats, 4.0)) + 1;
-        const double inBeat = beats - std::floor(beats);
+        // Bars and beats from the tempo map (beats in the signature's unit), sixteenths of a beat.
+        const auto position = project_.getSession().getTempoMap().toBarsBeatsTicks(project_.getSession().beatAtSeconds(seconds));
+        const auto bar = static_cast<int>(position.bar);
+        const auto beat = position.beat;
+        const auto ticksPerBeat = std::max(1, static_cast<int>(std::lround(
+                                                   time::kTicksPerQuarterNote
+                                                   * time::beatLengthInQuarterNotes(project_.getSession().getSignatureAt(seconds)))));
+        const double inBeat = static_cast<double>(position.tick) / ticksPerBeat;
         const auto sixteenth = static_cast<int>(inBeat * 4.0) + 1;
         const auto ticks = static_cast<int>((inBeat * 4.0 - std::floor(inBeat * 4.0)) * 240.0);
         if (hui)

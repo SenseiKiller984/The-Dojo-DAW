@@ -16,6 +16,8 @@ add_library(dojo_core STATIC
     rt/RealtimeGuard.h
     rt/SpscQueue.h
     rt/ThreadOwnershipChecker.h
+    TempoMap.cpp
+    TempoMap.h
     WarpMap.h)
 add_library(dojo::core ALIAS dojo_core)
 

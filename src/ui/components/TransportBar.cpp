@@ -12,7 +12,6 @@ namespace
 {
 constexpr int kButtonSize = 36;
 constexpr int kButtonGap = 4;
-constexpr time::TimeSignature kSignature{4, 4};
 
 void paintReadoutBox(juce::Graphics& g, juce::Rectangle<int> area)
 {
@@ -142,10 +141,11 @@ TransportBar::TransportBar(engine::EngineController& controller, session::Sessio
     , punchOutButton_("Punch Out", IconButton::Icon::punchOut, theme::colour::record)
 {
     tempoField_ = std::make_unique<ValueField>(
-        session, ValueField::Spec{"BPM", session::ids::tempo, [this] { return session_.getTempo(); },
-                                  [this](double v) { session_.setTempo(v); }, [](double v) { return juce::String(v, 2); }, 0.25,
+        session, ValueField::Spec{"BPM", session::ids::tempo, [this] { return session_.getTempoAt(playheadSeconds()); },
+                                  [this](double v) { session_.setTempoAt(playheadSeconds(), v); }, [](double v) { return juce::String(v, 2); }, 0.25,
                                   0.01, session::kMinTempo, session::kMaxTempo, 2, "Change Tempo", "0123456789."});
-    tempoField_->setTooltip("Tempo. Drag up/down to change (Shift: fine), double-click to type.");
+    tempoField_->setTooltip("Tempo at the playhead (the start tempo, or the tempo change it is after). Drag up/down to change "
+                            "(Shift: fine), double-click to type.");
 
     speedField_ = std::make_unique<ValueField>(
         session, ValueField::Spec{"SPEED", session::ids::speed, [this] { return session_.getSpeed(); },
@@ -291,14 +291,29 @@ void TransportBar::update(const engine::TelemetrySnapshot& telemetry, double sam
         playButton_.setLit(playing_);
     }
 
-    const double tempo = session_.getTempo();
-    if (telemetry.playheadSamples != playheadSamples_ || !juce::exactlyEqual(sampleRate, sampleRate_) ||
-        !juce::exactlyEqual(tempo, tempoShown_))
+    playheadSamples_ = telemetry.playheadSamples;
+    sampleRate_ = sampleRate;
+    const auto map = session_.getTempoMapShared();
+    const double seconds = playheadSeconds();
+    const double tempo = map->bpmAt(seconds);
+    const auto signature = map->signatureAt(map->beatAt(seconds));
+    const auto position = map->toBarsBeatsTicks(map->beatAt(seconds));
+    if (position.bar != shownPosition_.bar || position.beat != shownPosition_.beat || position.tick != shownPosition_.tick
+        || telemetry.playheadSamples != shownSamples_)
     {
-        playheadSamples_ = telemetry.playheadSamples;
-        sampleRate_ = sampleRate;
-        tempoShown_ = tempo;
+        shownPosition_ = position;
+        shownSamples_ = telemetry.playheadSamples;
         repaint(positionArea_);
+    }
+    if (!juce::exactlyEqual(tempo, tempoShown_))
+    {
+        tempoShown_ = tempo;
+        tempoField_->repaint();
+    }
+    if (signature.numerator != signatureShown_.numerator || signature.denominator != signatureShown_.denominator)
+    {
+        signatureShown_ = signature;
+        repaint(signatureArea_);
     }
 
     if (std::abs(telemetry.dspLoad - dspLoad_) > 0.002f)
@@ -430,8 +445,7 @@ void TransportBar::paintPositionDisplay(juce::Graphics& g) const
 
     const double rate = sampleRate_ > 0.0 ? sampleRate_ : 48000.0;
     const double seconds = time::samplesToSeconds(std::max<SampleCount>(0, playheadSamples_), rate);
-    const auto bbt = time::quarterNotesToBarsBeatsTicks(
-        time::secondsToQuarterNotes(seconds, session_.getTempo()), kSignature);
+    const auto bbt = session_.getTempoMap().toBarsBeatsTicks(session_.beatAtSeconds(seconds));
     const auto clock = time::secondsToClockTime(seconds);
 
     auto area = positionArea_.reduced(12, 4);
@@ -460,6 +474,38 @@ void TransportBar::paintPositionDisplay(juce::Graphics& g) const
     g.drawText("TIME", area.removeFromBottom(12), juce::Justification::centredRight, false);
 }
 
+double TransportBar::playheadSeconds() const
+{
+    return time::samplesToSeconds(std::max<SampleCount>(0, playheadSamples_), sampleRate_ > 0.0 ? sampleRate_ : 48000.0);
+}
+
+void TransportBar::mouseDown(const juce::MouseEvent& e)
+{
+    if (!signatureArea_.contains(e.getPosition()))
+        return;
+    // The meter at the playhead: a time signature from the start of its run on.
+    juce::Component::SafePointer<TransportBar> safe(this);
+    const double at = playheadSeconds();
+    const auto current = session_.getSignatureAt(at);
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Time Signature at the Playhead");
+    for (const auto& offered : std::vector<std::pair<int, int>>{{2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 4}, {7, 4}, {3, 8}, {5, 8}, {6, 8},
+                                                                {7, 8}, {9, 8}, {12, 8}, {2, 2}, {3, 2}})
+    {
+        const int n = offered.first, d = offered.second;
+        menu.addItem(juce::String(n) + "/" + juce::String(d), true, current.numerator == n && current.denominator == d,
+                     [safe, at, n, d]
+                     {
+                         if (safe == nullptr)
+                             return;
+                         safe->session_.beginTransaction("Time Signature");
+                         safe->session_.setSignatureAt(at, n, d);
+                         safe->repaint();
+                     });
+    }
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(localAreaToGlobal(signatureArea_)));
+}
+
 void TransportBar::paintSignature(juce::Graphics& g) const
 {
     paintReadoutBox(g, signatureArea_);
@@ -467,8 +513,9 @@ void TransportBar::paintSignature(juce::Graphics& g) const
 
     g.setColour(theme::colour::gold);
     g.setFont(theme::mono(17.0f));
-    g.drawText(juce::String(kSignature.numerator) + "/" + juce::String(kSignature.denominator),
-               inner.withTrimmedBottom(12), juce::Justification::centred, false);
+    const auto signature = session_.getSignatureAt(playheadSeconds());
+    g.drawText(juce::String(signature.numerator) + "/" + juce::String(signature.denominator), inner.withTrimmedBottom(12),
+               juce::Justification::centred, false);
 
     g.setColour(theme::colour::textMuted);
     g.setFont(theme::label(8.5f));

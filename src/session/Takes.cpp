@@ -25,7 +25,7 @@ std::vector<juce::ValueTree> compClipsOf(const juce::ValueTree& track)
 /** True if `segment` plays what `take` plays at the same moments (it was cut from the take and not
     moved, stretched or warped since): the comp can go on from one to the other with a plain cut.
     Clip gain and fades may differ. */
-bool playsSameMaterial(const juce::ValueTree& segment, const juce::ValueTree& take, double beatsPerSecond)
+bool playsSameMaterial(const juce::ValueTree& segment, const juce::ValueTree& take, const time::TempoMap& map)
 {
     if (segment.getType() != take.getType() || clip::isLooped(segment) || clip::isLooped(take))
         return false;
@@ -33,7 +33,8 @@ bool playsSameMaterial(const juce::ValueTree& segment, const juce::ValueTree& ta
 
     if (clip::isMidi(segment))
     {
-        if (std::abs(clip::getOffset(segment) - (clip::getOffset(take) + into * beatsPerSecond)) > kSameTime
+        const double intoBeats = map.beatAt(clip::getStart(segment)) - map.beatAt(clip::getStart(take));
+        if (std::abs(clip::getOffset(segment) - (clip::getOffset(take) + intoBeats)) > kSameTime
             || segment.getNumChildren() != take.getNumChildren())
             return false;
         for (int i = 0; i < segment.getNumChildren(); ++i)
@@ -53,9 +54,9 @@ bool playsSameMaterial(const juce::ValueTree& segment, const juce::ValueTree& ta
 }
 
 /** ... and left as it was cut: the take's gain, no locks or groups (it can be cut afresh). */
-bool isUntouchedCopy(const juce::ValueTree& segment, const juce::ValueTree& take, double beatsPerSecond)
+bool isUntouchedCopy(const juce::ValueTree& segment, const juce::ValueTree& take, const time::TempoMap& map)
 {
-    if (!playsSameMaterial(segment, take, beatsPerSecond) || clip::isEditLocked(segment) || clip::isTimeLocked(segment)
+    if (!playsSameMaterial(segment, take, map) || clip::isEditLocked(segment) || clip::isTimeLocked(segment)
         || clip::isGrouped(segment))
         return false;
     return clip::isMidi(segment)
@@ -246,7 +247,7 @@ void Session::compTake(juce::ValueTree lane, double start, double end)
         return;
 
     const auto laneId = takelane::getId(lane);
-    const double beatsPerSecond = getTempo() / 60.0;
+    const auto& tempoMap = getTempoMap();
     const auto takes = takelane::getClips(lane);
     const bool midi = std::any_of(takes.begin(), takes.end(), [](const juce::ValueTree& c) { return clip::isMidi(c); });
     const double crossfade = midi ? 0.0 : getCompCrossfade();
@@ -254,7 +255,7 @@ void Session::compTake(juce::ValueTree lane, double start, double end)
     const auto isUntouchedSegment = [&](const juce::ValueTree& c)
     {
         return clip::getTake(c) == laneId
-               && std::any_of(takes.begin(), takes.end(), [&](const juce::ValueTree& take) { return isUntouchedCopy(c, take, beatsPerSecond); });
+               && std::any_of(takes.begin(), takes.end(), [&](const juce::ValueTree& take) { return isUntouchedCopy(c, take, tempoMap); });
     };
 
     // 1. Stretches of the comp at (or within a crossfade of) the range that already play this take
@@ -372,7 +373,7 @@ void Session::compTake(juce::ValueTree lane, double start, double end)
         {
             // Different takes crossfade with equal power; where the same material goes on (its gain
             // changed, say) the crossfade is equal-gain, so nothing dips or swells.
-            edit.equalGain = playsSameMaterial(edit.neighbour, take, beatsPerSecond);
+            edit.equalGain = playsSameMaterial(edit.neighbour, take, tempoMap);
             const double spareOld = leading ? clip::getEnd(edit.neighbour) - time : time - clip::getStart(edit.neighbour);
             double newSide = std::min(half, spareNew);
             double oldSide = std::min(half, spareOld);
@@ -390,7 +391,7 @@ void Session::compTake(juce::ValueTree lane, double start, double end)
             if (std::abs((leading ? clip::getEnd(c) : clip::getStart(c)) - time) <= kSameTime)
             {
                 edit.reach = outward(std::min(2.0 * half, spareNew));
-                edit.equalGain = playsSameMaterial(c, take, beatsPerSecond);
+                edit.equalGain = playsSameMaterial(c, take, tempoMap);
                 if (edit.equalGain && isTrimmable(c))
                     edit.touching = c;
                 return edit;

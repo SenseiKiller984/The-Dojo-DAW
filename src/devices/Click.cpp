@@ -41,7 +41,7 @@ double Click::getEffectiveTempo(double projectBpm) const
 void Click::prepareDsp(double, int)
 {
     voice_ = {};
-    lastTick_ = -1;
+    lastTickPpq_ = -1.0e18;
 }
 
 void Click::trigger(bool accented) noexcept
@@ -105,6 +105,7 @@ void Click::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) noe
     double ppqPerSample = 0.0;
     double barStart = 0.0;
     int beatsPerBar = 4;
+    double beatUnit = 1.0; // quarter notes per beat (the signature's denominator note)
     if (auto* head = getPlayHead())
         if (const auto info = head->getPosition())
         {
@@ -115,7 +116,10 @@ void Click::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) noe
             ppqPerSample = projectBpm / 60.0 / sampleRate_;
             barStart = info->getPpqPositionOfLastBarStart().orFallback(std::floor(ppq / 4.0) * 4.0);
             if (const auto signature = info->getTimeSignature())
+            {
                 beatsPerBar = std::max(1, signature->numerator);
+                beatUnit = 4.0 / std::max(1, signature->denominator);
+            }
             if (ownTempo_->get())
             {
                 // Its own tempo: beats counted from the start of the timeline at that tempo.
@@ -123,29 +127,32 @@ void Click::processDsp(juce::AudioBuffer<double>& buffer, juce::MidiBuffer&) noe
                 const double seconds = info->getTimeInSeconds().orFallback(ppq * 60.0 / projectBpm);
                 ppq = seconds * bpm / 60.0;
                 ppqPerSample = bpm / 60.0 / sampleRate_;
+                beatUnit = 1.0;
                 barStart = std::floor(ppq / beatsPerBar + 1.0e-9) * beatsPerBar;
             }
         }
 
     const double ticksPerBeat = subdivision_->getIndex() == 2 ? 4.0 : subdivision_->getIndex() == 1 ? 2.0 : 1.0;
     if (!playing)
-        lastTick_ = -1; // (a new start clicks on its first beat)
+        lastTickPpq_ = -1.0e18; // (a new start clicks on its first beat)
 
+    // Ticks are counted in the signature's beats (eighths in 6/8) from the bar's start.
+    const double tickStep = ppqPerSample / beatUnit * ticksPerBeat;
     for (int i = 0; i < numSamples; ++i)
     {
         if (playing)
         {
             // A tick starts at the first sample at or after each subdivision.
-            const double position = (ppq + i * ppqPerSample) * ticksPerBeat;
+            const double position = (ppq - barStart + i * ppqPerSample) / beatUnit * ticksPerBeat;
             const double tick = std::ceil(position - 1.0e-9);
-            const auto tickIndex = static_cast<long long>(tick);
-            if (tick - position < ppqPerSample * ticksPerBeat && tickIndex != lastTick_ && tick >= 0.0)
+            const double tickPpq = barStart + tick / ticksPerBeat * beatUnit;
+            if (tick - position < tickStep && std::abs(tickPpq - lastTickPpq_) > 1.0e-6 && tickPpq >= -1.0e-9)
             {
-                lastTick_ = tickIndex;
+                lastTickPpq_ = tickPpq;
                 const double beat = tick / ticksPerBeat;
                 const bool onBeat = std::abs(beat - std::round(beat)) < 1.0e-6;
-                // The first beat of a bar (bars counted from the play head's last bar start).
-                const auto beatsIntoBar = std::llround(beat - barStart) % beatsPerBar;
+                // The first beat of a bar (from the play head's last bar start).
+                const auto beatsIntoBar = std::llround(beat) % beatsPerBar;
                 const bool downbeat = onBeat && (beatsIntoBar + beatsPerBar) % beatsPerBar == 0;
                 trigger(accent_->get() && downbeat);
                 if (!onBeat)

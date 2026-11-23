@@ -949,6 +949,12 @@ void setRange(juce::ValueTree m, double minimum, double maximum, juce::UndoManag
 Session::Session()
     : state_(createEmptyState())
 {
+    state_.addListener(&tempoMapWatcher_);
+}
+
+Session::~Session()
+{
+    state_.removeListener(&tempoMapWatcher_);
 }
 
 std::uint32_t Session::allocateId()
@@ -969,7 +975,329 @@ void Session::reassignIds(juce::ValueTree tree)
 // --- Global ---------------------------------------------------------------------------------------
 
 double Session::getTempo() const { return state_.getProperty(ids::tempo, 120.0); }
-void Session::setTempo(double bpm) { state_.setProperty(ids::tempo, juce::jlimit(kMinTempo, kMaxTempo, bpm), &undo_); }
+void Session::setTempo(double bpm)
+{
+    bpm = juce::jlimit(kMinTempo, kMaxTempo, bpm);
+    if (std::abs(bpm - getTempo()) < 1.0e-12)
+        return;
+    editTempoMap([&] { state_.setProperty(ids::tempo, bpm, &undo_); });
+}
+
+// --- Tempo map ------------------------------------------------------------------------------------
+
+namespace
+{
+juce::String shapeName(time::TempoShape shape)
+{
+    switch (shape)
+    {
+        case time::TempoShape::linear: return "linear";
+        case time::TempoShape::curve: return "curve";
+        case time::TempoShape::jump: break;
+    }
+    return "jump";
+}
+
+time::TempoShape shapeFromName(const juce::String& name)
+{
+    if (name == "linear")
+        return time::TempoShape::linear;
+    if (name == "curve")
+        return time::TempoShape::curve;
+    return time::TempoShape::jump;
+}
+
+std::vector<juce::ValueTree> childrenOfType(const juce::ValueTree& parent, const juce::Identifier& type)
+{
+    std::vector<juce::ValueTree> out;
+    for (const auto& child : parent)
+        if (child.hasType(type))
+            out.push_back(child);
+    return out;
+}
+} // namespace
+
+void Session::TempoMapWatcher::valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier& property)
+{
+    if ((tree == owner.state_ && property == ids::tempo) || tree.hasType(ids::tempoMap) || tree.hasType(ids::tempoPoint)
+        || tree.hasType(ids::signature))
+        owner.tempoMap_.reset();
+}
+
+void Session::TempoMapWatcher::valueTreeChildAdded(juce::ValueTree& parent, juce::ValueTree& child)
+{
+    if (parent.hasType(ids::tempoMap) || child.hasType(ids::tempoMap))
+        owner.tempoMap_.reset();
+}
+
+void Session::TempoMapWatcher::valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree& child, int)
+{
+    if (parent.hasType(ids::tempoMap) || child.hasType(ids::tempoMap))
+        owner.tempoMap_.reset();
+}
+
+std::shared_ptr<const time::TempoMap> Session::getTempoMapShared() const
+{
+    if (tempoMap_ == nullptr)
+    {
+        std::vector<time::TempoPoint> points;
+        std::vector<time::SignaturePoint> signatures;
+        const auto node = state_.getChildWithName(ids::tempoMap);
+        points.push_back({0.0, getTempo(), shapeFromName(node.getProperty(ids::shape).toString()),
+                          static_cast<double>(node.getProperty(ids::bend, 0.0))});
+        for (const auto& child : node)
+        {
+            if (child.hasType(ids::tempoPoint))
+            {
+                const double beat = child.getProperty(ids::beat, 0.0);
+                if (beat > 0.0) // (the start is the session's tempo)
+                    points.push_back({beat, juce::jlimit(kMinTempo, kMaxTempo, static_cast<double>(child.getProperty(ids::bpm, 120.0))),
+                                      shapeFromName(child.getProperty(ids::shape).toString()),
+                                      static_cast<double>(child.getProperty(ids::bend, 0.0))});
+            }
+            else if (child.hasType(ids::signature))
+            {
+                signatures.push_back({std::max<std::int64_t>(0, static_cast<std::int64_t>(static_cast<int>(child.getProperty(ids::bar, 1))) - 1),
+                                      {static_cast<int>(child.getProperty(ids::numerator, 4)),
+                                       static_cast<int>(child.getProperty(ids::denominator, 4))}});
+            }
+        }
+        tempoMap_ = std::make_shared<const time::TempoMap>(std::move(points), std::move(signatures));
+    }
+    return tempoMap_;
+}
+
+const time::TempoMap& Session::getTempoMap() const
+{
+    if (tempoMap_ == nullptr)
+        tempoMap_ = getTempoMapShared();
+    return *tempoMap_;
+}
+
+juce::ValueTree Session::getTempoMapNode()
+{
+    auto node = state_.getChildWithName(ids::tempoMap);
+    if (!node.isValid())
+    {
+        node = juce::ValueTree(ids::tempoMap);
+        state_.addChild(node, -1, &undo_);
+    }
+    return node;
+}
+
+std::vector<juce::ValueTree> Session::getTempoChanges() const
+{
+    auto out = childrenOfType(state_.getChildWithName(ids::tempoMap), ids::tempoPoint);
+    std::stable_sort(out.begin(), out.end(), [](const juce::ValueTree& a, const juce::ValueTree& b)
+                     { return static_cast<double>(a.getProperty(ids::beat)) < static_cast<double>(b.getProperty(ids::beat)); });
+    return out;
+}
+
+std::vector<juce::ValueTree> Session::getSignatureChanges() const
+{
+    auto out = childrenOfType(state_.getChildWithName(ids::tempoMap), ids::signature);
+    std::stable_sort(out.begin(), out.end(), [](const juce::ValueTree& a, const juce::ValueTree& b)
+                     { return static_cast<int>(a.getProperty(ids::bar)) < static_cast<int>(b.getProperty(ids::bar)); });
+    return out;
+}
+
+time::TempoShape Session::getStartTempoShape() const
+{
+    return shapeFromName(state_.getChildWithName(ids::tempoMap).getProperty(ids::shape).toString());
+}
+
+double Session::getStartTempoBend() const { return state_.getChildWithName(ids::tempoMap).getProperty(ids::bend, 0.0); }
+
+void Session::setStartTempoShape(time::TempoShape shape, double bend)
+{
+    editTempoMap(
+        [&]
+        {
+            auto node = getTempoMapNode();
+            node.setProperty(ids::shape, shapeName(shape), &undo_);
+            node.setProperty(ids::bend, juce::jlimit(-1.0, 1.0, bend), &undo_);
+        });
+}
+
+juce::ValueTree Session::addTempoChange(double beat, double bpm, time::TempoShape shape, double bend)
+{
+    beat = std::max(1.0 / 960.0, beat);
+    juce::ValueTree change;
+    editTempoMap(
+        [&]
+        {
+            for (const auto& existing : getTempoChanges())
+                if (std::abs(static_cast<double>(existing.getProperty(ids::beat)) - beat) < 1.0e-9)
+                    change = existing;
+            if (!change.isValid())
+            {
+                change = juce::ValueTree(ids::tempoPoint);
+                change.setProperty(ids::beat, beat, nullptr);
+                getTempoMapNode().addChild(change, -1, &undo_);
+            }
+            change.setProperty(ids::bpm, juce::jlimit(kMinTempo, kMaxTempo, bpm), &undo_);
+            change.setProperty(ids::shape, shapeName(shape), &undo_);
+            change.setProperty(ids::bend, juce::jlimit(-1.0, 1.0, bend), &undo_);
+        });
+    return change;
+}
+
+void Session::setTempoChange(juce::ValueTree change, double beat, double bpm)
+{
+    if (!change.hasType(ids::tempoPoint))
+        return;
+    editTempoMap(
+        [&]
+        {
+            change.setProperty(ids::beat, std::max(1.0 / 960.0, beat), &undo_);
+            change.setProperty(ids::bpm, juce::jlimit(kMinTempo, kMaxTempo, bpm), &undo_);
+        });
+}
+
+void Session::setTempoChangeShape(juce::ValueTree change, time::TempoShape shape, double bend)
+{
+    if (!change.hasType(ids::tempoPoint))
+        return;
+    editTempoMap(
+        [&]
+        {
+            change.setProperty(ids::shape, shapeName(shape), &undo_);
+            change.setProperty(ids::bend, juce::jlimit(-1.0, 1.0, bend), &undo_);
+        });
+}
+
+void Session::removeTempoChange(juce::ValueTree change)
+{
+    if (!change.hasType(ids::tempoPoint))
+        return;
+    editTempoMap(
+        [&]
+        {
+            if (auto parent = change.getParent(); parent.isValid())
+                parent.removeChild(change, &undo_);
+        });
+}
+
+void Session::setTempoAt(double seconds, double bpm)
+{
+    const auto& map = getTempoMap();
+    const int index = map.pointIndexAt(map.beatAt(seconds));
+    if (index <= 0)
+    {
+        setTempo(bpm);
+        return;
+    }
+    const double beat = map.getPoints()[static_cast<std::size_t>(index)].beat;
+    for (auto& change : getTempoChanges())
+        if (std::abs(static_cast<double>(change.getProperty(ids::beat)) - beat) < 1.0e-9)
+        {
+            setTempoChange(change, beat, bpm);
+            return;
+        }
+}
+
+juce::ValueTree Session::addSignatureChange(int bar, int numerator, int denominator)
+{
+    bar = std::max(1, bar);
+    juce::ValueTree change;
+    editTempoMap(
+        [&]
+        {
+            for (const auto& existing : getSignatureChanges())
+                if (static_cast<int>(existing.getProperty(ids::bar)) == bar)
+                    change = existing;
+            if (!change.isValid())
+            {
+                change = juce::ValueTree(ids::signature);
+                change.setProperty(ids::bar, bar, nullptr);
+                getTempoMapNode().addChild(change, -1, &undo_);
+            }
+            change.setProperty(ids::numerator, juce::jlimit(1, 64, numerator), &undo_);
+            change.setProperty(ids::denominator, juce::jlimit(1, 64, denominator), &undo_);
+        });
+    return change;
+}
+
+void Session::setSignatureChange(juce::ValueTree change, int bar, int numerator, int denominator)
+{
+    if (!change.hasType(ids::signature))
+        return;
+    editTempoMap(
+        [&]
+        {
+            change.setProperty(ids::bar, std::max(1, bar), &undo_);
+            change.setProperty(ids::numerator, juce::jlimit(1, 64, numerator), &undo_);
+            change.setProperty(ids::denominator, juce::jlimit(1, 64, denominator), &undo_);
+        });
+}
+
+void Session::removeSignatureChange(juce::ValueTree change)
+{
+    if (!change.hasType(ids::signature))
+        return;
+    editTempoMap(
+        [&]
+        {
+            if (auto parent = change.getParent(); parent.isValid())
+                parent.removeChild(change, &undo_);
+        });
+}
+
+void Session::setSignatureAt(double seconds, int numerator, int denominator)
+{
+    const auto& map = getTempoMap();
+    const auto bar = map.barAt(map.beatAt(seconds));
+    // The run the position is in starts at the latest signature change at or before its bar.
+    int runBar = 1;
+    for (const auto& change : getSignatureChanges())
+        if (static_cast<int>(change.getProperty(ids::bar)) - 1 <= bar)
+            runBar = static_cast<int>(change.getProperty(ids::bar));
+    addSignatureChange(runBar, numerator, denominator);
+}
+
+void Session::clearTempoMap()
+{
+    if (!state_.getChildWithName(ids::tempoMap).isValid())
+        return;
+    editTempoMap([&] { state_.removeChild(state_.getChildWithName(ids::tempoMap), &undo_); });
+}
+
+void Session::editTempoMap(const std::function<void()>& edit)
+{
+    const auto before = getTempoMapShared();
+    edit();
+    const auto after = getTempoMapShared();
+
+    // MIDI clips are musical: they keep their bars (and a looped one its loop in beats).
+    const auto retime = [&](juce::ValueTree c)
+    {
+        if (!c.hasType(ids::midiClip) || clip::isTimeLocked(c))
+            return;
+        const double start = clip::getStart(c);
+        const double startBeat = before->beatAt(start);
+        const double endBeat = before->beatAt(start + clip::getLength(c));
+        const double newStart = std::max(0.0, after->secondsAt(startBeat));
+        const double newLength = std::max(kMinClipLength, after->secondsAt(endBeat) - newStart);
+        if (clip::isLooped(c))
+        {
+            const double loopBeats = before->beatAt(start + clip::getLoopLength(c)) - startBeat;
+            clip::setLoop(c, true, std::max(kMinClipLength, after->secondsAt(startBeat + loopBeats) - newStart), &undo_);
+        }
+        if (std::abs(newStart - start) > 1.0e-12)
+            clip::setStart(c, newStart, &undo_);
+        if (std::abs(newLength - clip::getLength(c)) > 1.0e-12)
+            clip::setLength(c, newLength, &undo_);
+    };
+    for (const auto& t : getAllTracks())
+        for (const auto& c : t)
+        {
+            if (c.hasType(ids::takeLane))
+                for (const auto& take : c)
+                    retime(take);
+            else
+                retime(c);
+        }
+}
 double Session::getMasterVolumeDb() const { return state_.getProperty(ids::masterVolume, 0.0); }
 void Session::setMasterVolumeDb(double db)
 {
@@ -1778,8 +2106,8 @@ juce::ValueTree Session::splitClip(juce::ValueTree c, double atSeconds)
     if (clip::isMidi(c))
     {
         // MIDI clips are windows onto their notes: the right part shows the content from the split on.
-        const double beatsPerSecond = getTempo() / 60.0;
-        right.setProperty(ids::offset, clip::getOffset(c) + leftLength * beatsPerSecond, nullptr);
+        const auto& map = getTempoMap();
+        right.setProperty(ids::offset, clip::getOffset(c) + map.beatAt(atSeconds) - map.beatAt(start), nullptr);
     }
     else
     {
@@ -2221,7 +2549,9 @@ juce::ValueTree Session::captureClip(const juce::ValueTree& track, double start,
     entry.setProperty(ids::start, 0.0, nullptr);
     entry.setProperty(ids::length, to - from, nullptr);
     if (clip::isMidi(first))
-        entry.setProperty(ids::offset, clip::getOffset(first) + into * getTempo() / 60.0, nullptr);
+        entry.setProperty(ids::offset,
+                          clip::getOffset(first) + getTempoMap().beatAt(clip::getStart(first) + into) - getTempoMap().beatAt(clip::getStart(first)),
+                          nullptr);
     else
         entry.setProperty(ids::offset, clip::getOffset(first) + into / std::max(kMinStretch, clip::getStretch(first)), nullptr);
     entry.setProperty(ids::name, name.trim().isNotEmpty() ? name.trim() : clip::getName(first), nullptr);
@@ -2325,7 +2655,12 @@ std::vector<juce::ValueTree> Session::placeGroupCopy(std::uint32_t groupId, juce
 
 double Session::getStartInParent(const juce::ValueTree& c) const
 {
-    return clip::isMidi(c) ? clip::getOffset(c) * 60.0 / getTempo() : clip::getOffset(c);
+    if (!clip::isMidi(c))
+        return clip::getOffset(c);
+    // The content's beats before the clip's start, in seconds there (on the tempo map).
+    const auto& map = getTempoMap();
+    const double start = clip::getStart(c);
+    return start - map.secondsAt(map.beatAt(start) - clip::getOffset(c));
 }
 
 double Session::getEndInParent(const juce::ValueTree& c) const

@@ -49,6 +49,8 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    /** A click on the meter offers time signatures for the bar at the playhead. */
+    void mouseDown(const juce::MouseEvent& e) override;
 
 private:
     class ValueField;
@@ -57,6 +59,7 @@ private:
     void paintBrand(juce::Graphics& g) const;
     void paintPositionDisplay(juce::Graphics& g) const;
     void paintSignature(juce::Graphics& g) const;
+    [[nodiscard]] double playheadSeconds() const;
     void paintLoadMeter(juce::Graphics& g) const;
 
     engine::EngineController& controller_;
@@ -88,6 +91,9 @@ private:
     SampleCount playheadSamples_ = -1;
     double sampleRate_ = 0.0;
     double tempoShown_ = 0.0;
+    time::TimeSignature signatureShown_{0, 0};
+    time::BarsBeatsTicks shownPosition_{0, 0, 0};
+    SampleCount shownSamples_ = -1;
     bool playing_ = false;
     bool recording_ = false;
     bool loopShown_ = false;

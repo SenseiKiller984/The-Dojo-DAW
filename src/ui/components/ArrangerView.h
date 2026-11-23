@@ -171,6 +171,24 @@ public:
     /** A take lane header's S (audition) button. */
     [[nodiscard]] juce::Rectangle<int> getTakeAuditionButtonArea(const juce::ValueTree& lane) const;
 
+    // --- Tempo track (View > Tempo Track; public for tests) ---------------------------------------
+    /** The tempo track under the ruler (empty when hidden): the time signatures on top, the tempo
+        curve with its points below. */
+    [[nodiscard]] juce::Rectangle<int> getTempoTrackArea() const;
+    [[nodiscard]] juce::Rectangle<int> getSignatureStripArea() const;
+    [[nodiscard]] juce::Rectangle<int> getTempoCurveArea() const;
+    /** Where a tempo point (an index into the tempo map's points; 0 is the start tempo) is drawn. */
+    [[nodiscard]] juce::Point<float> getTempoPointPosition(int index) const;
+    /** The tempo point under `position` (within a few pixels), or -1. */
+    [[nodiscard]] int tempoPointAt(juce::Point<float> position) const;
+    [[nodiscard]] float tempoToY(double bpm) const;
+    [[nodiscard]] double yToTempo(float y) const;
+    /** The tempo track's context menu at a position: a point's shape and tempo, or adding a change
+        or a time signature there. */
+    [[nodiscard]] juce::PopupMenu buildTempoMenu(juce::Point<int> position);
+    /** The time signatures offered for a bar (1-based; the one in effect ticked). */
+    [[nodiscard]] juce::PopupMenu buildSignatureMenu(int bar);
+
 private:
     struct Row
     {
@@ -206,6 +224,8 @@ private:
         marquee,
         warpMarker,
         swipe, ///< across a take lane: comping
+        tempoPoint,      ///< a point of the tempo track
+        signatureMarker, ///< a time signature change, along the bars
     };
 
     enum class ClipZone
@@ -287,6 +307,16 @@ private:
 
     // Painting
     void paintRuler(juce::Graphics& g) const;
+    void paintTempoTrack(juce::Graphics& g) const;
+    /** The height of everything above the track lanes: the ruler and, when shown, the tempo track. */
+    [[nodiscard]] int topHeight() const;
+    void mouseDownOnTempoTrack(const juce::MouseEvent& e);
+    void dragTempoTrack(const juce::MouseEvent& e);
+    [[nodiscard]] std::pair<double, double> tempoRange() const;
+    /** The TEMPO node of a tempo map point (invalid for the start, point 0). */
+    [[nodiscard]] juce::ValueTree tempoChangeOfPoint(int index) const;
+    [[nodiscard]] juce::ValueTree signatureChangeAt(juce::Point<int> position) const;
+    void showTempoValueEditor(int index);
     void paintHeaders(juce::Graphics& g) const;
     void paintTrackHeader(juce::Graphics& g, int rowIndex, const Row& row) const;
     void paintLaneHeader(juce::Graphics& g, int rowIndex, const Row& row) const;
@@ -348,7 +378,7 @@ private:
     void valueTreeChildOrderChanged(juce::ValueTree&, int, int) override;
     void valueTreeRedirected(juce::ValueTree&) override { structureChanged(); }
     void scrollBarMoved(juce::ScrollBar* bar, double newRangeStart) override;
-    void editorStateChanged() override { repaint(); }
+    void editorStateChanged() override;
     void audioAssetLoaded(const juce::File&) override { repaint(); }
 
     session::Project& project_;
@@ -407,6 +437,12 @@ private:
     double loopDragStart_ = 0.0;
     double loopDragEnd_ = 0.0;
     double loopAnchor_ = 0.0;
+    int dragTempoIndex_ = -1;                              ///< the tempo point being dragged
+    juce::ValueTree dragTempoChange_;                      ///< (its TEMPO node; invalid for the start tempo)
+    std::shared_ptr<const time::TempoMap> tempoDragMap_;   ///< the map as the drag began
+    std::pair<double, double> tempoDragRange_{0.0, 0.0};   ///< the tempo scale, held while dragging
+    juce::ValueTree dragSignature_;                        ///< the SIGNATURE node being dragged
+    int shownTopHeight_ = 0;                               ///< (the layout follows the tempo track's toggle)
 
     bool dropActive_ = false;
     int dropRow_ = -1;

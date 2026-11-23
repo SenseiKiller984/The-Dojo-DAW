@@ -207,20 +207,76 @@ public:
     }
 };
 
-/** The session's tempo and 4/4 for the plug-ins (they may ask from any thread). */
+/** The session's tempo map, for the plug-ins' content readers (they may ask from any thread). */
+struct SharedTempoMap
+{
+    std::shared_ptr<const time::TempoMap> get() const
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        return map;
+    }
+    void set(std::shared_ptr<const time::TempoMap> m)
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        map = std::move(m);
+    }
+
+private:
+    mutable std::mutex mutex;
+    std::shared_ptr<const time::TempoMap> map = std::make_shared<const time::TempoMap>();
+};
+
+/** The tempo map as ARA tempo entries: time and quarter position pairs with a steady tempo between
+    them, so ramps and curves become steps of an eighth of a beat (and one beat past the last point). */
+std::vector<ARA::ARAContentTempoEntry> tempoEntries(const time::TempoMap& map)
+{
+    std::vector<ARA::ARAContentTempoEntry> entries;
+    const auto add = [&](double beat) { entries.push_back({map.secondsAt(beat), beat}); };
+    const auto& points = map.getPoints();
+    for (std::size_t i = 0; i < points.size(); ++i)
+    {
+        const double from = points[i].beat;
+        if (i + 1 == points.size())
+        {
+            add(from);
+            add(from + 1.0);
+            break;
+        }
+        const double to = points[i + 1].beat;
+        if (points[i].shape == time::TempoShape::jump)
+        {
+            add(from);
+            continue;
+        }
+        const int steps = std::clamp(static_cast<int>(std::ceil((to - from) * 8.0)), 1, 4096);
+        for (int k = 0; k < steps; ++k)
+            add(from + (to - from) * k / steps);
+    }
+    return entries;
+}
+
+std::vector<ARA::ARAContentBarSignature> barSignatures(const time::TempoMap& map)
+{
+    std::vector<ARA::ARAContentBarSignature> bars;
+    for (const auto& s : map.getSignatures())
+        bars.push_back({s.signature.numerator, s.signature.denominator, map.beatOfBar(s.bar)});
+    return bars;
+}
+
+/** A reader of the musical context's tempo entries or bar signatures. */
 struct ContentReader
 {
     ARA::ARAContentType type = ARA::kARAContentTypeTempoEntries;
-    ARA::ARAContentTempoEntry tempo[2]{};
-    ARA::ARAContentBarSignature bar{};
+    std::vector<ARA::ARAContentTempoEntry> tempo;
+    std::vector<ARA::ARAContentBarSignature> bars;
 };
 using ContentReaderRef = Model::ConversionFunctions<ContentReader*, ARA::ARAContentReaderHostRef>;
 
 class ContentAccess final : public ARA::Host::ContentAccessControllerInterface
 {
 public:
-    explicit ContentAccess(std::shared_ptr<std::atomic<double>> tempo)
-        : tempo_(std::move(tempo))
+    explicit ContentAccess(std::shared_ptr<SharedTempoMap> map)
+        : map_(std::move(map))
     {
     }
 
@@ -237,10 +293,9 @@ public:
     {
         auto* reader = new ContentReader();
         reader->type = type;
-        const double bpm = std::max(1.0, tempo_->load());
-        reader->tempo[0] = {0.0, 0.0};
-        reader->tempo[1] = {60.0 / bpm, 1.0}; // (one beat later: a constant tempo)
-        reader->bar = {4, 4, 0.0};
+        const auto map = map_->get();
+        reader->tempo = tempoEntries(*map);
+        reader->bars = barSignatures(*map);
         return ContentReaderRef::toHostRef(reader);
     }
     bool isAudioSourceContentAvailable(ARA::ARAAudioSourceHostRef, ARA::ARAContentType) noexcept override { return false; }
@@ -255,19 +310,20 @@ public:
     }
     ARA::ARAInt32 getContentReaderEventCount(ARA::ARAContentReaderHostRef readerRef) noexcept override
     {
-        return ContentReaderRef::fromHostRef(readerRef)->type == ARA::kARAContentTypeTempoEntries ? 2 : 1;
+        const auto* reader = ContentReaderRef::fromHostRef(readerRef);
+        return static_cast<ARA::ARAInt32>(reader->type == ARA::kARAContentTypeTempoEntries ? reader->tempo.size() : reader->bars.size());
     }
     const void* getContentReaderDataForEvent(ARA::ARAContentReaderHostRef readerRef, ARA::ARAInt32 index) noexcept override
     {
         auto* reader = ContentReaderRef::fromHostRef(readerRef);
         if (reader->type == ARA::kARAContentTypeTempoEntries)
-            return &reader->tempo[std::clamp(index, 0, 1)];
-        return &reader->bar;
+            return &reader->tempo[static_cast<std::size_t>(std::clamp<ARA::ARAInt32>(index, 0, static_cast<ARA::ARAInt32>(reader->tempo.size()) - 1))];
+        return &reader->bars[static_cast<std::size_t>(std::clamp<ARA::ARAInt32>(index, 0, static_cast<ARA::ARAInt32>(reader->bars.size()) - 1))];
     }
     void destroyContentReader(ARA::ARAContentReaderHostRef readerRef) noexcept override { delete ContentReaderRef::fromHostRef(readerRef); }
 
 private:
-    std::shared_ptr<std::atomic<double>> tempo_;
+    std::shared_ptr<SharedTempoMap> map_;
 };
 
 class ModelUpdates final : public ARA::Host::ModelUpdateControllerInterface
@@ -366,7 +422,7 @@ struct Document
     std::map<std::uint32_t, Sequence> sequences;           ///< by track id
     std::map<juce::String, std::unique_ptr<Source>> sources; ///< by file path
     std::map<std::uint32_t, std::unique_ptr<ClipModel>> clips; ///< by clip id
-    double tempo = 0.0;
+    std::shared_ptr<const time::TempoMap> tempoMap; ///< the map its musical context last had
     juce::MemoryBlock pendingArchive;                      ///< from the session, given back once the regions exist
     bool takenDown = false;
 
@@ -604,8 +660,8 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
                                                                          std::make_unique<ModelUpdates>(), std::make_unique<PlaybackControl>(transport));
         if (document->controller == nullptr)
             return nullptr;
-        tempo->store(session.getTempo());
-        document->tempo = session.getTempo();
+        tempo->set(session.getTempoMapShared());
+        document->tempoMap = tempo->get();
         {
             const juce::ARAEditGuard guard(document->dc());
             auto properties = Model::MusicalContext::getEmptyProperties();
@@ -645,8 +701,8 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
                 && Session::getAraDevice(Session::getDeviceOwner(device)) == device)
                 nowRendering.insert(binding.trackId);
         }
-        if (std::abs(session.getTempo() - tempo->load()) > 1.0e-9)
-            tempo->store(session.getTempo());
+        if (session.getTempoMapShared() != tempo->get())
+            tempo->set(session.getTempoMapShared());
         for (auto& [id, document] : documents)
             synchronise(*document);
         if (nowRendering != rendering)
@@ -741,9 +797,9 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
         // 2. The model, in one edit cycle.
         {
             const juce::ARAEditGuard guard(dc);
-            if (std::abs(document.tempo - tempo->load()) > 1.0e-9 && document.context != nullptr)
+            if (document.tempoMap != tempo->get() && document.context != nullptr)
             {
-                document.tempo = tempo->load();
+                document.tempoMap = tempo->get();
                 dc.updateMusicalContextContent(document.context->getPluginRef(), nullptr, ARA::ContentUpdateScopes::timelineIsAffected());
             }
             // Clips gone (or moved to another file or track).
@@ -1043,7 +1099,7 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
     Session& session;
     AudioAssetCache& assets;
     DeviceManager& devices;
-    std::shared_ptr<std::atomic<double>> tempo = std::make_shared<std::atomic<double>>(120.0);
+    std::shared_ptr<SharedTempoMap> tempo = std::make_shared<SharedTempoMap>();
     std::shared_ptr<TransportRequests> transport;
     std::map<juce::String, std::unique_ptr<Document>> documents; ///< by factory id
     std::map<std::uint32_t, Binding> bindings;                   ///< by device id

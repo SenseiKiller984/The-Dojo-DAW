@@ -145,6 +145,7 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(cm, showEditor);
         menu.addCommandItem(cm, showClipList);
         menu.addSeparator();
+        menu.addCommandItem(cm, toggleTempoTrack);
         menu.addCommandItem(cm, toggleClipRatings);
         menu.addCommandItem(cm, showVideo);
         menu.addSeparator();

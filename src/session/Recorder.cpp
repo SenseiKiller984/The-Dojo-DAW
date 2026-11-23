@@ -359,7 +359,7 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
     auto& session = project_.getSession();
     const int count = std::min(capture_->midiCount.load(std::memory_order_acquire),
                                static_cast<int>(capture_->midiEvents.size()));
-    const double beatsPerSecond = session.getTempo() / 60.0;
+    const auto& map = session.getTempoMap(); // (beats follow the tempo map, ramps included)
     const double loopLength = loopEnd_ - loopStart_;
     const bool looped = loopRecording_ && loopPasses > 0;
 
@@ -422,7 +422,8 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
         std::map<int, Pending> held; // key: channel * 128 + note
         std::vector<Note> notes;
         std::vector<Control> controls;
-        const auto beatOf = [&](double seconds) { return std::max(0.0, (seconds - range.from) * beatsPerSecond); };
+        const double rangeBeat = map.beatAt(range.from);
+        const auto beatOf = [&](double seconds) { return std::max(0.0, map.beatAt(seconds) - rangeBeat); };
 
         // MPE: on a member channel (2..16) holding exactly one note, pitch bend, channel pressure
         // and CC 74 belong to that note; sent while no note is held there, they are how the next
@@ -442,7 +443,7 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
             return found;
         };
         // A value arriving after a gap in the stream (20 ms) was held until then: the curve steps.
-        const double holdGap = 0.02 * beatsPerSecond;
+        const double holdGap = 0.02 * map.bpmAt(range.from) / 60.0;
         const auto append = [holdGap](std::vector<note::ExpressionPoint>& curve, double at, double value, double initial)
         {
             if (curve.empty() && at > 1.0e-9)
@@ -535,7 +536,7 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
             }
         }
 
-        const double endBeat = (range.to - range.from) * beatsPerSecond;
+        const double endBeat = beatOf(range.to);
         for (auto& [key, pending] : held)
             notes.push_back({pending.startBeat, std::max(endBeat, pending.startBeat + kMinNoteLength), key % 128, key / 128,
                              pending.velocity, std::move(pending.curves)});
@@ -546,8 +547,8 @@ void Recorder::createMidiClips(double captureStart, double stopPosition, int loo
         take.to = std::min(range.to, punchEnd_);
         if (take.to - take.from <= kMinClipLength)
             continue;
-        const double fromBeat = (take.from - range.from) * beatsPerSecond;
-        const double toBeat = (take.to - range.from) * beatsPerSecond;
+        const double fromBeat = beatOf(take.from);
+        const double toBeat = beatOf(take.to);
         for (const auto& n : notes)
             if (n.startBeat >= fromBeat && n.startBeat < toBeat)
                 take.notes.push_back({n.startBeat - fromBeat, std::min(n.endBeat, toBeat) - fromBeat, n.note, n.channel, n.velocity, n.curves});

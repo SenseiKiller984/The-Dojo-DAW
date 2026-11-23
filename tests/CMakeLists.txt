@@ -77,6 +77,7 @@ add_executable(dojo_tests
     SurroundTests.cpp
     SynthTests.cpp
     TempoTests.cpp
+    TempoMapTests.cpp
     ValueEntryTests.cpp
     WaveformTests.cpp)
 

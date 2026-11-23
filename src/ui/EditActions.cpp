@@ -5,6 +5,7 @@
 #include "video/VideoSource.h"
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <vector>
 
@@ -887,10 +888,10 @@ bool selectionHasSyncPoints(const session::Session& session, const EditorState& 
     return false;
 }
 
-bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor, double gridSeconds)
+namespace
 {
-    if (gridSeconds <= 0.0)
-        return false;
+bool quantizeClipsTo(session::Session& session, EditorState& editor, const std::function<double(double)>& gridLine)
+{
     std::vector<juce::ValueTree> clips;
     for (const auto& c : getSelectedClipsWithGroups(session, editor))
         if (session::clip::canMoveInTime(c))
@@ -902,10 +903,26 @@ bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor,
     {
         // The sync point (or the start) goes to the nearest grid line.
         const double reference = session::clip::getReferenceTime(c);
-        const double target = std::round(reference / gridSeconds) * gridSeconds;
+        const double target = gridLine(reference);
         session.moveClip(c, c.getParent(), std::max(0.0, session::clip::getStart(c) + (target - reference)));
     }
     return true;
+}
+
+bool quantizeWarpTo(session::Session& session, EditorState& editor, const std::function<double(double)>& gridLine, double strength);
+} // namespace
+
+bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor, double gridSeconds)
+{
+    if (gridSeconds <= 0.0)
+        return false;
+    return quantizeClipsTo(session, editor, [gridSeconds](double t) { return std::round(t / gridSeconds) * gridSeconds; });
+}
+
+bool quantizeSelectedClipsToGrid(session::Session& session, EditorState& editor)
+{
+    const auto map = session.getTempoMapShared();
+    return quantizeClipsTo(session, editor, [&](double t) { return editor.nearestGridLine(t, *map); });
 }
 
 bool toggleSelectedClipsGainBypass(session::Session& session, EditorState& editor)
@@ -1032,6 +1049,19 @@ bool quantizeSelectedClipsWarp(session::Session& session, EditorState& editor, d
 {
     if (gridSeconds <= 0.0)
         return false;
+    return quantizeWarpTo(session, editor, [gridSeconds](double t) { return std::round(t / gridSeconds) * gridSeconds; }, strength);
+}
+
+bool quantizeSelectedClipsWarpToGrid(session::Session& session, EditorState& editor, double strength)
+{
+    const auto map = session.getTempoMapShared();
+    return quantizeWarpTo(session, editor, [&](double t) { return editor.nearestGridLine(t, *map); }, strength);
+}
+
+namespace
+{
+bool quantizeWarpTo(session::Session& session, EditorState& editor, const std::function<double(double)>& gridLine, double strength)
+{
     strength = std::clamp(strength, 0.0, 1.0);
     bool changed = false;
     session.beginTransaction("Quantize Warp Markers");
@@ -1044,13 +1074,14 @@ bool quantizeSelectedClipsWarp(session::Session& session, EditorState& editor, d
         for (auto& marker : markers)
         {
             const double at = start + marker.clipTime;
-            marker.clipTime += (std::round(at / gridSeconds) * gridSeconds - at) * strength;
+            marker.clipTime += (gridLine(at) - at) * strength;
         }
         session::clip::setWarpMarkers(c, markers, &session.getUndoManager());
         changed = true;
     }
     return changed;
 }
+} // namespace
 
 bool clearSelectedClipsWarp(session::Session& session, EditorState& editor)
 {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/TempoMap.h"
+
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_events/juce_events.h>
 
@@ -93,6 +95,9 @@ public:
     /** Clip ratings (stars) drawn on clips. */
     [[nodiscard]] bool isShowingClipRatings() const noexcept { return showClipRatings_; }
     void setShowingClipRatings(bool show);
+    /** The arranger's tempo track (tempo changes, ramps and time signatures) under the ruler. */
+    [[nodiscard]] bool isShowingTempoTrack() const noexcept { return showTempoTrack_; }
+    void setShowingTempoTrack(bool show);
 
     // --- Time selection (the range a marquee drag covers; Clip > Capture uses it) ------------------
     struct TimeSelection
@@ -117,6 +122,11 @@ public:
 
     /** Rounds `seconds` to the nearest grid line at `tempoBpm` (unless snapping is off or `bypass`). */
     [[nodiscard]] double snap(double seconds, double tempoBpm, bool bypass = false) const noexcept;
+    /** Rounds `seconds` to the nearest grid line on a tempo map (unless snapping is off or `bypass`):
+        bar starts, or beats of the bar's signature (eighths in 6/8) and their halves and quarters. */
+    [[nodiscard]] double snap(double seconds, const time::TempoMap& map, bool bypass = false) const noexcept;
+    /** The grid line on a tempo map nearest to `seconds` (whether snapping is on or not). */
+    [[nodiscard]] double nearestGridLine(double seconds, const time::TempoMap& map) const noexcept;
 
     void addListener(Listener* l) { listeners_.add(l); }
     void removeListener(Listener* l) { listeners_.remove(l); }
@@ -133,6 +143,7 @@ private:
     std::vector<ClipboardEntry> clipboard_;
     std::vector<UngroupedGroup> lastUngroup_;
     bool showClipRatings_ = true;
+    bool showTempoTrack_ = false;
     TimeSelection timeSelection_;
     bool snapEnabled_ = true;
     Grid grid_ = Grid::beat;

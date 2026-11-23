@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/HardwareIo.h"
+#include "core/TempoMap.h"
 #include "core/WarpMap.h"
 #include "core/Types.h"
 #include "engine/Automation.h"
@@ -158,6 +159,9 @@ struct RenderMidiClip
     double contentStartBeat = 0.0; ///< content beat that plays at startSeconds
     double rate = 1.0;             ///< content beats advance `rate` x the tempo (per-track speed)
     double loopLength = 0.0;       ///< looped: the first loopLength seconds repeat (0 = not looped)
+    /** Looped: one iteration in timeline beats (the tempo map's), so the loop keeps its length in
+        bars through tempo changes. 0: from loopLength at the clip's start tempo. */
+    double loopBeats = 0.0;
     std::vector<RenderNote> notes; ///< sorted by startBeat
     std::vector<RenderControl> controls; ///< sorted by beat
     /** MPE (the clip's notes have per-note expression): each note plays on a member channel of its
@@ -400,7 +404,9 @@ struct RenderModulator
 struct RenderGraph
 {
     std::uint64_t serial = 0; ///< assigned by EngineController; echoed back via telemetry
-    double tempo = 120.0;
+    double tempo = 120.0;     ///< the start tempo
+    /** The timeline's tempo and time signatures (never null; immutable, shared with the session). */
+    std::shared_ptr<const time::TempoMap> tempoMap = std::make_shared<const time::TempoMap>();
     double speed = 1.0; ///< global varispeed (timeline seconds per real second)
     bool loopEnabled = false;
     double loopStart = 0.0;
