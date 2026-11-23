@@ -4,6 +4,9 @@
 #include "ui/DeviceActions.h"
 #include "ui/theme/DojoTheme.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace dojo::ui
 {
 namespace
@@ -13,6 +16,18 @@ void styleLabel(juce::Label& label, const juce::String& text)
     label.setText(text, juce::dontSendNotification);
     label.setFont(theme::sans(12.5f));
     label.setColour(juce::Label::textColourId, theme::colour::textSecondary);
+}
+
+constexpr int kVideoFormat = 5;
+constexpr int kAac = 200;
+constexpr int kPcm = 201;
+
+/** m:ss.mmm */
+juce::String clockText(double seconds)
+{
+    const auto minutes = static_cast<int>(std::floor(seconds / 60.0));
+    const double rest = seconds - minutes * 60.0;
+    return juce::String(minutes) + ":" + (rest < 10.0 ? "0" : "") + juce::String(rest, 3);
 }
 } // namespace
 
@@ -31,13 +46,28 @@ ExportDialog::ExportDialog(session::Project& project, session::Exporter& exporte
     format_.addItem("FLAC", 2);
     format_.addItem("MP3 (LAME)", 3);
     format_.addItem("ADM BWF (Dolby Atmos: bed + objects)", 4);
+    format_.addItem("Video (the mix in the movie)", kVideoFormat);
     format_.setSelectedId(1, juce::dontSendNotification);
+    videoClip_ = session::Exporter::findVideoClip(project_.getSession());
+    if (videoClip_.isValid())
+        videoSupport_ = video::muxSupport(session::clip::getFile(videoClip_));
+    format_.setItemEnabled(kVideoFormat, videoSupport_.canMux());
+    format_.setTooltip(!videoClip_.isValid() ? "Video needs a video clip (File > Import Video...)"
+                       : !videoSupport_.canMux() ? "Nothing here can write " + session::clip::getFile(videoClip_).getFileName() + " with a new sound"
+                                                 : juce::String());
     format_.onChange = [this]
     {
         updateQualityChoices();
         updateForFormat();
         if (file_ != juce::File())
-            file_ = file_.withFileExtension(session::Exporter::getFileExtension(getFormat()));
+            file_ = file_.withFileExtension(getExtension());
+        destination_.setText(file_.getFullPathName(), juce::dontSendNotification);
+    };
+    quality_.onChange = [this]
+    {
+        updateForFormat();
+        if (file_ != juce::File())
+            file_ = file_.withFileExtension(getExtension()); // (a video's PCM: a MOV)
         destination_.setText(file_.getFullPathName(), juce::dontSendNotification);
     };
 
@@ -88,14 +118,14 @@ ExportDialog::ExportDialog(session::Project& project, session::Exporter& exporte
                                                            &stems_, &destination_, &chooseButton_, &exportButton_, &cancelButton_})
         addAndMakeVisible(c);
     addChildComponent(progressBar_);
-    styleLabel(admHint_, {});
-    admHint_.setFont(theme::sans(11.5f));
-    admHint_.setJustificationType(juce::Justification::topLeft);
-    addChildComponent(admHint_);
+    styleLabel(hint_, {});
+    hint_.setFont(theme::sans(11.5f));
+    hint_.setJustificationType(juce::Justification::topLeft);
+    addChildComponent(hint_);
 
     updateQualityChoices();
     updateForFormat();
-    setSize(520, 440);
+    setSize(520, 452);
 }
 
 ExportDialog::~ExportDialog()
@@ -123,16 +153,45 @@ session::ExportSettings::Format ExportDialog::getFormat() const
     case 2: return session::ExportSettings::Format::flac;
     case 3: return session::ExportSettings::Format::mp3;
     case 4: return session::ExportSettings::Format::admBwf;
+    case kVideoFormat: return session::ExportSettings::Format::video;
     default: return session::ExportSettings::Format::wav;
     }
+}
+
+juce::String ExportDialog::getExtension() const
+{
+    if (getFormat() == session::ExportSettings::Format::video && videoSupport_.extension.isNotEmpty())
+        return quality_.getSelectedId() == kPcm ? videoSupport_.pcmExtension : videoSupport_.extension;
+    return session::Exporter::getFileExtension(getFormat());
 }
 
 void ExportDialog::updateForFormat()
 {
     const bool adm = getFormat() == session::ExportSettings::Format::admBwf;
-    mix_.setVisible(!adm);
-    stems_.setVisible(!adm);
-    admHint_.setVisible(adm);
+    const bool video = getFormat() == session::ExportSettings::Format::video;
+    mix_.setVisible(!adm && !video);
+    stems_.setVisible(!adm && !video);
+    hint_.setVisible(adm || video);
+    // A video is the clip's stretch of the timeline, with no tail (the movie ends with it).
+    range_.setEnabled(!video);
+    tail_.setEnabled(!video);
+    if (video)
+    {
+        mode_.setSelectedId(1, juce::dontSendNotification);
+        const auto& session = project_.getSession();
+        const double start = session::clip::getStart(videoClip_);
+        juce::String text = "A copy of " + session::clip::getFile(videoClip_).getFileName()
+                            + " with the mix as its sound (the picture is copied, not re-encoded), for the clip's " + clockText(start) + " - "
+                            + clockText(start + session::clip::getLength(videoClip_)) + " on the timeline. " + videoSupport_.backend + ", offline.";
+        const auto master = session.getMasterFormat();
+        const int channels = session::isMultichannel(master) ? session::getLayout(master).numChannels : session::getNumChannels(master);
+        if (quality_.getSelectedId() == kAac && !videoSupport_.aacHolds(channels))
+            text << " Its AAC holds " << (videoSupport_.aacSurround ? "mono, stereo or 5.1" : "up to 7.1") << ": the "
+                 << session::getDisplayName(master) << " mix goes in as stereo" << (videoSupport_.pcm ? " (PCM keeps every channel)." : ".");
+        if (session::clip::isLooped(videoClip_))
+            text = "The video clip is looped, and a copy of the movie cannot repeat a stretch of it: turn its loop off (Clip > Loop) first.";
+        hint_.setText(text, juce::dontSendNotification);
+    }
     if (adm)
     {
         // An ADM BWF file is rendered offline: each object needs its own channels.
@@ -142,13 +201,13 @@ void ExportDialog::updateForFormat()
             if (session::track::isObject(t) && session::track::isPan3d(t) && session::Session::isEffectivelyActive(t))
                 ++objects;
         const auto master = project_.getSession().getMasterFormat();
-        admHint_.setText("One BW64 file (ITU-R BS.2076): the bed (" + session::getDisplayName(master) + ", every track that is not an object) and "
+        hint_.setText("One BW64 file (ITU-R BS.2076): the bed (" + session::getDisplayName(master) + ", every track that is not an object) and "
                              + (objects == 0 ? juce::String("no objects yet (Track > ADM Object on 3D-panned tracks)")
                                              : juce::String(objects) + (objects == 1 ? " object track" : " object tracks"))
                              + ", each with its movement. Rendered offline.",
                          juce::dontSendNotification);
     }
-    mode_.setItemEnabled(2, !adm && !deviceActions::usesHardwareInserts(project_.getSession()));
+    mode_.setItemEnabled(2, !adm && !video && !deviceActions::usesHardwareInserts(project_.getSession()));
 }
 
 void ExportDialog::updateQualityChoices()
@@ -176,12 +235,31 @@ void ExportDialog::updateQualityChoices()
         quality_.setSelectedId(100 + 4, juce::dontSendNotification);
         break;
     }
+    case session::ExportSettings::Format::video:
+        if (videoSupport_.aacChannels > 0)
+        {
+            // 320 kbps for each pair of channels the AAC carries (Media Foundation's encoder: up to
+            // 192 kbps in all).
+            const auto master = project_.getSession().getMasterFormat();
+            int channels = session::isMultichannel(master) ? session::getLayout(master).numChannels : 2;
+            if (!videoSupport_.aacHolds(channels))
+                channels = 2;
+            int bitrate = session::Exporter::videoAacBitrate(session::ExportSettings{}, channels);
+            if (videoSupport_.aacMaxBitrate > 0)
+                bitrate = std::min(bitrate, videoSupport_.aacMaxBitrate);
+            const int kbps = bitrate / 1000;
+            quality_.addItem("AAC " + juce::String(kbps) + " kbps", kAac);
+        }
+        if (videoSupport_.pcm)
+            quality_.addItem("PCM 24-bit (lossless)", kPcm);
+        quality_.setSelectedItemIndex(0, juce::dontSendNotification);
+        break;
     }
 }
 
 void ExportDialog::chooseDestination()
 {
-    chooser_ = std::make_unique<juce::FileChooser>("Export to", file_, "*" + session::Exporter::getFileExtension(getFormat()));
+    chooser_ = std::make_unique<juce::FileChooser>("Export to", file_, "*" + getExtension());
     juce::Component::SafePointer<ExportDialog> safe(this);
     chooser_->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles |
                               juce::FileBrowserComponent::warnAboutOverwriting,
@@ -189,7 +267,7 @@ void ExportDialog::chooseDestination()
                           {
                               if (safe == nullptr || chooser.getResult() == juce::File())
                                   return;
-                              safe->file_ = chooser.getResult().withFileExtension(session::Exporter::getFileExtension(safe->getFormat()));
+                              safe->file_ = chooser.getResult().withFileExtension(safe->getExtension());
                               safe->destination_.setText(safe->file_.getFullPathName(), juce::dontSendNotification);
                           });
 }
@@ -202,6 +280,8 @@ void ExportDialog::startExport()
     settings.format = getFormat();
     if (settings.format == session::ExportSettings::Format::mp3)
         settings.mp3QualityIndex = quality_.getSelectedId() - 100;
+    else if (settings.format == session::ExportSettings::Format::video)
+        settings.videoAudio = quality_.getSelectedId() == kPcm ? video::MuxAudioCodec::pcm : video::MuxAudioCodec::aac;
     else
         settings.bitDepth = quality_.getSelectedId();
     if (range_.getSelectedId() == 2)
@@ -281,8 +361,8 @@ void ExportDialog::resized()
     row(rangeLabel_, range_);
     row(tailLabel_, tail_);
     row(modeLabel_, mode_);
-    auto toggles = area.removeFromTop(36);
-    admHint_.setBounds(toggles.withTrimmedLeft(90));
+    auto toggles = area.removeFromTop(48);
+    hint_.setBounds(toggles.withTrimmedLeft(90));
     toggles = toggles.removeFromTop(26);
     mix_.setBounds(toggles.removeFromLeft(200));
     stems_.setBounds(toggles);

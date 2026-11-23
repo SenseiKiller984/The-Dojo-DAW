@@ -134,6 +134,20 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **MP4, MOV, MKV, WebM, AVI** (H.264, HEVC, VP9, ProRes, ...) with **FFmpeg** on Linux, found at build time (`libavformat-dev libavcodec-dev libswscale-dev`, installed by `scripts/setup-linux.sh`).
   - **Windows Media Foundation** on Windows (MP4, MOV, AVI, WMV with H.264, HEVC, ...).
 - The demo project has a short picture track.
+- **The mix in the movie** (*Export*, Format **Video**): a copy of the video clip's movie with the mix as its only sound, for the stretch of the timeline the clip covers.
+  - The picture is copied packet by packet, not re-encoded. No loss: the same codec, size and frame rate. It takes seconds.
+  - Sound and picture stay in step as they play in the session.
+    - A copy can only start on a key frame, so it starts at the movie's key frame at or before the clip's start, which may be a little before the clip. The mix is rendered from there (with silence for any part before the timeline's start).
+    - It ends with the clip. With B-frames, a frame or two just after the end can be in the copy, because frames before the end are predicted from them. The sound ends with the clip.
+  - **AAC**: 320 kbps for each pair of channels (stereo 320, 5.1 960), up to 7.1. A bigger mix (5.1.4, 7.1.4, 9.1.6) goes in as stereo unless you choose PCM.
+  - **PCM 24-bit**: lossless, every channel.
+  - The speakers are named in the file in the container's order. Dolby Digital and DTS orders are reordered, 5.1 is FFmpeg's "5.1" and 7.1 its "7.1".
+  - Containers:
+    - **Linux (FFmpeg)**: the movie's own (MP4, MOV, MKV, AVI, ...). WebM becomes MKV (it holds neither AAC nor PCM). With PCM, an MP4 becomes a MOV, because QuickTime's PCM is what editors read.
+    - **Windows (Media Foundation)**: an MP4 with AAC (mono, stereo or 5.1, 44.1 or 48 kHz, up to 192 kbps).
+    - **Every platform (built in)**: a Motion-JPEG AVI, with PCM.
+  - It uses the first video clip of the first video track that plays (active, not muted). Only that clip goes in: an edit of several clips would need the picture re-encoded.
+  - A looped clip, or a speed other than 1.00, is refused with a reason.
 
 **Recording and MIDI**
 - Pick each audio track's input (mono channel or stereo pair), arm it (R) and record (R key or the record button). Each track's monitoring is AUTO, IN (always the input) or OFF.
@@ -438,7 +452,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Automation and export**
 - **Spline automation lanes** for volume, pan, sends and every device or plug-in parameter (A on the track header, or right-click > Add Automation Lane).
-- **Export** (Ctrl+R): offline (faster than real time) or real-time bounce (the only choice when a HW Insert plays through outboard gear), **WAV** (16/24/32-bit float), **FLAC**, **MP3** (LAME, 128–320 kbps), **ADM BWF** (16/24/32-bit float: the bed and the objects in one file, offline; the dialog says how many object tracks it will hold), the mix and/or **stems** (one file per track). An offline export switches devices to their offline settings first (e.g. The Glue's and the Soft Clipper's 8x oversampling) and re-aligns the delay compensation for their new latency.
+- **Export** (Ctrl+R): offline (faster than real time) or real-time bounce (the only choice when a HW Insert plays through outboard gear), **WAV** (16/24/32-bit float), **FLAC**, **MP3** (LAME, 128–320 kbps), **ADM BWF** (16/24/32-bit float: the bed and the objects in one file, offline; the dialog says how many object tracks it will hold), **Video** (the mix in a copy of the video clip's movie, AAC or PCM: see *Video* above), the mix and/or **stems** (one file per track). An offline export switches devices to their offline settings first (e.g. The Glue's and the Soft Clipper's 8x oversampling) and re-aligns the delay compensation for their new latency.
 
 **Plug-ins**
 - **VST3 and CLAP** on both Windows and Linux: parameters (automatable), state saved with the project, their own editor windows, latency reported to the delay compensation.
@@ -618,7 +632,7 @@ Sanitizer presets need Clang's runtimes (`libclang-rt-<ver>-dev` on Debian/Ubunt
 | CLAP hosting | Our own host on the official [CLAP SDK](https://github.com/free-audio/clap) 1.2.10 (MIT) |
 | Time-stretch / pitch | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) 1.4.0 (MIT) |
 | MP3 encoding | [LAME](https://lame.sourceforge.io) 3.100 (LGPL), vendored in `third_party/lame` |
-| Video decoding | Built-in Motion-JPEG AVI reader; [FFmpeg](https://ffmpeg.org) (LGPL, the system's shared libraries, optional) on Linux; Media Foundation on Windows |
+| Video decoding and muxing | Built-in Motion-JPEG AVI reader and writer; [FFmpeg](https://ffmpeg.org) (LGPL, the system's shared libraries, optional) on Linux; Media Foundation on Windows |
 | Audio back-ends | Windows: ASIO, WASAPI, DirectSound. Linux: ALSA (incl. PulseAudio/PipeWire via ALSA), JACK (incl. PipeWire-JACK) |
 | Tests | Catch2 v3 |
 
@@ -645,7 +659,8 @@ src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue,
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
 src/scanner   dojo-plugin-scanner, the scanner child process
 src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg (Linux),
-              Media Foundation (Windows); background frame server for the Video window and thumbnails
+              Media Foundation (Windows); background frame server for the Video window and thumbnails;
+              the mix put into a copy of a movie (its picture copied, not re-encoded)
 src/session   the document (tracks, clips, take lanes and comping, MIDI, devices, sends, automation)
               with undo, audio decoding/streaming, device instances, graph compiler, recorder (takes,
               loop recording), exporter, save/open, device presets (.dojopreset)
@@ -667,7 +682,7 @@ third_party/  vendored LAME
 7. ✅ **Instruments**: Drum Rack, Sampler, Impulse, Wavetable, Operator
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems
 9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning
-10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) and 3D beds (5.1.4, 7.1.4, 9.1.6) with a surround panner, video tracks and a Video window
+10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) and 3D beds (5.1.4, 7.1.4, 9.1.6) with a surround panner, video tracks and a Video window, the mix exported into the movie
 
 ## Licensing
 

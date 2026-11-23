@@ -12,9 +12,11 @@ namespace dojo::ui
 
 /**
     Export Audio dialog: format (WAV 16/24/32-bit float, FLAC 16/24-bit, MP3 128..320 kbps, ADM BWF
-    16/24/32-bit float), range (whole session or loop), tail, offline (faster than real time) or
-    real-time bounce, the mix and/or one stem per track, and the destination file. ADM BWF writes one
-    file (the bed and the object tracks), offline. Shows progress and can cancel.
+    16/24/32-bit float, Video: AAC or PCM), range (whole session or loop), tail, offline (faster than
+    real time) or real-time bounce, the mix and/or one stem per track, and the destination file. ADM
+    BWF writes one file (the bed and the object tracks), offline. Video writes a copy of the video
+    clip's movie with the mix as its sound, for the clip's stretch of the timeline, offline (offered
+    when there is a video clip and something here can write its movie). Shows progress and can cancel.
 */
 class ExportDialog final : public juce::Component, private juce::Timer
 {
@@ -30,8 +32,11 @@ public:
 
 private:
     void updateQualityChoices();
-    /** What the chosen format allows (ADM BWF: offline, one file) and says (its objects). */
+    /** What the chosen format allows (ADM BWF and video: offline, one file, their own range) and
+        says (the objects; the movie). */
     void updateForFormat();
+    /** The extension of what the chosen format writes (a video: its movie's container). */
+    [[nodiscard]] juce::String getExtension() const;
     void chooseDestination();
     void startExport();
     void timerCallback() override;
@@ -46,7 +51,9 @@ private:
     juce::ToggleButton mix_{"Mix (master output)"};
     juce::ToggleButton stems_{"Stems (one file per track)"};
     juce::Label destination_;
-    juce::Label admHint_;
+    juce::Label hint_; ///< what an ADM BWF or video export writes
+    juce::ValueTree videoClip_;      ///< the clip a video export uses (invalid: none)
+    video::MuxSupport videoSupport_; ///< what can write its movie
     juce::TextButton chooseButton_{"Choose..."};
     juce::TextButton exportButton_{"Export"};
     juce::TextButton cancelButton_{"Cancel"};

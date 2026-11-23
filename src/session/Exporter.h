@@ -4,6 +4,7 @@
 #include "engine/EngineController.h"
 #include "engine/RealtimeHandoff.h"
 #include "session/Project.h"
+#include "video/VideoMux.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -24,6 +25,7 @@ struct ExportSettings
         flac,
         mp3,
         admBwf, ///< ADM BWF (ITU-R BS.2076 in a BW64 file): the bed and the object tracks, offline
+        video,  ///< the mix in the movie: a copy of the video clip's movie with the mix as its sound
     };
 
     juce::File destination; ///< the mix; stems are written next to it as "<name> - <track>.<ext>"
@@ -36,10 +38,18 @@ struct ExportSettings
     bool realtime = false;      ///< play through the audio device and capture, instead of offline
     bool includeMix = true;
     bool includeStems = false;  ///< one file per track (its own post-fader output)
+    video::MuxAudioCodec videoAudio = video::MuxAudioCodec::aac; ///< video: the mix's codec in the movie
+    int aacBitrate = 320000;    ///< video: AAC bits a second for each pair of channels (stereo: in all; 5.1: x3)
 };
 
 /**
     Bounces the project to audio files.
+
+    Video (the mix in the movie): the session's video clip's movie copied with the mix as its only
+    sound (video::muxAudioIntoVideo: the picture's packets as they are, no re-encoding). The mix is
+    rendered for exactly the clip's stretch of the timeline, from the movie's key frame at or before
+    the clip's start (so the copy can start there), into a temporary WAV beside the destination,
+    then muxed (AAC or PCM).
 
     ADM BWF (Dolby Atmos masters, ITU-R BS.2076): one BW64 file holding the bed (the master's
     channels, every track that is not an object) and each object track's own channel(s), with the
@@ -85,6 +95,15 @@ public:
                                                                  const engine::ChannelLayout* layout = nullptr);
     /** The channel set a WAV of `layout` declares (see createWriter). */
     [[nodiscard]] static juce::AudioChannelSet wavChannelSet(const engine::ChannelLayout& layout);
+    /** The video clip a video export puts the mix under (the first on the first video track that
+        plays: active, not muted), or an invalid tree. */
+    [[nodiscard]] static juce::ValueTree findVideoClip(const Session& session);
+    /** The AAC rate a video export asks for: ExportSettings::aacBitrate for each pair of channels
+        (stereo: 320 kbps; 5.1: 960 kbps). */
+    [[nodiscard]] static int videoAacBitrate(const ExportSettings& settings, int channels) noexcept;
+    /** The speakers of a layout, channel by channel, as a movie's sound names them (see
+        video::MuxSettings::speakers). */
+    [[nodiscard]] static juce::Array<juce::AudioChannelSet::ChannelType> movieSpeakers(const engine::ChannelLayout& layout);
     /** The stem file for a track. */
     [[nodiscard]] static juce::File getStemFile(const ExportSettings& settings, const juce::String& trackName);
 
@@ -105,7 +124,10 @@ private:
     };
 
     struct AdmExport;
+    struct VideoExport;
     void run() override;          // offline render thread
+    void muxVideo();              // (after the mix: into the movie)
+    juce::String prepareVideo();
     void runAdm();                // (the same, for an ADM BWF file)
     juce::String prepareAdm(double sampleRate);
     void timerCallback() override; // real-time progress / completion
@@ -137,6 +159,7 @@ private:
     juce::String error_;
     std::shared_ptr<int> alive_ = std::make_shared<int>(0); ///< guards async completion after destruction
     std::unique_ptr<AdmExport> adm_;
+    std::unique_ptr<VideoExport> video_;
     int objectRenderingBefore_ = 0; ///< (GraphBuilder::ObjectRendering, put back after an ADM export)
 };
 

@@ -296,7 +296,7 @@ TEST_CASE("The export dialog offers ADM BWF: offline, one file, its objects coun
     Exporter exporter(app.project, app.controller);
 
     ui::ExportDialog dialog(app.project, exporter);
-    auto* format = findChild<juce::ComboBox>(dialog, [](juce::ComboBox& c) { return c.getNumItems() == 4; });
+    auto* format = findChild<juce::ComboBox>(dialog, [](juce::ComboBox& c) { return c.getItemText(0) == "WAV"; });
     REQUIRE(format != nullptr);
     CHECK(format->getItemText(3).startsWith("ADM BWF"));
     auto* stems = findChild<juce::ToggleButton>(dialog, [](juce::ToggleButton& b) { return b.getButtonText().startsWith("Stems"); });

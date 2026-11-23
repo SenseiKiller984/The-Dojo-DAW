@@ -4,15 +4,21 @@
 #   - FFmpeg (libavformat/libavcodec/libswscale) where it is installed (Linux; optional)
 #   - Windows Media Foundation on Windows (part of the OS)
 add_library(dojo_video STATIC
+    FfmpegMux.cpp
     FfmpegSource.cpp
     FrameServer.cpp
     FrameServer.h
+    MediaFoundationMux.cpp
+    MediaFoundationMux.h
     MediaFoundationReader.cpp
     MediaFoundationReader.h
     MediaFoundationSource.cpp
     MjpegAvi.cpp
     MjpegAvi.h
+    MuxBackends.h
     PlatformDecoders.h
+    VideoMux.cpp
+    VideoMux.h
     VideoSource.cpp
     VideoSource.h)
 add_library(dojo::video ALIAS dojo_video)

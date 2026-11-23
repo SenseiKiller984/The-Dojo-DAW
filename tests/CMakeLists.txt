@@ -20,6 +20,8 @@ add_executable(dojo_tests
     ClipMenuTests.cpp
     ModulationEffectTests.cpp
     MultichannelTests.cpp
+    TestVideo.h
+    VideoMuxTests.cpp
     VideoTests.cpp
     DeviceEditorTests.cpp
     DeviceSendTests.cpp
@@ -86,6 +88,12 @@ target_compile_definitions(dojo_tests PRIVATE
     DOJO_EXPECT_ALLOCATION_TRAP=$<BOOL:${DOJO_ALLOCATION_TRAP_COMPATIBLE}>)
 
 target_link_libraries(dojo_tests PRIVATE dojo::ui dojo::session dojo::plugins dojo::video Catch2::Catch2WithMain)
+
+# Windows: H.264 test movies made (and their sound read back) with Media Foundation, for the muxer.
+if(WIN32)
+    target_sources(dojo_tests PRIVATE MediaFoundationTestMovie.cpp MediaFoundationTestMovie.h)
+    target_link_libraries(dojo_tests PRIVATE mfplat mfreadwrite mfuuid ole32)
+endif()
 
 # A real CLAP binary (two plug-ins) for the hosting tests, and the out-of-process scanner.
 add_library(dojo_test_clap MODULE clap/DojoTestPlugins.cpp)

@@ -28,6 +28,7 @@ if [[ "$family" == *debian* || "$family" == *ubuntu* ]]; then
         libxrandr-dev libxrender-dev libxi-dev
         libegl-dev libglu1-mesa-dev mesa-common-dev
         libavformat-dev libavcodec-dev libswscale-dev libavutil-dev # video tracks (MP4, MOV, MKV, ...)
+        ffmpeg # the tests make H.264 movies with it (video tracks, putting the mix into a movie)
         xvfb # headless smoke test
     )
     have_jack_headers || packages+=(libjack-jackd2-dev)
@@ -48,6 +49,7 @@ elif [[ "$family" == *fedora* || "$family" == *rhel* ]]; then
     dnf install -y "${packages[@]}"
     # Video tracks decode MP4/MOV/MKV with FFmpeg when it is there (optional: without it, Motion-JPEG AVI only).
     dnf install -y ffmpeg-free-devel || echo "FFmpeg development files not available: video tracks will read Motion-JPEG AVI only."
+    dnf install -y ffmpeg-free || echo "The ffmpeg tool is not available: the tests that need an H.264 movie will be skipped."
 
 elif [[ "$family" == *arch* ]]; then
     packages=(
@@ -56,7 +58,7 @@ elif [[ "$family" == *arch* ]]; then
         freetype2 fontconfig
         libx11 libxcomposite libxcursor libxext libxinerama libxrandr libxrender libxi
         libglvnd glu
-        ffmpeg # video tracks (MP4, MOV, MKV, ...)
+        ffmpeg # video tracks (MP4, MOV, MKV, ...), and the tests' H.264 movies
         xorg-server-xvfb
     )
     have_jack_headers || packages+=(pipewire-jack)

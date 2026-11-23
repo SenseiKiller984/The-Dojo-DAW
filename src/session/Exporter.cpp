@@ -126,6 +126,18 @@ private:
 };
 } // namespace
 
+/** A video export under way: the movie, the stretch of it, and the mix rendered for it. */
+struct Exporter::VideoExport
+{
+    juce::File movie;
+    double from = 0.0;        ///< seconds into the movie (a key frame)
+    double to = 0.0;
+    double silence = 0.0;     ///< seconds before the timeline's start (the movie starts earlier)
+    juce::File mix;           ///< the rendered mix (a temporary WAV beside the destination)
+    juce::File destination;   ///< the result
+    bool forceStereo = false; ///< the mix folded to stereo (more channels than the codec holds)
+};
+
 /** An ADM export under way: the file, its bed and objects, and the objects' positions block by block. */
 struct Exporter::AdmExport
 {
@@ -175,6 +187,7 @@ juce::String Exporter::getFileExtension(ExportSettings::Format format)
     {
     case ExportSettings::Format::flac: return ".flac";
     case ExportSettings::Format::mp3:  return ".mp3";
+    case ExportSettings::Format::video: return ".mp4";
     case ExportSettings::Format::wav:
     case ExportSettings::Format::admBwf: break;
     }
@@ -254,7 +267,8 @@ std::unique_ptr<juce::AudioFormatWriter> Exporter::createWriter(const juce::File
         break;
     }
     case ExportSettings::Format::admBwf:
-        error = "ADM BWF files are written by the exporter's own BW64 writer.";
+    case ExportSettings::Format::video:
+        error = "ADM BWF files and movies are written by their own writers.";
         return nullptr;
     case ExportSettings::Format::mp3:
     {
@@ -281,7 +295,7 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
 
     // Surround mixes and stems keep their channels (one per speaker, in the format's order), except
     // in MP3, which is stereo: there they are folded down.
-    const bool stereoOnly = settings_.format == ExportSettings::Format::mp3;
+    const bool stereoOnly = settings_.format == ExportSettings::Format::mp3 || (video_ != nullptr && video_->forceStereo);
     const auto& session = project_.getSession();
     const auto layoutOf = [](TrackFormat format) { return isMultichannel(format) ? getLayout(format) : engine::ChannelLayout::stereo(); };
 
@@ -294,7 +308,13 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         target.layout = layout;
         target.channels = stereoOnly ? 2 : layout.numChannels;
         target.foldDown = layout.numChannels > target.channels;
-        auto writer = createWriter(file, settings_, sampleRate, target.channels, error, &target.layout);
+        auto writerSettings = settings_;
+        if (video_ != nullptr)
+        {
+            writerSettings.format = ExportSettings::Format::wav; // (the mix for the movie: float, lossless)
+            writerSettings.bitDepth = 32;
+        }
+        auto writer = createWriter(file, writerSettings, sampleRate, target.channels, error, &target.layout);
         if (writer == nullptr)
             return false;
 
@@ -311,7 +331,7 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
         return true;
     };
 
-    if (settings_.includeMix && !add(-1, settings_.destination, layoutOf(session.getMasterFormat()), latency_))
+    if (settings_.includeMix && !add(-1, video_ != nullptr ? video_->mix : settings_.destination, layoutOf(session.getMasterFormat()), latency_))
         return error;
 
     if (settings_.includeStems)
@@ -335,6 +355,151 @@ juce::String Exporter::prepareTargets(double sampleRate, bool forStreams)
     for (const auto& target : targets_)
         longestLatency_ = std::max(longestLatency_, target.latency);
     return {};
+}
+
+int Exporter::videoAacBitrate(const ExportSettings& settings, int channels) noexcept
+{
+    return settings.aacBitrate * std::max(1, (channels + 1) / 2);
+}
+
+juce::Array<juce::AudioChannelSet::ChannelType> Exporter::movieSpeakers(const engine::ChannelLayout& layout)
+{
+    using Set = juce::AudioChannelSet;
+    using engine::Speaker;
+    // 5.1's (and 5.1.4's) surrounds are its backs, as WAVE and AAC name them; where there are
+    // rears (7.1, 7.1.4, 9.1.6), the surrounds are the sides and the rears the backs.
+    const bool rears = layout.has(Speaker::leftRear) || layout.has(Speaker::rightRear);
+    juce::Array<Set::ChannelType> list;
+    for (int c = 0; c < layout.numChannels; ++c)
+    {
+        auto type = Set::unknown;
+        switch (layout.speakers[static_cast<std::size_t>(c)])
+        {
+        case Speaker::left: type = Set::left; break;
+        case Speaker::right: type = Set::right; break;
+        case Speaker::centre: type = Set::centre; break;
+        case Speaker::lfe: type = Set::LFE; break;
+        case Speaker::leftSurround: type = rears ? Set::leftSurroundSide : Set::leftSurround; break;
+        case Speaker::rightSurround: type = rears ? Set::rightSurroundSide : Set::rightSurround; break;
+        case Speaker::leftRear: type = Set::leftSurroundRear; break;
+        case Speaker::rightRear: type = Set::rightSurroundRear; break;
+        case Speaker::leftWide: type = Set::wideLeft; break;
+        case Speaker::rightWide: type = Set::wideRight; break;
+        case Speaker::topFrontLeft: type = Set::topFrontLeft; break;
+        case Speaker::topFrontRight: type = Set::topFrontRight; break;
+        case Speaker::topMiddleLeft: type = Set::topSideLeft; break;
+        case Speaker::topMiddleRight: type = Set::topSideRight; break;
+        case Speaker::topRearLeft: type = Set::topRearLeft; break;
+        case Speaker::topRearRight: type = Set::topRearRight; break;
+        }
+        list.add(type);
+    }
+    if (layout.numChannels == 1)
+        list = {Set::centre}; // (a mono sound: its one channel is the centre)
+    return list;
+}
+
+juce::ValueTree Exporter::findVideoClip(const Session& session)
+{
+    for (const auto& t : session.getAllTracks())
+    {
+        if (track::getKind(t) != TrackKind::video || track::isMuted(t) || !Session::isEffectivelyActive(t))
+            continue;
+        juce::ValueTree first;
+        for (const auto& c : t)
+            if (c.hasType(ids::videoClip) && (!first.isValid() || clip::getStart(c) < clip::getStart(first)))
+                first = c;
+        if (first.isValid())
+            return first;
+    }
+    return {};
+}
+
+juce::String Exporter::prepareVideo()
+{
+    const auto& session = project_.getSession();
+    const auto clip = findVideoClip(session);
+    if (!clip.isValid())
+        return "There is no video clip to put the mix into: import a video first (File > Import Video...).";
+    if (clip::isLooped(clip))
+        return "The video clip is looped: a copy of the movie cannot repeat a stretch of it. Turn its loop off (Clip > Loop) to export it.";
+    if (std::abs(session.getSpeed() - 1.0) > 1.0e-9)
+        return "Set the speed back to 1.00 first: the movie's picture keeps its own pace, so the mix has to as well.";
+    auto v = std::make_unique<VideoExport>();
+    v->movie = clip::getFile(clip);
+    if (!v->movie.existsAsFile())
+        return "The movie " + v->movie.getFullPathName() + " is not there.";
+    const auto support = video::muxSupport(v->movie);
+    if (!support.canMux())
+        return "Nothing here can write " + v->movie.getFileName() + " with a new sound.";
+    if (settings_.videoAudio == video::MuxAudioCodec::pcm && !support.pcm)
+        return support.backend + " cannot put PCM sound in the movie: choose AAC.";
+    if (settings_.videoAudio == video::MuxAudioCodec::aac && support.aacChannels == 0)
+        return support.backend + " cannot put AAC sound in the movie: choose PCM.";
+
+    // The copy starts at the movie's key frame at or before the clip's start; the mix is rendered
+    // from where that frame sits on the timeline (silence for any part before the timeline's start).
+    const double start = clip::getStart(clip);
+    const double offset = clip::getOffset(clip);
+    const double length = clip::getLength(clip);
+    v->from = video::keyFrameAtOrBefore(v->movie, offset);
+    v->to = offset + length;
+    double renderStart = start - (offset - v->from);
+    if (renderStart < 0.0)
+    {
+        v->silence = -renderStart;
+        renderStart = 0.0;
+    }
+    const auto master = session.getMasterFormat();
+    const int channels = isMultichannel(master) ? getLayout(master).numChannels : 2;
+    v->forceStereo = settings_.videoAudio == video::MuxAudioCodec::aac && !support.aacHolds(channels);
+    v->destination = settings_.destination.withFileExtension(settings_.videoAudio == video::MuxAudioCodec::pcm ? support.pcmExtension : support.extension);
+    // The mix waits beside the movie (where there is room for a movie: a long 7.1.4 mix in float is
+    // gigabytes, more than a RAM-backed temp folder may hold), under a name of its own.
+    v->mix = v->destination.getSiblingFile(v->destination.getFileNameWithoutExtension() + " - mix (temporary).wav");
+
+    settings_.startSeconds = renderStart;
+    settings_.endSeconds = start + length;
+    settings_.tailSeconds = 0.0; // (the movie ends with its clip)
+    settings_.includeMix = true;
+    settings_.includeStems = false;
+    settings_.realtime = false;
+    settings_.destination = v->destination;
+    video_ = std::move(v);
+    return {};
+}
+
+void Exporter::muxVideo()
+{
+    auto& v = *video_;
+    engine::ChannelLayout speakers = engine::ChannelLayout::stereo();
+    for (const auto& target : targets_)
+        if (target.slot < 0 && !target.foldDown && target.channels == target.layout.numChannels)
+            speakers = target.layout;
+    video::MuxSettings mux;
+    mux.speakers = movieSpeakers(speakers);
+    mux.video = v.movie;
+    mux.from = v.from;
+    mux.to = v.to;
+    mux.audio = v.mix;
+    mux.audioOffset = v.silence;
+    mux.destination = v.destination;
+    mux.codec = settings_.videoAudio;
+    mux.aacBitrate = videoAacBitrate(settings_, speakers.numChannels);
+    const auto result = video::muxAudioIntoVideo(mux, [this](double p)
+                                                 {
+                                                     progress_.store(0.8 + 0.2 * p, std::memory_order_relaxed);
+                                                     return !threadShouldExit();
+                                                 });
+    if (result.failed())
+    {
+        failed_ = true;
+        error_ = result.getErrorMessage();
+    }
+    v.mix.deleteFile();
+    for (auto& target : targets_)
+        if (target.slot < 0)
+            target.file = v.destination; // (what the export made: the movie)
 }
 
 juce::String Exporter::prepareAdm(double sampleRate)
@@ -412,6 +577,12 @@ juce::String Exporter::start(const ExportSettings& settings)
     error_.clear();
     progress_ = 0.0;
     speed_ = project_.getSession().getSpeed();
+
+    // Video: the mix for the video clip's stretch, then into a copy of its movie.
+    video_.reset();
+    if (settings_.format == ExportSettings::Format::video)
+        if (auto error = prepareVideo(); error.isNotEmpty())
+            return error;
 
     // ADM BWF: offline, with the object tracks rendered apart (each its own channels).
     const bool adm = settings_.format == ExportSettings::Format::admBwf;
@@ -621,7 +792,8 @@ void Exporter::run()
             }
         }
 
-        progress_.store(static_cast<double>(rendered + n) / static_cast<double>(totalFrames), std::memory_order_relaxed);
+        progress_.store((video_ != nullptr ? 0.8 : 1.0) * static_cast<double>(rendered + n) / static_cast<double>(totalFrames),
+                        std::memory_order_relaxed);
         if (failed_)
         {
             error_ = "Writing the audio file failed (is the disk full?).";
@@ -637,6 +809,14 @@ void Exporter::run()
 
     for (auto& target : targets_)
         target.writer.reset(); // flushes and closes the file
+
+    if (video_ != nullptr)
+    {
+        if (!failed_ && !threadShouldExit())
+            muxVideo();
+        else
+            video_->mix.deleteFile();
+    }
 
     engine.setOfflineTransport(previousPosition_, false, false);
     engine.applyCommandsOffline();
@@ -786,6 +966,7 @@ void Exporter::finishOffline()
         adm_.reset();
         project_.getCompiler().setObjectRendering(static_cast<GraphBuilder::ObjectRendering>(objectRenderingBefore_));
     }
+    video_.reset();
     project_.getDevices().setNonRealtime(false);
     auto& engine = controller_.getEngine();
     engine.endOfflineRender();
