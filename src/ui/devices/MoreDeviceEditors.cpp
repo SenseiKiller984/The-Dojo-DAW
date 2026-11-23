@@ -769,19 +769,27 @@ private:
 };
 
 LfoEditor::LfoEditor(devices::LfoDevice& lfo, const DeviceEditorContext& context)
-    : lfo_(lfo)
+    : LfoEditor(lfo, std::make_unique<Scope>(lfo),
+                {"shape|Shape", "rate|Rate", "sync|Sync", "division|Division", "depth|Depth", "offset|Offset", "phase|Phase", "jitter|Jitter",
+                 "smooth|Smooth", "hold|Hold", "retrigger|Retrigger", "invert|Invert"},
+                "LFO", context)
+{
+}
+
+LfoEditor::LfoEditor(juce::AudioProcessor& modulator, std::unique_ptr<juce::Component> display, const juce::StringArray& controls,
+                     const juce::String& noun, const DeviceEditorContext& context)
+    : processor_(modulator)
     , project_(context.project)
     , device_(context.device)
 {
-    scope_ = std::make_unique<Scope>(lfo_);
+    scope_ = std::move(display);
     addAndMakeVisible(*scope_);
-    for (const auto& [id, caption] : ids({"shape|Shape", "rate|Rate", "sync|Sync", "division|Division", "depth|Depth", "offset|Offset",
-                                          "phase|Phase", "jitter|Jitter", "smooth|Smooth", "hold|Hold", "retrigger|Retrigger", "invert|Invert"}))
-        if (auto* parameter = findParameter(lfo_, id))
-            grid_.add(*parameter, caption);
+    for (const auto& entry : controls)
+        if (auto* parameter = findParameter(processor_, entry.upToFirstOccurrenceOf("|", false, false)))
+            grid_.add(*parameter, entry.fromFirstOccurrenceOf("|", false, false));
     addAndMakeVisible(grid_);
 
-    mapButton.setTooltip("Map the LFO to any control: a fader, pan or send, or any device parameter, on any track");
+    mapButton.setTooltip("Map the " + noun + " to any control: a fader, pan or send, or any device parameter, on any track");
     mapButton.onClick = [this] { showMapMenu(); };
     learnButton.setClickingTogglesState(true);
     learnButton.setTooltip("Learn: click any device control in the project to map it");

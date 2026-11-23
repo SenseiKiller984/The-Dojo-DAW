@@ -5,6 +5,7 @@
 #include "devices/AutoFilter.h"
 #include "devices/ChannelEq.h"
 #include "devices/ConsoleTG12345.h"
+#include "devices/CvDevices.h"
 #include "devices/HardwareInsert.h"
 #include "devices/Harrison4032.h"
 #include "devices/DriftSynth.h"
@@ -84,6 +85,12 @@ const std::vector<BuiltinDeviceInfo>& getBuiltinDevices()
         {Click::kTypeId, "Click", "Utility", false},
         {HardwareInsert::kTypeId, "HW Insert", "Utility", false,
          "hardware external outboard insert analog send return loop io ping latency sound card"},
+        {CvInstrument::kTypeId, "CV Instrument", "CV", true,
+         "modular eurorack control voltage 1v/oct pitch gate velocity dc-coupled es-8 es-9 calibrate oscillator"},
+        {CvTriggers::kTypeId, "CV Triggers", "CV", true, "modular eurorack control voltage drum trigger gate dc-coupled"},
+        {CvClock::kTypeId, "CV Clock", "CV", false, "modular eurorack control voltage clock sync ppqn run reset dc-coupled"},
+        {CvUtility::kTypeId, "CV Utility", "CV", false, "modular eurorack control voltage dc offset lfo automation slew dc-coupled"},
+        {CvIn::kTypeId, "CV In", "CV", false, "modular eurorack control voltage input modulation map dc-coupled"},
     };
     return devices;
 }
@@ -165,6 +172,16 @@ std::unique_ptr<juce::AudioProcessor> createBuiltinDevice(const juce::String& ty
         return std::make_unique<Click>();
     if (type == HardwareInsert::kTypeId)
         return std::make_unique<HardwareInsert>();
+    if (type == CvInstrument::kTypeId)
+        return std::make_unique<CvInstrument>();
+    if (type == CvTriggers::kTypeId)
+        return std::make_unique<CvTriggers>();
+    if (type == CvClock::kTypeId)
+        return std::make_unique<CvClock>();
+    if (type == CvUtility::kTypeId)
+        return std::make_unique<CvUtility>();
+    if (type == CvIn::kTypeId)
+        return std::make_unique<CvIn>();
     if (type == Roar::kTypeId)
         return std::make_unique<Roar>();
     if (type == Pedal::kTypeId)

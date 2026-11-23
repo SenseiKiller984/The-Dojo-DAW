@@ -62,6 +62,8 @@ add_library(dojo_ui STATIC
     components/StatusBar.h
     components/TransportBar.cpp
     components/TransportBar.h
+    devices/CvEditors.cpp
+    devices/CvEditors.h
     devices/DeviceEditors.cpp
     devices/DeviceEditors.h
     devices/KeysEditors.cpp

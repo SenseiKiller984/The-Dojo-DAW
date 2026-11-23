@@ -1,4 +1,6 @@
 add_library(dojo_devices STATIC
+    CvDevices.cpp
+    CvDevices.h
     AmpCabinet.cpp
     AmpCabinet.h
     AnalogSynth.cpp

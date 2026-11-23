@@ -41,6 +41,10 @@ public:
     static constexpr int kRowHeight = 20;
 
     LfoEditor(devices::LfoDevice& lfo, const DeviceEditorContext& context);
+    /** The same editor for another modulator (CV In): its own display, its controls ("id|Caption"),
+        and what it is called in the tooltips. */
+    LfoEditor(juce::AudioProcessor& modulator, std::unique_ptr<juce::Component> display, const juce::StringArray& controls, const juce::String& noun,
+              const DeviceEditorContext& context);
     ~LfoEditor() override;
 
     [[nodiscard]] static int preferredWidth();
@@ -85,10 +89,10 @@ private:
     void valueTreeChildRemoved(juce::ValueTree& parent, juce::ValueTree&, int) override;
     void valueTreePropertyChanged(juce::ValueTree& tree, const juce::Identifier&) override;
 
-    devices::LfoDevice& lfo_;
+    juce::AudioProcessor& processor_;
     session::Project& project_;
     juce::ValueTree device_;
-    std::unique_ptr<Scope> scope_;
+    std::unique_ptr<juce::Component> scope_;
     ParameterGrid grid_;
     juce::Viewport rowsViewport_;
     juce::Component rowsHolder_;

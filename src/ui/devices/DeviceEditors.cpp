@@ -13,6 +13,7 @@
 #include "session/Presets.h"
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
+#include "ui/devices/CvEditors.h"
 #include "ui/devices/HardwareInsertEditor.h"
 #include "ui/devices/MoreDeviceEditors.h"
 #include "ui/devices/PagedEditor.h"
@@ -1921,6 +1922,8 @@ std::unique_ptr<juce::Component> createDeviceEditor(engine::ProcessorNode& node,
 
     if (auto* insert = dynamic_cast<devices::HardwareInsert*>(&processor))
         return createHardwareInsertEditor(*insert, context, preferredWidth);
+    if (auto cv = createCvEditor(processor, context, preferredWidth))
+        return cv;
     if (auto* eq = dynamic_cast<devices::Equaliser*>(&processor))
     {
         preferredWidth = 560;

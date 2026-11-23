@@ -207,7 +207,7 @@ juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::
 
 bool fitsInLoop(const DeviceChoice& choice)
 {
-    return !choice.instrument && !choice.midiEffect && choice.type != "builtin:lfo";
+    return !choice.instrument && !choice.midiEffect && choice.type != "builtin:lfo" && choice.type != "builtin:cvin";
 }
 
 juce::ValueTree findOrAddBus(session::Session& session, const juce::String& name)
