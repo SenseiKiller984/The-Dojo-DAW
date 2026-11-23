@@ -23,8 +23,9 @@ This document describes how The Dojo is built: the layers, the threads, the real
 ```
 src/
   core/     pure C++20, no JUCE: lock-free SPSC queue, RT guards + allocation trap,
-            musical-time maths, shared types, generated Version.h, HardwareIo (devices that
-            use the sound card's channels themselves), WarpMap (clip time <-> source time)
+            musical-time maths, TempoMap (tempo changes, linear and curved ramps, time signatures;
+            immutable, read by the audio thread), shared types, generated Version.h, HardwareIo
+            (devices that use the sound card's channels themselves), WarpMap (clip time <-> source time)
   engine/   AudioEngine (real-time state, process(), offline render), WorkerPool, RenderGraph,
             command/telemetry protocol, ProcessorNode (runs any juce::AudioProcessor in the 64-bit
             path), Automation (monotone splines), RealtimeHandoff (ReleasePool, LiveMidiQueue,
@@ -37,6 +38,8 @@ src/
             Utility, AmpCabinet, PitchShifter; instruments WavetableSynth, Operator, Sampler,
             DrumRack, Impulse; MIDI effects (MidiEffects: Arpeggiator, Chord Generator, Scale,
             MIDI Filter); HardwareInsert (outboard gear through the sound card, ping calibration);
+            CvDevices (CV/Gate to modular synths through DC-coupled outputs: CV Instrument with
+            calibration, CV Triggers, CV Clock, CV Utility; CV In as a modulation source);
             dsp/ (biquads, SynthCore: envelopes, ZDF filters, LFOs,
             band-limited mipmapped wavetables); SampleSlot (RT-safe sample hand-over); registry
   plugins/  ClapPluginFormat (CLAP host), PluginManager (formats, known list, out-of-process scan)
@@ -47,7 +50,10 @@ src/
   session/  the document: Session (juce::ValueTree + UndoManager; Takes.cpp: take lanes and
             comping), AudioAssetCache (decoding, peaks, disk streaming service), DeviceManager (live
             device instances), GraphCompiler (session -> RenderGraph), Recorder (takes, loop
-            recording), Exporter, AraHost (the ARA documents ARA plug-ins see), Project (file I/O)
+            recording), Exporter, AraHost (the ARA documents ARA plug-ins see), AudioEdits (pitch
+            and spectral edits of clips: background analysis and renders), audioedit/ (Stft,
+            PitchAnalysis: YIN and multi-f0 notes, PitchRender: the peak-shifting vocoder,
+            Spectral: region operations, de-noise, de-hum, spectrograms), Project (file I/O)
   ui/       look-and-feel and themes (theme/: a palette the active theme writes; switching rebuilds
             the main component, keeping the view), Preferences + PreferencesWindow,
             MainComponent (commands, menus, document actions), arranger, mixer,
@@ -55,7 +61,8 @@ src/
             HardwarePainting: meters, lamps, wood, leather, faders; consoles set a
             ConsoleLookAndFeel on their editor; SpectrumAnalysis: the EQ's spectra and masking),
             surfaces/ (Mackie Control and HUI protocols, ControlSurfaces, DevicePorts),
-            clip editor (piano roll, step sequencer, inspector),
+            clip editor (piano roll, step sequencer, score/ (Notation: MIDI to engraved notation;
+            MusicXml; ScoreView), PitchEditor, SpectralEditor, inspector),
             browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
   app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
@@ -96,6 +103,7 @@ flowchart LR
 | Offline export | `Exporter` thread | Session. Owns the engine while live processing is paused, renders faster than real time. |
 | Plug-in scanning | `PluginManager` thread + one `dojo-plugin-scanner` child process per file | A plug-in that crashes or hangs while being scanned only kills the child and gets blacklisted. |
 | Browser search | `BrowserPanel::SearchThread` | UI. Searches the added folders recursively; results are posted back to the message thread. |
+| Audio edits (2 threads) | `AudioEdits` job pool | Session. Pitch analysis, spectral and pitch renders of edited clips and spectrograms. Jobs read a clip's decoded source region (shared, immutable) and post their results back to the message thread, which writes them into the session; a render is written to a new file and loaded before the clip plays it. Cancelled by newer edits (a flag the jobs poll). |
 | Preview decoding | `PreviewService` thread | Engine. Decodes and resamples a previewed file into a buffer allocated up front, publishing how far it got (`framesReady`, release/acquire) so playback starts before decoding ends. The audio thread adds the sound to the device output after the mix (never metered, recorded or exported); sounds are handed over and retired like `SampleSlot`. |
 
 ## 4. Real-time rules and how they are enforced
@@ -211,14 +219,20 @@ device out += browser preview (live callbacks only)
 The session is a `juce::ValueTree` with a `juce::UndoManager`:
 
 ```
-DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
+DOJO_SESSION  tempo (the start tempo), loop, speed, keep pitch, transpose, master volume
+  TEMPOMAP      shape, bend (of the start); TEMPO* (beat, bpm, shape: jump | linear | curve, bend),
+                SIGNATURE* (bar, numerator, denominator)
   MASTER        DEVICE*, AUTOMATION*
   TRACK*        kind (audio | instrument | bus), folder, mix, routing, input, monitor, arm, speed, pitch,
                 format (mono, stereo, 3.1, 5.1, 7.1, 5.1.4, 7.1.4, 9.1.6, Dolby Digital, DTS; the master too),
                 the 3D panner (pan3d, panAzimuth, panElevation, panDistance, panSize; automation targets azimuth,
                 elevation, distance, size)
     CLIP*         audio: file, position, offset, fades, gain, stretch, pitch
-    MIDICLIP*     position, content offset (beats); NOTE* (with per-note pitch / pressure / slide curves) and CC* children
+      AUDIOEDIT     source (the clip's own file; `file` plays the render), from, to, rendered, bypass
+        PITCH         mode (melodic | polyphonic), formants; PNOTE* (as analysed: start, end, pitch,
+                      drift and level curves; as edited: new start, end, pitch, drift, gain)
+        SPECTRAL      SPOP* (kind, seconds of the source, band, gain, amount, noise profile, hum...)
+    MIDICLIP*     position, content offset (beats), score clef / key / grid; NOTE* (with per-note pitch / pressure / slide curves) and CC* children
     DEVICE*       type (native or "plugin" + PluginDescription), bypass, sidechain, saved state,
                   ara (the track's ARA plug-in, in the first slot)
       DEVICE*       (an insert loop's devices, in order; their lanes live on the track)
@@ -240,6 +254,8 @@ DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
   - **Persistence.** `storeArchives()` runs before saving and writes each document's archive into ARA_DOCUMENTS. Opening a project reads the archive when the document is created and restores it (`restoreObjectsFromArchive`) once the regions exist, before the plug-in first plays.
   - **Lifetime.** ARA lets a plug-in's extension objects go before or after their document controller, but the document's code lives in the plug-in's module, which its last instance may unload. So `DeviceManager::onProcessorRemoved`, called while the node is still alive, takes the plug-in's regions, releases its binding and, for a document's last plug-in, stores the archive into the session (not undoable, so undoing the removal brings the edits back) and takes the document down. A synchronous change message goes out first, so the clip editor deletes the plug-in's editor while the plug-in still exists.
   - **Editors and transport.** For a clip on a bound track, the clip editor embeds the plug-in's editor (`createEditorAndMakeActive`, unless it is open in its own window) and passes the selection to its editor view (`showSelection` → `notifySelection`). The plug-in's transport requests are posted to the message thread: play, stop and locate go to the engine controller, and the cycle range and switch to the session's loop.
+- **Tempo map.** `time::TempoMap` is built from TEMPOMAP whenever it changes and held, immutable and shared, by the session and the render graph (the audio thread never sees a map being built). Tempo is linear in beats within a segment, so a beat's time is closed-form (60 / k · ln(t / t0)); curves are sub-ramps sampled evenly in beats and in tempo. Signatures change at bar starts and bar|beat|tick counts in the signature's beat unit. Tempo edits retime MIDI clips (musical: they keep their beats); audio, video, automation and time-locked clips keep their seconds.
+- **Audio edits.** `AudioEdits` (owned by `Project`) keeps, per edited clip, its decoded source region (`Material`, shared with the jobs), the spectral result (keyed by the operations) and the pitch renderer's per-span cache. Every edit is an undoable change of AUDIOEDIT; a listener marks the clip dirty and, 120 ms later, a background render runs: the spectral operations on the region, then the pitch edits on their result (only edited spans, crossfaded in, cached), written with the rest of the source into a new 32-bit float WAV in the render folder. The file is loaded through `AudioAssetCache` before the clip's `file` (set without undo) points at it, so playback never meets a missing file; the previous render is deleted when nothing refers to it. Undo or redo change AUDIOEDIT and so render again; removing AUDIOEDIT gives the clip its source back. Opening a project re-renders what is missing; exports wait (`waitUntilIdle`).
 - **Files.** A session is saved as XML (`.dojo`, format version 2; version 1 files still load). Clip paths are stored both absolute and relative to the session file, and the relative path wins on load.
 - **Audio.** `AudioAssetCache` decodes files up to 10 minutes into memory and streams longer ones from disk, with a min/max peak overview for drawing either way.
 

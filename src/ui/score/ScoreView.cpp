@@ -1064,15 +1064,15 @@ void ScoreView::paintStaff(juce::Graphics& g, int staffIndex) const
         g.setColour(eventSelected ? colour::accent : ink);
         if (e.type >= 1)
         {
-            const int flags = std::max(0, e.type - 2);
+            const int flagCount = std::max(0, e.type - 2);
             const float from = e.stemUp ? p.heads.front().y - 0.2f * ls : p.heads.back().y + 0.2f * ls;
-            float to = e.stemUp ? p.heads.back().y - (3.5f + 0.5f * static_cast<float>(std::max(0, flags - 1))) * ls
-                                : p.heads.front().y + (3.5f + 0.5f * static_cast<float>(std::max(0, flags - 1))) * ls;
+            float to = e.stemUp ? p.heads.back().y - (3.5f + 0.5f * static_cast<float>(std::max(0, flagCount - 1))) * ls
+                                : p.heads.front().y + (3.5f + 0.5f * static_cast<float>(std::max(0, flagCount - 1))) * ls;
             if (e.beam >= 0)
                 to = stemEnd[i];
             g.drawLine(p.stemX, from, p.stemX, to, 0.14f * ls);
-            if (e.beam < 0 && flags > 0)
-                drawFlags(g, p.stemX, to, e.stemUp, flags, ls);
+            if (e.beam < 0 && flagCount > 0)
+                drawFlags(g, p.stemX, to, e.stemUp, flagCount, ls);
         }
 
         // Ties to the next event's same notes.

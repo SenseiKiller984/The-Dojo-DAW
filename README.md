@@ -198,6 +198,24 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - Long files **stream from disk** instead of being loaded into memory.
 - Loop range (drag in the ruler's top strip, L toggles), snap, zoom, undo/redo for everything.
 
+**Audio editing** (in the clip editor, for audio clips: **CLIP**, **PITCH**, **SPECTRAL**)
+- **Pitch editing (PITCH)**: native, graphic pitch correction of vocals and instruments, monophonic and polyphonic.
+  - **Analyse** finds the notes: **Melodic** for one voice (vocals, bass, a solo: a YIN pitch track cut into notes at pitch changes and new attacks, vibrato kept as the note's drift) or **Polyphonic** for chords (piano, guitar, pads: the strongest fundamentals of each moment by harmonic summation, their partials cancelled and the next one found, linked into notes).
+  - Each note is a **blob** on a pitch grid, as thick as it is loud, with its **pitch drift** drawn through it and, once moved, a faint outline of where it was.
+  - **Drag a note** up or down to change its pitch (in semitones; Alt: freely, in cents) and, in melodic material, sideways to move it in time; **drag its ends** to change its timing (a neighbour it touched follows). **Double-click** snaps a note to the nearest note of the **scale** (chromatic, major, natural or harmonic minor, major or minor pentatonic, from any root). **Correct** moves the selection (or all notes) towards the scale by **Pitch %** and straightens its drift by **Drift %**. Below: the selected notes' **drift** (0 % straight, 100 % as performed, 200 % exaggerated) and **level** (-24 to +12 dB). Keys: Up/Down a semitone (Shift: 10 cents), Delete resets the selection, Ctrl+A, Escape.
+  - **Formants** (melodic) keeps a voice's character when its pitch moves (the spectral envelope stays where it was), so a voice moved up does not sound small. **Original** plays the clip as recorded (A/B). **Remove** takes the edits off.
+  - In polyphonic material each partial moves with the note it belongs to, so one note of a chord changes alone; timing edits are for melodic material.
+
+  ![The pitch editor: a bass line's notes, one corrected and moved up a semitone (its original outline below)](docs/images/pitch-editor.png)
+- **Spectral editing (SPECTRAL)**: the clip's **spectrogram** (log frequency from 20 Hz), showing the result of its edits.
+  - Drag a **time-frequency box** (Shift: all frequencies), then **Attenuate** (or **Boost**) it by the gain shown, **Erase** it, or **Repair** it (rebuilt from the sound around it: each frequency's level interpolated across, its phase carried on, for clicks, coughs, chair squeaks, a phone).
+  - **Learn Noise** from a stretch of noise alone, then **De-noise** the selection's time (or the whole clip) by up to the reduction shown (spectral subtraction with smoothed gains against "musical noise").
+  - **De-hum** notches mains hum and its harmonics (50 or 60 Hz, or found in the clip and refined to a twentieth of a hertz).
+  - Each edit is drawn on the spectrogram and listed beside it: tick to bypass, cross (or Delete) to remove. **Original** for A/B.
+
+  ![The spectral editor: a region attenuated by 40 dB, shown in the spectrogram and the list of edits](docs/images/spectral-editor.png)
+- **How edits are heard**: every edit is one undo step. The clip keeps its own file; the edited parts (and only those, cached part by part) are rendered in the background, spectral edits first and pitch edits on their result, into a 32-bit float file beside the project (*Song Edits*), loaded, and then played by the clip. Undo renders again. A project opened without its renders makes them again; exports wait for renders still running.
+
 **Clip menu** (also in the clip's right-click menu; each command applies to all selected clips, and selecting a clip of a clip group selects the whole group)
 - **Edit Lock / Edit Unlock** (Ctrl+Shift+L): an edit-locked clip (padlock in its title bar) can't be cut, deleted, split, trimmed, faded or moved (in time or to another track). Its notes, gain, stretch and pitch are read-only in the editor. Copies of it, pasted to any track or time, are edit-locked too. (It locks the selected clips, or unlocks them if all are locked; Time Lock likewise.)
 - **Time Lock / Time Unlock** (Ctrl+Alt+L): a time-locked clip (clock in its title bar) stays at its time location. It can't be moved in time or deleted, but it can be trimmed, split or dragged to another track at the same time. When it is split, both parts stay time-locked.
@@ -231,6 +249,13 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - The options are remembered.
 - Not available yet: Pro Tools-style **playlists** (alternate takes on a track and its playlist lanes), so there is no showing or hiding of playlist lanes by rating. Ratings are saved with each clip, ready for that.
 
+**Tempo map** (*View > Tempo Track*, Ctrl+Alt+T: a lane over the tracks)
+- **Tempo changes** anywhere in the song, each a **jump**, a **linear ramp** (accelerando, ritardando: the tempo moves evenly per beat to the next change) or a **curve** (bend it: fast then slow, or slow then fast). Double-click the tempo lane to add a change on the grid; drag a point along the bars and up or down (Alt: finer); right-click for its shape, bend, exact value or removal. The BPM field in the transport shows and sets the tempo where the playhead is.
+- **Time signatures** at any bar (7/8, 6/8, 5/4, 3/4 ... mixed meters for film cues): the strip at the top of the tempo track, or click the signature in the transport. The ruler, grid, snap, bar|beat|tick display, click (counting the signature's beats, the downbeat accented) and loop-to-bar follow them.
+- **Timing is exact**: within a ramp the time is closed-form (seconds = 60 / k · ln(tempo / start tempo)); a curve is a chain of short ramps, within a fraction of a millisecond.
+  ![The tempo track: a curved ramp into a tempo change at bar 5, 7/8 from bar 7](docs/images/tempo-track.png)
+- **What follows the tempo**: MIDI clips are musical (they keep their bars and beats, their notes and loops in place when the tempo changes); audio, video, automation and time-locked clips keep their time. Instruments, the LFO's sync, the click, recording, MIDI export (tempo and signature meta events), ARA plug-ins (the tempo map and bar signatures as their musical context) and control surfaces all read the map. Every edit is one undo step and saved with the project.
+
 **MIDI sequencing**
 - **Piano roll**: draw, move, resize and delete notes; velocity lane; **controller lanes** (mod wheel, volume, pan, expression, sustain, pitch bend, channel pressure); **quantise** with strength and optional note ends.
   - **Note Expression (MPE)** (the last entry of the lane menu): three lanes under the notes, **Pitch** (per-note bend in semitones), **Pressure** (polyphonic key pressure) and **Slide** (CC 74), each showing every note's own curve under the note. Each note's bend is also drawn over the note itself in the grid.
@@ -241,6 +266,13 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Playback**: a clip with note expression plays as **MPE**. Each note gets a member channel of its own (2–16, round robin, the least recently used free channel first) with its bend (±48 semitones), channel pressure plus polyphonic aftertouch, and CC 74, sent before the note starts and then every 128 samples while it changes. Drift and Meld (MPE on by default) and MPE plug-ins play each note's own curves; set a plug-in's per-note bend range to 48 semitones.
   - **Scroll bars** move left and right through the clip (and up and down through the notes); also Shift+wheel, and Ctrl+wheel zooms.
   - **Click a key** on the keyboard to hear its note through the track's instrument, for as long as you hold the mouse button: long samples and sustained synths keep sounding until you let go. Further right on a key plays louder; slide up or down to play other keys. It works with the transport stopped and the track not armed, also on edit-locked clips (MIDI tracks play through their instrument track), and nothing is recorded.
+- **Score** view (Clip Editor > **SCORE**): the clip in **staff notation**, written and edited on the staff.
+  - Engraved from the notes: treble, bass or a **grand staff** (automatic from the notes' range, or chosen), the **key signature** (detected from the notes, or chosen from the 15 keys), the tempo map's bars and **time signatures**, notes and **rests** in notatable values (dotted where they sit on the beat, rests showing each beat), **ties** over bar lines and beats, chords, **accidentals** (sharps in sharp keys, flats in flat keys, naturals where a note leaves the key, once per bar and line), ledger lines, stems, flags and **beams** (with 16th and 32nd beams and hooks; dotted-quarter groups in 6/8 and 12/8), bar numbers as in the arrangement and the playhead. The notation rounds to its grid (a 16th by default); the notes themselves do not change.
+  - **Note tool** (N): click to put in the chosen value (whole to 32nd, dotted) on the grid, at the pitch of that line or space in the key (Shift: a semitone up, Alt: down); you hear it. **Select tool** (S): click or lasso notes and drag them along the grid and up or down the staff (in the key). Keys: Delete, Up/Down (Ctrl: an octave), Left/Right a grid step, 1-6 for whole to 32nd (the selection's, or the tool's), "." dots, Ctrl+A, Escape. Right-click deletes a note. Every edit is one undo step; clef, key and grid are kept with the clip.
+  - **MusicXML...** exports the clip's score (MusicXML 4.0: key, time signatures, clefs, two staves for a grand staff, pitches as spelled, durations, dots, ties, beams, rests) for notation programs such as Dorico, Sibelius, Finale or MuseScore.
+  - The score shows the clip's content once (a looped clip is not repeated). Tuplets are written as the nearest straight values.
+
+  ![The score view: the demo's chords on an automatic bass staff, ties, rests, 7/8 from bar 7](docs/images/score-editor.png)
 - **Step sequencer** view of the same clip: rows are the Drum Rack's pads or Impulse's slots (or 16 notes), click or paint steps, right-click for velocity. Click a row's name to hear it while held.
 
 **Native devices** (64-bit, real-time safe, with dedicated editors; drag a knob, or double-click the value under it to type an exact one: "120 Hz", "2.5k", "-6 dB", or a word the knob shows, such as "Off", "Full" or "-inf")
@@ -385,6 +417,17 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - Up to eight targets, each with its own range (min and max). Removing a mapping puts the target back where it was; mappings are saved with the project and undoable.
   - Eight shapes, rate or synced division (locked to the song position), depth, offset, phase, jitter, smooth, hold, retrigger and invert. Bypassing it hands the faders back to their own settings.
   - The mixer's faders and pan knobs follow while an LFO, or automation, moves them; their values show in the accent colour.
+
+**CV / Gate** (a group of their own in the browser): control voltages for **modular synthesizers** (Eurorack and the like) through a **DC-coupled** sound card (an Expert Sleepers ES-8 or ES-9, a MOTU or RME interface with DC-coupled outputs...). Each device sends its voltages straight to the sound card outputs chosen for its ports, beside the mix.
+- **Full Scale** sets the volts at full scale (10 V on most DC-coupled Eurorack interfaces); **Delay** (up to 250 ms) holds the voltages back to meet audio delayed by delay compensation or the output path. Each port shows the voltage it sends; missing channels and a missing sound card are pointed out. Offline exports have no sound card, so the voltages go nowhere then.
+- **CV Instrument** (an instrument): MIDI to **1 V/octave pitch** (from the **0 V Note**, with Transpose, Fine, Bend Range, **Glide** always or legato, and Last, Lowest or Highest note priority), **gate** (Gate Level, Retrigger between legato notes), **velocity** and **mod wheel** voltages. **Audio In** brings the modular's audio back into the track (with Input Gain) to hear, mix and record it.
+  - **Calibrate**: with Pitch Out patched to the oscillator's 1 V/oct input and its output to Audio In, steps of 0, 1, 2 and 3 V go out, the oscillator's pitch is measured at each, and **Tracking** and **Offset** are set so that every note plays in tune (an oscillator that tracks 2 % flat or sits 12 semitones off is corrected to a few cents).
+
+  ![The CV Instrument: its ports' sound card channels and voltages, calibration](docs/images/cv-instrument.png)
+- **CV Triggers** (an instrument): eight trigger or gate outputs, each for a MIDI note (drum modules), with trigger length, level and optional velocity level.
+- **CV Clock**: a clock at the session's tempo (1, 2, 4, 8, 12, 16, 24 or 48 pulses a quarter note) with pulse width and **swing**, a **run** gate while the transport plays and a **reset** pulse when it starts.
+- **CV Utility**: a voltage between Minimum and Maximum from an automatable **Value**, plus an LFO (sine, triangle, saw, square, random), slewed: automation lanes and the LFO device drive the modular's controls.
+- **CV In**: a voltage from a sound card input as a **modulation source**, mapped like the LFO device (**Map...** or **Learn**) to any control in the session: a fader, a pan, a send, any device parameter.
 
 **Instruments**
 - **Wavetable**: two morphing wavetable oscillators (eight band-limited tables), unison up to 8, sub and noise, multimode filter, three envelopes, two LFOs and an 8-slot modulation matrix.
@@ -564,6 +607,9 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 | Ctrl+Alt+H, Ctrl+Alt+W | Detect hitpoints, quantize warp markers |
 | Ctrl+Alt+0 … 5 | Clip rating (none, 1–5) |
 | Piano roll: Q, arrows, Delete | Quantise, move / transpose selected notes, delete |
+| Score: N, S, 1-6, ".", arrows, Delete | Note / select tool, note value, dot, transpose / move, delete |
+| Pitch editor: arrows, Delete | Transpose selected notes (Shift: 10 cents), reset them |
+| Ctrl+Alt+T | Show or hide the tempo track |
 | Ctrl+G | Toggle snap |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Zoom in, out, to fit |
 | Ctrl+N / Ctrl+O / Ctrl+S | New, open, save |
@@ -663,7 +709,8 @@ src/engine    AudioEngine (audio thread + worker pool), render graph, routing, d
 src/devices   native devices: EQ, Channel EQ, Auto Filter, compressor, The Glue, limiter,
               Gate, Expander, De-Esser, Soft Clipper, Multiband Dynamics, reverb, Plate Reverb,
               delay, Echo, Utility, Amp & Cabinet, Roar, Pedal, Overdrive, Redux, Studer A800 tape,
-              EMI TG12345 and Harrison 4032 consoles, pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click; instruments: Wavetable,
+              EMI TG12345 and Harrison 4032 consoles, pitch shift, Shifter, Chorus-Ensemble, Auto Pan, LFO, Click,
+              CV/Gate (CV Instrument, CV Triggers, CV Clock, CV Utility, CV In); instruments: Wavetable,
               Operator, Meld, Analog, Drift, Rhodes Suitcase 73 Mk II, Sampler, Drum Rack, Impulse; MIDI effects:
               Arpeggiator, Chord Generator, Scale, MIDI Filter
 src/plugins   plug-in hosting (VST3 via JUCE, CLAP host), plug-in list and out-of-process scanning
@@ -674,8 +721,10 @@ src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg 
 src/session   the document (tracks, clips, take lanes and comping, MIDI, devices, sends, automation)
               with undo, audio decoding/streaming, device instances, graph compiler, recorder (takes,
               loop recording), exporter, save/open, device presets (.dojopreset), the ARA host
-              (the documents ARA plug-ins see)
-src/ui        arranger, mixer, devices panel + editors, piano roll, step sequencer, browser,
+              (the documents ARA plug-ins see), audio edits (pitch and spectral: analysis,
+              resynthesis and background renders in audioedit/)
+src/ui        arranger (with the tempo track), mixer, devices panel + editors, piano roll, step sequencer,
+              score editor and MusicXML (score/), pitch and spectral editors, browser,
               transport, export dialog, menus, look-and-feel
 src/app       application entry point, main window, settings
 tests/        unit and integration tests (incl. a test CLAP plug-in and a test ARA plug-in)
@@ -694,7 +743,10 @@ third_party/  vendored LAME
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems
 9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning, ARA 2 (Melodyne, VocAlign) in the clip editor
 10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) and 3D beds (5.1.4, 7.1.4, 9.1.6) with a surround panner, video tracks and a Video window, the mix exported into the movie
+11. ✅ **Scoring and audio editing**: tempo map with ramps and signatures, score editor with MusicXML, native pitch and spectral editing, CV/Gate for modular synths
 
 ## Licensing
 
 No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). The ARA SDK is Apache 2.0. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.
+
+Product and company names mentioned here (Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.

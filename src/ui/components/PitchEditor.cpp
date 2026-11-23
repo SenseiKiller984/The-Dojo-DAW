@@ -120,6 +120,7 @@ PitchEditor::PitchEditor(session::Project& project)
     }
 
     driftSlider_.setRange(0.0, 200.0, 1.0);
+    driftSlider_.setValue(100.0, juce::dontSendNotification);
     driftSlider_.setTextValueSuffix(" % drift");
     driftSlider_.setTooltip("The selected notes' pitch drift: 0 % straight, 100 % as performed, 200 % exaggerated");
     driftSlider_.onDragStart = [this] { session_.beginTransaction("Change Drift"); };

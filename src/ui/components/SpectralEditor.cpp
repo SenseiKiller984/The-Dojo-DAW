@@ -40,7 +40,12 @@ juce::Colour heat(std::uint8_t level)
     return palette[level];
 }
 
-juce::String hzText(double hz) { return hz >= 1000.0 ? juce::String(hz / 1000.0, hz >= 10000.0 ? 0 : 1) + "k" : juce::String(juce::roundToInt(hz)); }
+juce::String hzText(double hz)
+{
+    if (hz >= 10000.0)
+        return juce::String(juce::roundToInt(hz / 1000.0)) + "k";
+    return hz >= 1000.0 ? juce::String(hz / 1000.0, 1) + "k" : juce::String(juce::roundToInt(hz));
+}
 } // namespace
 
 SpectralEditor::SpectralEditor(session::Project& project)

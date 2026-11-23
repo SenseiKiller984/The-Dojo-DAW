@@ -593,7 +593,7 @@ void ArrangerView::paintTempoTrack(juce::Graphics& g) const
         g.setColour(colour::textSecondary);
         g.setFont(mono(10.0f));
         const float labelY = position.y < static_cast<float>(curve.getCentreY()) ? position.y + 4.0f : position.y - 16.0f;
-        g.drawText(juce::String(p.bpm, p.bpm == std::round(p.bpm) ? 0 : 2), juce::Rectangle<float>(position.x + 6.0f, labelY, 60.0f, 12.0f),
+        g.drawText(juce::String(p.bpm, std::abs(p.bpm - std::round(p.bpm)) < 1.0e-9 ? 0 : 2), juce::Rectangle<float>(position.x + 6.0f, labelY, 60.0f, 12.0f),
                    juce::Justification::centredLeft, false);
     }
 
