@@ -53,6 +53,7 @@ add_executable(dojo_tests
     TrackSelectionTests.cpp
     SessionTests.cpp
     RealtimeGuardTests.cpp
+    SpectralEditTests.cpp
     SpectrumOverlayTests.cpp
     HardwareInsertTests.cpp
     ControlSurfaceTests.cpp

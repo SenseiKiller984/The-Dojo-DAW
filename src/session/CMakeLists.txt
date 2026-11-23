@@ -7,6 +7,8 @@ add_library(dojo_session STATIC
     audioedit/PitchAnalysis.h
     audioedit/PitchRender.cpp
     audioedit/PitchRender.h
+    audioedit/Spectral.cpp
+    audioedit/Spectral.h
     audioedit/Stft.cpp
     audioedit/Stft.h
     AudioAssetCache.cpp
