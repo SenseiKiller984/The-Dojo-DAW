@@ -3,6 +3,7 @@
 #include "engine/EngineController.h"
 #include "session/Project.h"
 #include "ui/EditorState.h"
+#include "ui/components/PitchEditor.h"
 #include "ui/score/ScoreView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -277,6 +278,15 @@ public:
     [[nodiscard]] PianoRoll& getPianoRoll() noexcept { return pianoRoll_; }
     [[nodiscard]] StepSequencer& getStepSequencer() noexcept { return steps_; }
     [[nodiscard]] ScoreView& getScoreView() noexcept { return score_; }
+    [[nodiscard]] PitchEditor& getPitchEditor() noexcept { return pitch_; }
+    /** An audio clip's view: its ARA plug-in's editor (when it has one), CLIP (its settings) or PITCH. */
+    enum class AudioView
+    {
+        plugin,
+        inspector,
+        pitch,
+    };
+    void showAudioView(AudioView view);
     /** NOTES, STEPS or SCORE (as their buttons). */
     enum class MidiView
     {
@@ -320,14 +330,16 @@ private:
     StepSequencer steps_;
     ScoreView score_;
     AudioClipInspector inspector_;
+    PitchEditor pitch_;
     MidiView midiView_ = MidiView::notes;
 
     juce::TextButton araButton_{"ARA"};
     juce::TextButton clipButton_{"CLIP"};
+    juce::TextButton pitchButton_{"PITCH"};
     juce::Label araNote_;                               ///< the plug-in and its regions, or why there is no editor
     std::unique_ptr<juce::AudioProcessorEditor> araEditor_;
     std::uint32_t araDevice_ = 0;                       ///< whose editor it is
-    bool showInspector_ = false;                        ///< CLIP chosen instead of the plug-in
+    AudioView audioView_ = AudioView::plugin;          ///< (the inspector when there is no plug-in)
 };
 
 } // namespace dojo::ui

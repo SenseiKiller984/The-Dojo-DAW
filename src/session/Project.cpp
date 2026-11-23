@@ -9,6 +9,7 @@ Project::Project(GraphCompiler::Publisher publishGraph, DeviceManager::Creator c
     : devices_(session_, std::move(createDevice))
     , compiler_(session_, assets_, &devices_, std::move(publishGraph))
     , ara_(session_, assets_, devices_)
+    , edits_(session_, assets_)
 {
     session_.getState().addListener(this);
     devices_.onParameterChanged = [this] { setDirty(true); };
@@ -51,10 +52,12 @@ void Project::newSession()
 {
     imports_.clear();
     ara_.reset(); // (the old documents go with the old session)
+    edits_.reset();
     loading_ = true;
     session_.reset();
     loading_ = false;
     file_ = juce::File();
+    updateRenderFolder();
     dirty_ = false;
 
     if (onDocumentStateChanged)
@@ -65,8 +68,15 @@ juce::Result Project::open(const juce::File& file)
 {
     imports_.clear();
     ara_.reset();
+    edits_.reset();
     loading_ = true;
     const auto result = session_.load(file);
+    if (result.wasOk())
+    {
+        file_ = file;
+        updateRenderFolder();
+        edits_.sessionLoaded(); // (renders that are missing are made again)
+    }
     loading_ = false;
 
     if (result.failed())
@@ -114,12 +124,20 @@ juce::Result Project::saveAs(const juce::File& file)
     if (result.wasOk())
     {
         file_ = target;
+        updateRenderFolder();
         dirty_ = false;
         if (onDocumentStateChanged)
             onDocumentStateChanged();
     }
 
     return result;
+}
+
+void Project::updateRenderFolder()
+{
+    edits_.setRenderFolder(file_ != juce::File()
+                               ? file_.getParentDirectory().getChildFile(file_.getFileNameWithoutExtension() + " Edits")
+                               : juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("The Dojo").getChildFile("Edits"));
 }
 
 void Project::addMissingWholeFileClips()
@@ -130,7 +148,8 @@ void Project::addMissingWholeFileClips()
     bool added = false;
     for (const auto& t : session_.getAllTracks())
         for (const auto& c : t)
-            if (c.hasType(ids::clip) && !session_.findWholeFileClip(clip::getFile(c)).isValid())
+            if (c.hasType(ids::clip) && !c.getChildWithName(ids::audioEdit).isValid() // (not an edit's render)
+                && !session_.findWholeFileClip(clip::getFile(c)).isValid())
             {
                 const auto info = readMediaFileInfo(assets_.getFormatManager(), clip::getFile(c));
                 if (!info.readable)

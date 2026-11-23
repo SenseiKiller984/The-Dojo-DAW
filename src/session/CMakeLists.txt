@@ -11,6 +11,8 @@ add_library(dojo_session STATIC
     audioedit/Stft.h
     AudioAssetCache.cpp
     AudioAssetCache.h
+    AudioEdits.cpp
+    AudioEdits.h
     DeviceManager.cpp
     DeviceManager.h
     Exporter.cpp

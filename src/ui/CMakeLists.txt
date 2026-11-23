@@ -52,6 +52,8 @@ add_library(dojo_ui STATIC
     components/SurroundPanner.h
     components/InlineValueEditor.cpp
     components/InlineValueEditor.h
+    components/PitchEditor.cpp
+    components/PitchEditor.h
     components/MixerPanel.cpp
     components/MixerPanel.h
     components/StatusBar.cpp

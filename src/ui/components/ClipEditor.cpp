@@ -1486,6 +1486,7 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     , steps_(project, editor)
     , score_(project.getSession())
     , inspector_(project.getSession())
+    , pitch_(project)
 {
     setOpaque(true);
 
@@ -1576,7 +1577,7 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     score_.onPreview = preview;
 
     // An ARA plug-in's editor (Melodyne, VocAlign...) for the clips its track plays, or the inspector.
-    for (auto* b : {&araButton_, &clipButton_})
+    for (auto* b : {&araButton_, &clipButton_, &pitchButton_})
     {
         b->setRadioGroupId(4243);
         b->setClickingTogglesState(true);
@@ -1586,16 +1587,11 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     araButton_.setToggleState(true, juce::dontSendNotification);
     araButton_.setTooltip("The track's ARA plug-in's editor, showing this clip");
     clipButton_.setTooltip("The clip's own settings (gain, pitch, stretch...)");
-    araButton_.onClick = [this]
-    {
-        showInspector_ = false;
-        showClip();
-    };
-    clipButton_.onClick = [this]
-    {
-        showInspector_ = true;
-        showClip();
-    };
+    pitchButton_.setTooltip("Pitch editing: the clip's notes, moved, straightened, retimed (native pitch correction)");
+    araButton_.onClick = [this] { showAudioView(AudioView::plugin); };
+    clipButton_.onClick = [this] { showAudioView(AudioView::inspector); };
+    pitchButton_.onClick = [this] { showAudioView(AudioView::pitch); };
+    addChildComponent(pitch_);
     araNote_.setFont(theme::sans(12.0f));
     araNote_.setColour(juce::Label::textColourId, theme::colour::textSecondary);
     addChildComponent(araNote_);
@@ -1621,6 +1617,14 @@ void ClipEditor::setPlayhead(double seconds)
         steps_.setPlayhead(seconds);
     if (score_.isVisible())
         score_.setPlayhead(seconds);
+    if (pitch_.isVisible())
+        pitch_.setPlayhead(seconds);
+}
+
+void ClipEditor::showAudioView(AudioView view)
+{
+    audioView_ = view;
+    showClip();
 }
 
 void ClipEditor::showMidiView(MidiView view)
@@ -1660,20 +1664,23 @@ void ClipEditor::showClip()
     const auto ara = track.hasType(session::ids::track) ? project_.getAra().getTrackInfo(session::track::getId(track))
                                                          : session::AraHost::TrackInfo{};
     const bool araClip = audio && ara.rendering;
-    showAraEditor(araClip && !showInspector_);
+    const auto view = audioView_ == AudioView::plugin && !araClip ? AudioView::inspector : audioView_;
+    showAraEditor(araClip && view == AudioView::plugin);
     araButton_.setVisible(araClip);
-    clipButton_.setVisible(araClip);
-    araButton_.setToggleState(!showInspector_, juce::dontSendNotification);
-    clipButton_.setToggleState(showInspector_, juce::dontSendNotification);
+    clipButton_.setVisible(audio);
+    pitchButton_.setVisible(audio);
+    araButton_.setToggleState(view == AudioView::plugin, juce::dontSendNotification);
+    clipButton_.setToggleState(view == AudioView::inspector, juce::dontSendNotification);
+    pitchButton_.setToggleState(view == AudioView::pitch, juce::dontSendNotification);
     if (araClip)
     {
         juce::String note = ara.plugin + ": " + juce::String(ara.regions) + (ara.regions == 1 ? " clip" : " clips") + " on this track";
-        if (!showInspector_ && araEditor_ == nullptr)
+        if (view == AudioView::plugin && araEditor_ == nullptr)
             note << " (its editor is open in its own window)";
         araNote_.setText(note, juce::dontSendNotification);
         project_.getAra().showSelection(session::track::getId(track), {session::clip::getId(clip_)});
     }
-    araNote_.setVisible(araClip);
+    araNote_.setVisible(araClip && view != AudioView::pitch);
 
     pianoRoll_.setClip(midi ? clip_ : juce::ValueTree());
     steps_.setClip(midi ? clip_ : juce::ValueTree());
@@ -1683,7 +1690,9 @@ void ClipEditor::showClip()
     pianoRoll_.setVisible(midi && midiView_ == MidiView::notes);
     steps_.setVisible(midi && midiView_ == MidiView::steps);
     score_.setVisible(midi && midiView_ == MidiView::score);
-    inspector_.setVisible(audio && (!araClip || showInspector_));
+    pitch_.setClip(audio ? clip_ : juce::ValueTree());
+    inspector_.setVisible(audio && view == AudioView::inspector);
+    pitch_.setVisible(audio && view == AudioView::pitch);
 
     for (auto* c : std::initializer_list<juce::Component*>{&notesButton_, &stepsButton_, &scoreButton_})
         c->setVisible(midi);
@@ -1727,6 +1736,7 @@ void ClipEditor::resized()
         auto araBar = toolbar;
         araButton_.setBounds(araBar.removeFromLeft(56));
         clipButton_.setBounds(araBar.removeFromLeft(56));
+        pitchButton_.setBounds(araBar.removeFromLeft(60));
         araBar.removeFromLeft(12);
         araNote_.setBounds(araBar);
     }
@@ -1749,6 +1759,7 @@ void ClipEditor::resized()
     steps_.setBounds(area);
     score_.setBounds(area);
     inspector_.setBounds(area);
+    pitch_.setBounds(area);
     if (araEditor_ != nullptr)
         araEditor_->setBounds(area);
 }

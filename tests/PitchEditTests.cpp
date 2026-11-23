@@ -1,9 +1,19 @@
 // Native pitch editing: analysis (melodic and polyphonic), resynthesis (pitch, drift, timing, level,
 // formants), the session's pitch edits and the pitch editor.
 
+#include "devices/DeviceRegistry.h"
+#include "engine/AudioEngine.h"
+#include "engine/EngineController.h"
+#include "engine/io/AudioDeviceHost.h"
+#include "session/AudioEdits.h"
+#include "session/Project.h"
 #include "session/audioedit/PitchAnalysis.h"
 #include "session/audioedit/PitchRender.h"
 #include "session/audioedit/Stft.h"
+#include "ui/EditorState.h"
+#include "ui/components/ClipEditor.h"
+#include "ui/components/PitchEditor.h"
+#include "TestAudio.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -324,4 +334,369 @@ TEST_CASE("Pitch rendering, polyphonic: one note of a chord moved alone", "[pitc
     std::sort(pitches.begin(), pitches.end());
     CHECK(pitches == std::vector<int>{60, 65, 67});
     CHECK_THAT(rmsDb(y.data(), 0.3, 1.1), WithinAbs(rmsDb(x.data(), 0.3, 1.1), 1.5));
+}
+
+namespace
+{
+/** A project with the engine, for the session and UI tests. */
+struct PitchApp
+{
+    struct MessageThread
+    {
+        MessageThread() { juce::MessageManager::getInstance(); }
+    } messageThread;
+    engine::AudioEngine engine;
+    engine::AudioDeviceHost host{engine};
+    engine::EngineController controller{engine, host};
+    session::Project project{[this](std::unique_ptr<engine::RenderGraph> graph) { controller.publishGraph(std::move(graph)); },
+                             [](const juce::ValueTree& d, double, int, juce::String&) { return devices::createBuiltinDevice(session::device::getType(d)); }};
+};
+
+std::vector<float> readFile(const juce::File& file)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+    if (reader == nullptr)
+        return {};
+    juce::AudioBuffer<float> b(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+    reader->read(&b, 0, b.getNumSamples(), 0, true, true);
+    return toVector(b);
+}
+
+/** A vocal-like take: A4 (with vibrato) then E5. */
+juce::File writeTake(const juce::File& file)
+{
+    std::vector<float> x(static_cast<std::size_t>(kRate * 2.4), 0.0f);
+    addTone(x, 0.20, 1.00, 69.0, 0.3, 40.0);
+    addTone(x, 1.30, 2.10, 76.0);
+    return test::writeWav(file, x, kRate);
+}
+} // namespace
+
+TEST_CASE("Pitch edits in the session: analysed, edited, rendered and played; undone, bypassed, reopened, removed", "[pitchedit][session]")
+{
+    test::TempFolder temp;
+    PitchApp app;
+    auto& session = app.project.getSession();
+    auto& edits = app.project.getAudioEdits();
+    auto& undo = session.getUndoManager();
+    edits.setRenderFolder(temp.dir.getChildFile("Edits"));
+    const auto source = writeTake(temp.dir.getChildFile("take.wav"));
+    auto track = session.addTrack(session::TrackKind::audio, "Vocal");
+    auto clip = session.addClip(track, source, 1.0, 2.4);
+
+    juce::String error;
+    REQUIRE(edits.analysePitch(clip, pitch::Mode::melodic, error));
+    CHECK(edits.getState(clip).status == session::AudioEdits::Status::analysing);
+    REQUIRE(edits.waitUntilIdle(30'000));
+    auto notes = session::audioedits::getPitchNotes(clip);
+    REQUIRE(notes.size() == 2);
+    CHECK(undo.getUndoDescription() == "Analyse Pitch");
+    CHECK(session::clip::getFile(clip) == source); // (nothing edited: the source plays)
+    CHECK(session::audioedits::getSource(clip) == source);
+    CHECK(session::audioedits::getPitchMode(clip) == pitch::Mode::melodic);
+    const auto first = session::audioedits::toEdit(notes[0]);
+    CHECK_THAT(first.note.pitch, WithinAbs(69.0, 0.1));
+    CHECK_THAT(first.note.start, WithinAbs(0.2, 0.03)); // (seconds of the source from `from`, here 0)
+    CHECK_THAT(session::audioedits::clipTimeOf(clip, first.note.start), WithinAbs(0.2, 0.03));
+    CHECK(first.note.drift.size() > 100);
+
+    // An edit renders: the clip plays a new file, the A4 now a B4; the rest as it was.
+    session.beginTransaction("Change Pitch");
+    session::audioedits::setNotePitch(notes[0], first.note.pitch + 2.0, &undo);
+    CHECK(edits.getState(clip).status == session::AudioEdits::Status::rendering);
+    REQUIRE(edits.waitUntilIdle(30'000));
+    const auto rendered = session::clip::getFile(clip);
+    CHECK(rendered != source);
+    CHECK(rendered.isAChildOf(temp.dir.getChildFile("Edits")));
+    CHECK(session::audioedits::getEdit(clip).getProperty(session::ids::rendered).toString() == rendered.getFullPathName());
+    auto y = readFile(rendered);
+    const auto x = readFile(source);
+    REQUIRE(y.size() == x.size());
+    CHECK_THAT(measuredPitch(y, 0.35, 0.9), WithinAbs(71.0, 0.15));
+    CHECK_THAT(measuredPitch(y, 1.4, 2.0), WithinAbs(76.0, 0.05));
+    CHECK(app.project.getAssets().find(rendered) != nullptr); // (loaded before it was played)
+
+    // Undo: the source plays again, the render is deleted; redo renders again.
+    REQUIRE(undo.undo());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(clip) == source);
+    CHECK_FALSE(rendered.existsAsFile());
+    REQUIRE(undo.redo());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    const auto again = session::clip::getFile(clip);
+    CHECK(again != source);
+    CHECK_THAT(measuredPitch(readFile(again), 0.35, 0.9), WithinAbs(71.0, 0.15));
+
+    // Original (A/B): the source while bypassed.
+    edits.setBypassed(clip, true);
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(clip) == source);
+    edits.setBypassed(clip, false);
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(clip) != source);
+
+    // Saved and opened again: with its render gone, the clip plays its source and renders again.
+    const auto song = temp.dir.getChildFile("Song.dojo");
+    REQUIRE(app.project.saveAs(song).wasOk());
+    CHECK(edits.getRenderFolder() == temp.dir.getChildFile("Song Edits"));
+    const auto saved = session::clip::getFile(clip);
+    REQUIRE(saved.deleteFile());
+    REQUIRE(app.project.open(song).wasOk());
+    auto reopened = session.findClip(session::clip::getId(clip));
+    REQUIRE(reopened.isValid());
+    CHECK(session::clip::getFile(reopened) == source);
+    CHECK_FALSE(app.project.hasUnsavedChanges());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(reopened) != source);
+    CHECK(session::clip::getFile(reopened).isAChildOf(temp.dir.getChildFile("Song Edits")));
+    CHECK_THAT(measuredPitch(readFile(session::clip::getFile(reopened)), 0.35, 0.9), WithinAbs(71.0, 0.15));
+
+    // Removed (one undo step): the source plays; undone, the edits are back and render.
+    edits.removePitch(reopened);
+    CHECK(undo.getUndoDescription() == "Remove Pitch Edits");
+    CHECK(session::clip::getFile(reopened) == source);
+    CHECK_FALSE(session::audioedits::getEdit(reopened).isValid());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    REQUIRE(undo.undo());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::audioedits::hasPitch(reopened));
+    CHECK(session::clip::getFile(reopened) != source);
+    CHECK(session::clip::getFile(reopened).existsAsFile());
+}
+
+TEST_CASE("Pitch edit model: timing keeps notes apart (and touching ones touching), scales, correction", "[pitchedit][model]")
+{
+    juce::ValueTree edit(session::ids::audioEdit);
+    edit.setProperty(session::ids::from, 0.0, nullptr);
+    edit.setProperty(session::ids::to, 4.0, nullptr);
+    juce::ValueTree p(session::ids::pitchEdit);
+    edit.appendChild(p, nullptr);
+    const auto add = [&p](double start, double end, double midi)
+    {
+        pitch::Note n;
+        n.start = start;
+        n.end = end;
+        n.pitch = midi;
+        n.drift = {0.3f, -0.3f};
+        n.level = {1.0f, 1.0f};
+        auto tree = session::audioedits::makeNote(n);
+        p.appendChild(tree, nullptr);
+        return tree;
+    };
+    auto n0 = add(0.0, 1.0, 60.2);
+    auto n1 = add(1.0, 2.0, 63.6); // touches n0
+    auto n2 = add(2.5, 3.0, 67.0);
+    juce::UndoManager um;
+
+    // Moved later: n0's end follows (they touch); stopped at n2.
+    session::audioedits::setNoteTiming(n1, 1.3, 2.3, &um);
+    auto e1 = session::audioedits::toEdit(n1);
+    CHECK_THAT(e1.newStart, WithinAbs(1.3, 1e-9));
+    CHECK_THAT(e1.newEnd, WithinAbs(2.3, 1e-9));
+    CHECK_THAT(session::audioedits::toEdit(n0).newEnd, WithinAbs(1.3, 1e-9));
+    session::audioedits::setNoteTiming(n1, 2.0, 3.0, &um);
+    e1 = session::audioedits::toEdit(n1);
+    CHECK_THAT(e1.newStart, WithinAbs(1.5, 1e-9)); // (its length kept, up to n2)
+    CHECK_THAT(e1.newEnd, WithinAbs(2.5, 1e-9));
+    // An end dragged: not past n2, not shorter than 20 ms.
+    session::audioedits::setNoteTiming(n1, 1.5, 2.9, &um);
+    CHECK_THAT(session::audioedits::toEdit(n1).newEnd, WithinAbs(2.5, 1e-9));
+    session::audioedits::setNoteTiming(n1, 1.5, 1.0, &um);
+    CHECK_THAT(session::audioedits::toEdit(n1).newEnd, WithinAbs(1.52, 1e-9));
+    // A start dragged before n0's own start is stopped 20 ms after it.
+    session::audioedits::setNoteTiming(n1, -1.0, 2.0, &um);
+    CHECK_THAT(session::audioedits::toEdit(n1).newStart, WithinAbs(0.02, 1e-9));
+    CHECK_THAT(session::audioedits::toEdit(n0).newEnd, WithinAbs(0.02, 1e-9));
+    session::audioedits::resetNote(n1, &um);
+    CHECK_FALSE(session::audioedits::toEdit(n1).timeEdited());
+
+    // Scales: the nearest note (ties go down).
+    using session::audioedits::ScaleKind;
+    CHECK(session::audioedits::nearestInScale(61.0, {0, ScaleKind::major}) == 60);
+    CHECK(session::audioedits::nearestInScale(61.4, {0, ScaleKind::chromatic}) == 61);
+    CHECK(session::audioedits::nearestInScale(65.9, {0, ScaleKind::major}) == 65);
+    CHECK(session::audioedits::nearestInScale(66.6, {0, ScaleKind::major}) == 67);
+    CHECK(session::audioedits::nearestInScale(63.0, {9, ScaleKind::naturalMinor}) == 62); // A minor: D (ties down), not D#
+    CHECK(session::audioedits::nearestInScale(68.0, {9, ScaleKind::harmonicMinor}) == 68);  // G# in A harmonic minor
+    CHECK(session::audioedits::nearestInScale(65.0, {0, ScaleKind::majorPentatonic}) == 64);
+
+    // Correction: halfway to the scale, the drift halved; then all the way, flat.
+    session::audioedits::correctPitch({n0, n1}, 0.5, 0.5, {0, ScaleKind::major}, &um);
+    CHECK_THAT(session::audioedits::toEdit(n0).newPitch, WithinAbs(60.1, 1e-9));
+    CHECK_THAT(session::audioedits::toEdit(n1).newPitch, WithinAbs(63.8, 1e-9)); // (towards E)
+    CHECK_THAT(session::audioedits::toEdit(n0).drift, WithinAbs(0.5, 1e-9));
+    session::audioedits::correctPitch({n0, n1}, 1.0, 1.0, {0, ScaleKind::major}, &um);
+    CHECK_THAT(session::audioedits::toEdit(n0).newPitch, WithinAbs(60.0, 1e-9));
+    CHECK_THAT(session::audioedits::toEdit(n1).newPitch, WithinAbs(64.0, 1e-9));
+    CHECK_THAT(session::audioedits::toEdit(n1).drift, WithinAbs(0.0, 1e-9));
+    CHECK(session::audioedits::toEdit(n0).pitchEdited());
+    CHECK_THAT(session::audioedits::toEdit(n0).offsetAt(0.0), WithinAbs(-0.2 - 0.3, 1e-6)); // (to C, the drift flattened)
+}
+
+TEST_CASE("The pitch editor: blobs dragged in pitch and time, edges, keys, snapping, correction; the clip editor's PITCH view", "[pitchedit][ui]")
+{
+    test::TempFolder temp;
+    PitchApp app;
+    auto& session = app.project.getSession();
+    auto& edits = app.project.getAudioEdits();
+    auto& undo = session.getUndoManager();
+    edits.setRenderFolder(temp.dir.getChildFile("Edits"));
+    const auto source = writeTake(temp.dir.getChildFile("take.wav"));
+    auto track = session.addTrack(session::TrackKind::audio, "Vocal");
+    auto clip = session.addClip(track, source, 0.0, 2.4);
+
+    ui::EditorState editor;
+    ui::ClipEditor clipEditor(app.project, editor);
+    clipEditor.setSize(1400, 420);
+    editor.setEditedClip(session::clip::getId(clip));
+    auto* pitchButton = [&]() -> juce::Button*
+    {
+        for (auto* child : clipEditor.getChildren())
+            if (auto* b = dynamic_cast<juce::Button*>(child); b != nullptr && b->getButtonText() == "PITCH")
+                return b;
+        return nullptr;
+    }();
+    REQUIRE(pitchButton != nullptr);
+    CHECK(pitchButton->isVisible());
+    CHECK_FALSE(clipEditor.getPitchEditor().isVisible());
+    const auto click = [](juce::Button& b)
+    {
+        b.triggerClick(); // (asynchronous)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(80);
+    };
+    click(*pitchButton);
+    auto& view = clipEditor.getPitchEditor();
+    CHECK(view.isVisible());
+    CHECK(view.getClip() == clip);
+    const auto paint = [&clipEditor]
+    {
+        juce::Image image(juce::Image::RGB, clipEditor.getWidth(), clipEditor.getHeight(), true);
+        juce::Graphics g(image);
+        clipEditor.paintEntireComponent(g, false);
+        return image;
+    };
+    paint();
+
+    // Analyse from the editor.
+    click(view.getAnalyseButton());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    const auto notes = session::audioedits::getPitchNotes(clip);
+    REQUIRE(notes.size() == 2);
+    paint();
+
+    const auto event = [&view](juce::Point<float> p, juce::Point<float> down, juce::ModifierKeys extra = {}, int clicks = 1)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), p,
+                                juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier | extra.getRawFlags()), juce::MouseInputSource::defaultPressure,
+                                juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                                juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, &view, &view, now, down, now, clicks,
+                                p != down);
+    };
+    const auto drag = [&](juce::Point<float> from, juce::Point<float> to, juce::ModifierKeys mods = {})
+    {
+        view.mouseDown(event(from, from, mods));
+        view.mouseDrag(event(from + (to - from) * 0.5f, from, mods));
+        view.mouseDrag(event(to, from, mods));
+        view.mouseUp(event(to, from, mods));
+    };
+
+    // The blob is where the note is heard.
+    auto a4 = notes[0];
+    const auto e0 = session::audioedits::toEdit(a4);
+    auto bounds = view.getNoteBounds(a4);
+    CHECK_THAT(static_cast<double>(bounds.getX()), WithinAbs(static_cast<double>(view.timeToX(e0.note.start)), 0.5));
+    CHECK_THAT(view.yToPitch(bounds.getCentreY()), WithinAbs(e0.note.pitch, 0.01));
+    CHECK(view.noteAt(bounds.getCentre()) == a4);
+
+    // Up two semitones (one step), selected.
+    const auto centre = bounds.getCentre();
+    drag(centre, centre.translated(0.0f, -2.0f * (view.pitchToY(60.0) - view.pitchToY(61.0))));
+    CHECK_THAT(session::audioedits::toEdit(a4).newPitch, WithinAbs(e0.note.pitch + 2.0, 1e-9));
+    CHECK(undo.getUndoDescription() == "Change Pitch");
+    CHECK(view.getSelection() == std::vector<juce::ValueTree>{a4});
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(clip) != source);
+    // DOJO_PITCH_SNAPSHOT=<file.png>: the editor with the moved note, for a look.
+    if (const auto path = juce::SystemStats::getEnvironmentVariable("DOJO_PITCH_SNAPSHOT", {}); path.isNotEmpty())
+    {
+        view.setPlayhead(0.6);
+        const auto image = paint();
+        const juce::File file(path);
+        file.deleteFile();
+        juce::FileOutputStream out(file);
+        juce::PNGImageFormat().writeImageToStream(image, out);
+    }
+    paint();
+
+    // Sideways: later in time (melodic), one step.
+    bounds = view.getNoteBounds(a4);
+    drag(bounds.getCentre(), bounds.getCentre().translated(static_cast<float>(view.timeToX(0.1) - view.timeToX(0.0)), 0.0f));
+    auto moved = session::audioedits::toEdit(a4);
+    CHECK_THAT(moved.newStart, WithinAbs(e0.note.start + 0.1, 0.002));
+    CHECK_THAT(moved.newEnd, WithinAbs(e0.note.end + 0.1, 0.002));
+    CHECK(undo.getUndoDescription() == "Move Notes");
+    undo.undo();
+
+    // Its end dragged earlier.
+    bounds = view.getNoteBounds(a4);
+    drag({bounds.getRight() - 2.0f, bounds.getCentreY()}, {bounds.getRight() - 2.0f - static_cast<float>(view.timeToX(0.2) - view.timeToX(0.0)), bounds.getCentreY()});
+    CHECK_THAT(session::audioedits::toEdit(a4).newEnd, WithinAbs(e0.note.end - 0.2, 0.002));
+    CHECK(undo.getUndoDescription() == "Change Note End");
+
+    // Keys: Up a semitone, Shift+Down 10 cents; Delete resets.
+    CHECK(view.keyPressed(juce::KeyPress(juce::KeyPress::upKey)));
+    CHECK_THAT(session::audioedits::toEdit(a4).newPitch, WithinAbs(e0.note.pitch + 3.0, 1e-9));
+    CHECK(view.keyPressed(juce::KeyPress(juce::KeyPress::downKey, juce::ModifierKeys::shiftModifier, 0)));
+    CHECK_THAT(session::audioedits::toEdit(a4).newPitch, WithinAbs(e0.note.pitch + 2.9, 1e-9));
+    CHECK(view.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey)));
+    CHECK_FALSE(session::audioedits::toEdit(a4).edited());
+    CHECK(undo.getUndoDescription() == "Reset Note");
+
+    // Double-click: snapped to the nearest note of the scale.
+    bounds = view.getNoteBounds(a4);
+    view.mouseDoubleClick(event(bounds.getCentre(), bounds.getCentre(), {}, 2));
+    CHECK_THAT(session::audioedits::toEdit(a4).newPitch, WithinAbs(std::round(e0.note.pitch), 1e-9));
+    CHECK(undo.getUndoDescription() == "Snap Pitch");
+
+    // Lasso both; Correct (to D major: the E5 stays, the A4 too); drift and level of the selection.
+    const auto area = view.getNoteArea().toFloat();
+    drag(area.getTopLeft().translated(2.0f, 2.0f), area.getBottomRight().translated(-2.0f, -2.0f));
+    CHECK(view.getSelection().size() == 2);
+    view.setScale({2, session::audioedits::ScaleKind::major});
+    view.correct(1.0, 1.0);
+    CHECK(undo.getUndoDescription() == "Correct Pitch");
+    for (const auto& n : notes)
+    {
+        const auto e = session::audioedits::toEdit(n);
+        CHECK_THAT(e.newPitch, WithinAbs(std::round(e.note.pitch), 1e-9));
+        CHECK_THAT(e.drift, WithinAbs(0.0, 1e-9));
+    }
+    session.beginTransaction("Change Note Level");
+    view.setGainOfSelection(-6.0);
+    CHECK_THAT(session::audioedits::toEdit(notes[1]).gainDb, WithinAbs(-6.0, 1e-9));
+    REQUIRE(edits.waitUntilIdle(30'000));
+    const auto y = readFile(session::clip::getFile(clip));
+    CHECK(pitchSpread(y, 0.35, 0.9) < 0.15); // (the vibrato straightened)
+    paint();
+
+    // Formants and Original toggle the clip's settings.
+    click(view.getFormantsButton());
+    CHECK_FALSE(session::audioedits::keepsFormants(clip));
+    CHECK(undo.getUndoDescription() == "Keep Formants");
+    click(view.getOriginalButton());
+    CHECK(session::AudioEdits::isBypassed(clip));
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(clip) == source);
+    click(view.getOriginalButton());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    CHECK(session::clip::getFile(clip) != source);
+
+    // CLIP: the inspector again.
+    for (auto* child : clipEditor.getChildren())
+        if (auto* b = dynamic_cast<juce::Button*>(child); b != nullptr && b->getButtonText() == "CLIP")
+            click(*b);
+    CHECK_FALSE(view.isVisible());
 }

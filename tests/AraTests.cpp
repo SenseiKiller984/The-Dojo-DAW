@@ -441,7 +441,8 @@ TEST_CASE("Track > ARA Plug-in, and the plug-in's own editor for the clip in the
     app.settle(trackId, false, 0);
     CHECK(clipEditor.getAraEditor() == nullptr);
     CHECK_FALSE(araButton->isVisible());
-    CHECK_FALSE(clipButton->isVisible());
+    CHECK(clipButton->isVisible()); // (CLIP and PITCH stay: every audio clip has them)
+    CHECK(clipButton->getToggleState());
     CHECK(app.project.getDevices().findNode(deviceId) == nullptr);
 
     // Undo: the plug-in is back (bound again), and so is its editor.

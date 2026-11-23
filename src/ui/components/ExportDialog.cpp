@@ -275,6 +275,10 @@ void ExportDialog::chooseDestination()
 void ExportDialog::startExport()
 {
     auto& session = project_.getSession();
+    // Pitch edits still rendering are waited for (the export hears what the clips will play).
+    if (!project_.getAudioEdits().waitUntilIdle(120'000))
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Export",
+                                               "Some audio edits are still rendering; their clips are exported as they were.");
     session::ExportSettings settings;
     settings.destination = file_;
     settings.format = getFormat();

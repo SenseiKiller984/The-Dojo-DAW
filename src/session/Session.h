@@ -40,6 +40,13 @@ using engine::TrackKind;
                         (user time stamp - original), listEntry (the Clip List entry it was placed
                         from), autoCreated (made by editing), autoNameRoot / autoNameZeros /
                         autoNameSuffix (Auto Rename), take (the take lane a comp clip was comped from)
+              AUDIOEDIT   source (the clip's own file; `file` plays the render), from, to (the seconds of
+                          the source analysed), rendered (the render's file; not undoable), bypass (A/B:
+                          the source plays) - native audio editing, see AudioEdits
+                PITCH       mode (melodic|polyphonic), formants (kept when moved)
+                  PNOTE       start, end, pitch (as analysed; seconds from `from`, MIDI), hop, driftCurve,
+                              levelCurve (base64 float32 every `hop`), newStart, newEnd, newPitch, drift
+                              (0..2 of the drift kept), gainDb
             VIDEOCLIP   id, name, file, start, length, offset (seconds into the file), editLocked, timeLocked
                         (and rating, groups, looped, loopLength, syncPoint, userNamed)
             MIDICLIP    id, name, start, length, offset (beats) (and rating ... userNamed as above),
@@ -227,6 +234,24 @@ inline const juce::Identifier denominator  {"denominator"};
 inline const juce::Identifier scoreClef    {"scoreClef"};
 inline const juce::Identifier scoreKey     {"scoreKey"};
 inline const juce::Identifier scoreGrid    {"scoreGrid"};
+inline const juce::Identifier audioEdit    {"AUDIOEDIT"};
+inline const juce::Identifier pitchEdit    {"PITCH"};
+inline const juce::Identifier pitchNote    {"PNOTE"};
+inline const juce::Identifier source       {"source"};
+inline const juce::Identifier mode         {"mode"};
+inline const juce::Identifier formants     {"formants"};
+inline const juce::Identifier from         {"from"};
+inline const juce::Identifier to           {"to"};
+inline const juce::Identifier rendered     {"rendered"};
+inline const juce::Identifier bypass       {"bypass"};
+inline const juce::Identifier end          {"end"};
+inline const juce::Identifier newStart     {"newStart"};
+inline const juce::Identifier newEnd       {"newEnd"};
+inline const juce::Identifier newPitch     {"newPitch"};
+inline const juce::Identifier drift        {"drift"};
+inline const juce::Identifier hop          {"hop"};
+inline const juce::Identifier driftCurve   {"driftCurve"};
+inline const juce::Identifier levelCurve   {"levelCurve"};
 // clang-format on
 } // namespace ids
 

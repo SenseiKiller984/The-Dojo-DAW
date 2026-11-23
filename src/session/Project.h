@@ -2,6 +2,7 @@
 
 #include "engine/RenderGraph.h"
 #include "session/AraHost.h"
+#include "session/AudioEdits.h"
 #include "session/AudioAssetCache.h"
 #include "session/DeviceManager.h"
 #include "session/GraphCompiler.h"
@@ -33,6 +34,8 @@ public:
     [[nodiscard]] GraphCompiler& getCompiler() noexcept { return compiler_; }
     /** ARA plug-ins (Melodyne, VocAlign...) on audio tracks: their documents. */
     [[nodiscard]] AraHost& getAra() noexcept { return ara_; }
+    /** Native audio editing of clips (pitch): analyses and renders. */
+    [[nodiscard]] AudioEdits& getAudioEdits() noexcept { return edits_; }
 
     // --- Document --------------------------------------------------------------------------------
     [[nodiscard]] const juce::File& getFile() const noexcept { return file_; }
@@ -76,6 +79,7 @@ private:
     void processFinishedImports();
     void addMissingWholeFileClips();
     void setDirty(bool dirty);
+    void updateRenderFolder();
 
     void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier& property) override
     {
@@ -91,6 +95,7 @@ private:
     DeviceManager devices_;
     GraphCompiler compiler_;
     AraHost ara_; ///< (after the devices: taken down before them, while its plug-ins are still alive)
+    AudioEdits edits_;
 
     juce::File file_;
     bool dirty_ = false;
