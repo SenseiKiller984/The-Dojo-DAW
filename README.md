@@ -457,6 +457,15 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 **Plug-ins**
 - **VST3 and CLAP** on both Windows and Linux: parameters (automatable), state saved with the project, their own editor windows, latency reported to the delay compensation.
 - **Out-of-process scanning**: each plug-in is opened by a separate scanner process, so one that crashes or hangs is blacklisted instead of taking The Dojo down.
+- **ARA 2** (Audio Random Access: Celemony Melodyne, Synchro Arts VocAlign and other ARA plug-ins, as VST3 on Windows and Linux). The scan notes which plug-ins have the ARA extension.
+  - **Track > ARA Plug-in** (an audio track's right-click menu) lists them; choosing one puts it in the track's first device slot (one undo step; **None** takes it off). The plug-in then plays the track's clips itself, from the audio it reads through The Dojo, so nothing is bounced or transferred first. The track header shows its name.
+  - **In the clip editor**: double-click a clip on the track and the plug-in's own editor opens in the Editor tab, showing that clip (the plug-in is told which clip is selected). **CLIP** switches to the clip's own settings, **ARA** back. A plug-in whose editor is already open in its own window says so instead.
+  - **What the plug-in knows**: each audio file once (read at any time, from any thread), each clip as a playback region at its place on the timeline, with its part of the file and its name (time-stretched clips as such where the plug-in can time-stretch), a region sequence per track, and the session's tempo and 4/4 meter. Moving, trimming, adding or deleting clips reaches it straight away; its set of regions changes only while it is out of play for a moment, so playback never waits.
+  - **Its transport controls** work: play, stop and locate from the plug-in's editor move The Dojo's transport, and its cycle is the session's loop.
+  - **Saved with the project**: the plug-in's edits (its ARA archive) go into the `.dojo` file and are given back when the project is opened, before it plays. Removing the plug-in keeps them in the project, so undo brings them back.
+  - **Bypassed**, or moved out of the first slot, the plug-in leaves the track's clips to The Dojo again. Offline export renders it in its offline mode.
+  - On an ARA track the plug-in plays each clip's part of its file as it is: a clip's gain, fades, pitch, looping and source channel are not applied there (ARA regions carry none of them; levels, fades and pitch are edited in the plug-in). One ARA plug-in per track.
+  - Built on Celemony's ARA SDK 2.3.0 (Apache 2.0, fetched at configure time); `-DDOJO_WITH_ARA=OFF` builds without it. The plug-ins themselves are sold by their makers and are not part of The Dojo.
 
 **Preferences** (*Options > Preferences*, Ctrl+,)
 - **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on). **MIDI Input**: *MPE controllers* and their *per-note pitch bend range* (see Recording).
@@ -618,7 +627,7 @@ cmake --build --preset linux-release
 ctest --preset linux-release
 ```
 
-Run `cmake --list-presets` for all configurations, including `linux-asan`, `linux-tsan` and `windows-msvc`. To build offline against an existing JUCE checkout, add `-DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE`.
+Run `cmake --list-presets` for all configurations, including `linux-asan`, `linux-tsan` and `windows-msvc`. To build offline against an existing JUCE checkout, add `-DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE` (and `-DFETCHCONTENT_SOURCE_DIR_ARA_SDK=/path/to/ARA_SDK` for the ARA SDK, with its `ARA_API` and `ARA_Library` submodules, or `-DDOJO_WITH_ARA=OFF`).
 
 Sanitizer presets need Clang's runtimes (`libclang-rt-<ver>-dev` on Debian/Ubuntu). On recent kernels, run TSan binaries under `setarch $(uname -m) -R`. ASan and TSan replace `operator new`/`delete` themselves, so those builds omit the real-time allocation trap, and the trap tests report SKIPPED.
 
@@ -630,6 +639,7 @@ Sanitizer presets need Clang's runtimes (`libclang-rt-<ver>-dev` on Debian/Ubunt
 | Build | CMake ≥ 3.22 with presets, Ninja (Linux) / Visual Studio (Windows) |
 | Audio, MIDI, VST3 hosting, GUI | [JUCE 9.0.4](https://github.com/juce-framework/JUCE), fetched and pinned automatically |
 | CLAP hosting | Our own host on the official [CLAP SDK](https://github.com/free-audio/clap) 1.2.10 (MIT) |
+| ARA 2 hosting | JUCE's ARA host support on Celemony's [ARA SDK](https://github.com/Celemony/ARA_SDK) 2.3.0 (Apache 2.0), fetched and pinned automatically |
 | Time-stretch / pitch | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) 1.4.0 (MIT) |
 | MP3 encoding | [LAME](https://lame.sourceforge.io) 3.100 (LGPL), vendored in `third_party/lame` |
 | Video decoding and muxing | Built-in Motion-JPEG AVI reader and writer; [FFmpeg](https://ffmpeg.org) (LGPL, the system's shared libraries, optional) on Linux; Media Foundation on Windows |
@@ -663,11 +673,12 @@ src/video     video decoding for video tracks: built-in Motion-JPEG AVI, FFmpeg 
               the mix put into a copy of a movie (its picture copied, not re-encoded)
 src/session   the document (tracks, clips, take lanes and comping, MIDI, devices, sends, automation)
               with undo, audio decoding/streaming, device instances, graph compiler, recorder (takes,
-              loop recording), exporter, save/open, device presets (.dojopreset)
+              loop recording), exporter, save/open, device presets (.dojopreset), the ARA host
+              (the documents ARA plug-ins see)
 src/ui        arranger, mixer, devices panel + editors, piano roll, step sequencer, browser,
               transport, export dialog, menus, look-and-feel
 src/app       application entry point, main window, settings
-tests/        unit and integration tests (incl. a test CLAP plug-in)
+tests/        unit and integration tests (incl. a test CLAP plug-in and a test ARA plug-in)
 third_party/  vendored LAME
 ```
 
@@ -681,9 +692,9 @@ third_party/  vendored LAME
 6. ✅ **Native DSP**: compressor, limiter, reverb, parametric EQ, delay, speed and pitch
 7. ✅ **Instruments**: Drum Rack, Sampler, Impulse, Wavetable, Operator
 8. ✅ **Automation and export**: spline lanes, offline/real-time bounce, WAV/FLAC/MP3, stems
-9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning
+9. ✅ **Plug-in hosting**: VST3 + CLAP, out-of-process scanning, ARA 2 (Melodyne, VocAlign) in the clip editor
 10. ✅ **Post-production**: surround formats (3.1, 5.1, 7.1, Dolby Digital, DTS) and 3D beds (5.1.4, 7.1.4, 9.1.6) with a surround panner, video tracks and a Video window, the mix exported into the movie
 
 ## Licensing
 
-No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.
+No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). The ARA SDK is Apache 2.0. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.

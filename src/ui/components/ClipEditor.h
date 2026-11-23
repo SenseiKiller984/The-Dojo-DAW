@@ -256,7 +256,15 @@ private:
     The bottom "Editor" tab: the clip chosen in the arranger (double-click) in a piano roll or step
     sequencer (MIDI) or the clip inspector (audio), with a toolbar for grid, quantise and lanes.
 */
-class ClipEditor final : public juce::Component, private EditorState::Listener, private juce::ValueTree::Listener
+/**
+    The clip editor panel: the piano roll or step sequencer for a MIDI clip, the inspector for an
+    audio clip - and for an audio clip on a track with an ARA plug-in (Melodyne, VocAlign...), that
+    plug-in's own editor, told which clip is selected (CLIP switches to the inspector, ARA back).
+*/
+class ClipEditor final : public juce::Component,
+                         private EditorState::Listener,
+                         private juce::ValueTree::Listener,
+                         private juce::ChangeListener
 {
 public:
     ClipEditor(session::Project& project, EditorState& editor);
@@ -267,6 +275,8 @@ public:
     std::function<void(std::uint32_t trackId, const juce::MidiMessage&)> onPreviewMidi;
     [[nodiscard]] PianoRoll& getPianoRoll() noexcept { return pianoRoll_; }
     [[nodiscard]] StepSequencer& getStepSequencer() noexcept { return steps_; }
+    /** The ARA plug-in's editor shown for the clip (null when there is none). */
+    [[nodiscard]] juce::AudioProcessorEditor* getAraEditor() const noexcept { return araEditor_.get(); }
 
     void setPlayhead(double seconds);
     void paint(juce::Graphics& g) override;
@@ -275,7 +285,10 @@ public:
 private:
     void editorStateChanged() override;
     void valueTreeChildRemoved(juce::ValueTree&, juce::ValueTree& child, int) override;
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { showClip(); } // (ARA plug-ins bound or gone)
     void showClip();
+    /** The clip's track's ARA plug-in editor, when it has one that plays the clip. */
+    void showAraEditor(bool show);
 
     session::Project& project_;
     EditorState& editor_;
@@ -295,6 +308,13 @@ private:
     StepSequencer steps_;
     AudioClipInspector inspector_;
     bool showSteps_ = false;
+
+    juce::TextButton araButton_{"ARA"};
+    juce::TextButton clipButton_{"CLIP"};
+    juce::Label araNote_;                               ///< the plug-in and its regions, or why there is no editor
+    std::unique_ptr<juce::AudioProcessorEditor> araEditor_;
+    std::uint32_t araDevice_ = 0;                       ///< whose editor it is
+    bool showInspector_ = false;                        ///< CLIP chosen instead of the plug-in
 };
 
 } // namespace dojo::ui

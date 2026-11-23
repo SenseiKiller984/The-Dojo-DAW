@@ -78,6 +78,10 @@ public:
     std::function<void()> onLatencyChanged;
     /** Called when an instance has been created (e.g. to refresh device panels). */
     std::function<void(std::uint32_t deviceId)> onNodeCreated;
+    /** Called with a new primary instance before it is prepared (an ARA plug-in is bound there). */
+    std::function<void(const juce::ValueTree& device, juce::AudioProcessor& processor)> onProcessorCreated;
+    /** Called before an instance whose device left the session is dropped (still alive then). */
+    std::function<void(std::uint32_t deviceId)> onProcessorRemoved;
 
 private:
     struct Entry

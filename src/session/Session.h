@@ -44,7 +44,8 @@ using engine::TrackKind;
                           mpePitch / mpePressure / mpeSlide (per-note expression: "beat:value;..." with
                           beats from the note's start; pitch in semitones, pressure and slide 0..1)
               CC          controller (0..127, 128 = pitch bend, 129 = channel pressure), beat, value (0..1), channel
-            DEVICE      id, type, name, bypassed, state (base64), sidechain (track id), description
+            DEVICE      id, type, name, bypassed, state (base64), sidechain (track id), description,
+                        ara (an audio track's ARA plug-in, in its first slot: it plays the track's clips)
             SEND        id, target (bus track id), gainDb, preFader
             AUTOMATION  id, target ("volume", "pan", "send:<id>", "param:<deviceId>:<index>"), visible
               POINT       time (seconds), value (0..1)
@@ -52,6 +53,8 @@ using engine::TrackKind;
                         not play; the comp (what plays) is the track's own clips
             TRACK ...   (folders contain tracks)
           CLIPGROUPS    the clip groups: CLIPGROUP id, name
+          ARA_DOCUMENTS the ARA plug-ins' documents (their edits): ARA_DOCUMENT factory (the plug-in's
+                        ARA factory id), archive (base64), written when the session is saved
           CLIPLIST      captured clips (Clip > Capture) and whole-file clips (wholeFile, one per
                         imported or recorded file): CLIP / MIDICLIP / VIDEOCLIP, start 0
           AUTONAMES     Auto Rename counters: AUTONAME name (the root), next
@@ -182,6 +185,11 @@ inline const juce::Identifier bypassed     {"bypassed"};
 inline const juce::Identifier state        {"state"};
 inline const juce::Identifier sidechain    {"sidechain"};
 inline const juce::Identifier description  {"description"};
+inline const juce::Identifier ara          {"ara"};
+inline const juce::Identifier araDocuments {"ARA_DOCUMENTS"};
+inline const juce::Identifier araDocument  {"ARA_DOCUMENT"};
+inline const juce::Identifier araFactory   {"factory"};
+inline const juce::Identifier araArchive   {"archive"};
 
 inline const juce::Identifier target       {"target"};
 inline const juce::Identifier modulation   {"MODMAP"};
@@ -529,6 +537,9 @@ bool isBypassed(const juce::ValueTree& d);
 std::uint32_t getSidechain(const juce::ValueTree& d);
 void setBypassed(juce::ValueTree d, bool bypassed, juce::UndoManager* um);
 void setSidechain(juce::ValueTree d, std::uint32_t trackId, juce::UndoManager* um);
+/** An audio track's ARA plug-in (see session::AraHost). */
+bool isAra(const juce::ValueTree& d);
+void setAra(juce::ValueTree d, bool ara, juce::UndoManager* um);
 } // namespace device
 
 /** SEND accessors. */
@@ -947,6 +958,11 @@ public:
     [[nodiscard]] static std::vector<juce::ValueTree> getAllDevices(const juce::ValueTree& owner);
     /** The track (or the master) a device belongs to, also from inside an insert loop. */
     [[nodiscard]] static juce::ValueTree getDeviceOwner(const juce::ValueTree& device);
+    /** An audio track's ARA plug-in: its first device, if marked as such (device::isAra). */
+    [[nodiscard]] static juce::ValueTree getAraDevice(const juce::ValueTree& track);
+    /** Makes a plug-in (its description as XML) the track's ARA plug-in, in its first slot, in place
+        of any it had; an empty description removes it. Undoable. The new device, or null. */
+    juce::ValueTree setAraPlugin(juce::ValueTree track, const juce::String& descriptionXml, const juce::String& name);
 
     // --- Modulation (the LFO device) ----------------------------------------------------------------
     /** Maps a modulator device to a target on a track (0 = the master), sweeping its whole range;

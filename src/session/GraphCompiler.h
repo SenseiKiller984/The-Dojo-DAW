@@ -75,6 +75,10 @@ public:
     };
     void setObjectRendering(ObjectRendering rendering) noexcept { objectRendering_ = rendering; }
     [[nodiscard]] ObjectRendering getObjectRendering() const noexcept { return objectRendering_; }
+
+    /** Tracks whose clips something else plays (an ARA plug-in renders them): the graph leaves their
+        clips out. */
+    void setClipsPlayedElsewhere(std::function<bool(std::uint32_t trackId)> playedElsewhere) { clipsElsewhere_ = std::move(playedElsewhere); }
     /** The tracks rendered as objects in the last build (none while they are in the bed). */
     [[nodiscard]] const std::vector<engine::RenderObject>& getObjects() const noexcept { return objects_; }
 
@@ -107,6 +111,7 @@ private:
     double sampleRate_ = 48000.0;
     int maxBlock_ = 2048;
     ObjectRendering objectRendering_ = ObjectRendering::inBed;
+    std::function<bool(std::uint32_t)> clipsElsewhere_;
     std::vector<engine::RenderObject> objects_;
     int totalLatency_ = 0;
     int masterInputLatency_ = 0;
@@ -147,6 +152,11 @@ public:
 
     /** How object tracks are rendered (see GraphBuilder::ObjectRendering); triggers a rebuild. */
     void setObjectRendering(GraphBuilder::ObjectRendering rendering);
+    /** See GraphBuilder::setClipsPlayedElsewhere (an ARA plug-in's tracks). */
+    void setClipsPlayedElsewhere(std::function<bool(std::uint32_t trackId)> playedElsewhere)
+    {
+        builder_.setClipsPlayedElsewhere(std::move(playedElsewhere));
+    }
     [[nodiscard]] GraphBuilder::ObjectRendering getObjectRendering() const noexcept { return builder_.getObjectRendering(); }
     [[nodiscard]] const std::vector<engine::RenderObject>& getObjects() const noexcept { return builder_.getObjects(); }
 

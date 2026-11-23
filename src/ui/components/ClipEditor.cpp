@@ -1558,13 +1558,41 @@ ClipEditor::ClipEditor(session::Project& project, EditorState& editor)
     pianoRoll_.onPreview = preview;
     steps_.onPreview = preview;
 
+    // An ARA plug-in's editor (Melodyne, VocAlign...) for the clips its track plays, or the inspector.
+    for (auto* b : {&araButton_, &clipButton_})
+    {
+        b->setRadioGroupId(4243);
+        b->setClickingTogglesState(true);
+        b->setWantsKeyboardFocus(false);
+        addChildComponent(b);
+    }
+    araButton_.setToggleState(true, juce::dontSendNotification);
+    araButton_.setTooltip("The track's ARA plug-in's editor, showing this clip");
+    clipButton_.setTooltip("The clip's own settings (gain, pitch, stretch...)");
+    araButton_.onClick = [this]
+    {
+        showInspector_ = false;
+        showClip();
+    };
+    clipButton_.onClick = [this]
+    {
+        showInspector_ = true;
+        showClip();
+    };
+    araNote_.setFont(theme::sans(12.0f));
+    araNote_.setColour(juce::Label::textColourId, theme::colour::textSecondary);
+    addChildComponent(araNote_);
+
     editor_.addListener(this);
     project_.getSession().getState().addListener(this);
+    project_.getAra().addChangeListener(this);
     showClip();
 }
 
 ClipEditor::~ClipEditor()
 {
+    project_.getAra().removeChangeListener(this);
+    araEditor_.reset(); // (before the plug-in)
     project_.getSession().getState().removeListener(this);
     editor_.removeListener(this);
 }
@@ -1599,13 +1627,33 @@ void ClipEditor::showClip()
     const bool midi = clip_.isValid() && session::clip::isMidi(clip_);
     const bool audio = clip_.isValid() && !midi;
 
+    // An audio clip its track's ARA plug-in plays: the plug-in's editor (unless CLIP is chosen).
+    const auto track = audio ? clip_.getParent() : juce::ValueTree();
+    const auto ara = track.hasType(session::ids::track) ? project_.getAra().getTrackInfo(session::track::getId(track))
+                                                         : session::AraHost::TrackInfo{};
+    const bool araClip = audio && ara.rendering;
+    showAraEditor(araClip && !showInspector_);
+    araButton_.setVisible(araClip);
+    clipButton_.setVisible(araClip);
+    araButton_.setToggleState(!showInspector_, juce::dontSendNotification);
+    clipButton_.setToggleState(showInspector_, juce::dontSendNotification);
+    if (araClip)
+    {
+        juce::String note = ara.plugin + ": " + juce::String(ara.regions) + (ara.regions == 1 ? " clip" : " clips") + " on this track";
+        if (!showInspector_ && araEditor_ == nullptr)
+            note << " (its editor is open in its own window)";
+        araNote_.setText(note, juce::dontSendNotification);
+        project_.getAra().showSelection(session::track::getId(track), {session::clip::getId(clip_)});
+    }
+    araNote_.setVisible(araClip);
+
     pianoRoll_.setClip(midi ? clip_ : juce::ValueTree());
     steps_.setClip(midi ? clip_ : juce::ValueTree());
     inspector_.setClip(audio ? clip_ : juce::ValueTree());
 
     pianoRoll_.setVisible(midi && !showSteps_);
     steps_.setVisible(midi && showSteps_);
-    inspector_.setVisible(audio);
+    inspector_.setVisible(audio && (!araClip || showInspector_));
 
     for (auto* c : std::initializer_list<juce::Component*>{&notesButton_, &stepsButton_, &gridBox_})
         c->setVisible(midi);
@@ -1616,11 +1664,41 @@ void ClipEditor::showClip()
     repaint();
 }
 
+void ClipEditor::showAraEditor(bool show)
+{
+    const auto clipTrack = clip_.isValid() ? clip_.getParent() : juce::ValueTree();
+    const auto info = show && clipTrack.hasType(session::ids::track) ? project_.getAra().getTrackInfo(session::track::getId(clipTrack))
+                                                                      : session::AraHost::TrackInfo{};
+    if (!show || info.deviceId != araDevice_)
+    {
+        araEditor_.reset();
+        araDevice_ = 0;
+    }
+    if (!show || araEditor_ != nullptr)
+        return;
+    araDevice_ = info.deviceId;
+    if (auto node = project_.getDevices().findNode(info.deviceId))
+    {
+        auto& processor = node->getProcessor();
+        if (processor.hasEditor() && processor.getActiveEditor() == nullptr) // (not open in a window of its own)
+            araEditor_.reset(processor.createEditorAndMakeActive());
+    }
+    if (araEditor_ != nullptr)
+        addAndMakeVisible(*araEditor_);
+}
+
 void ClipEditor::resized()
 {
     auto area = getLocalBounds();
     auto toolbar = area.removeFromTop(kToolbarHeight).reduced(8, 3);
     toolbar.removeFromLeft(220);
+    {
+        auto araBar = toolbar;
+        araButton_.setBounds(araBar.removeFromLeft(56));
+        clipButton_.setBounds(araBar.removeFromLeft(56));
+        araBar.removeFromLeft(12);
+        araNote_.setBounds(araBar);
+    }
     notesButton_.setBounds(toolbar.removeFromLeft(64));
     stepsButton_.setBounds(toolbar.removeFromLeft(64));
     toolbar.removeFromLeft(10);
@@ -1638,6 +1716,8 @@ void ClipEditor::resized()
     pianoRoll_.setBounds(area);
     steps_.setBounds(area);
     inspector_.setBounds(area);
+    if (araEditor_ != nullptr)
+        araEditor_->setBounds(area);
 }
 
 void ClipEditor::paint(juce::Graphics& g)

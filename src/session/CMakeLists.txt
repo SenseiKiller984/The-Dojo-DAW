@@ -1,6 +1,8 @@
 add_library(dojo_session STATIC
     AdmOscBridge.cpp
     AdmOscBridge.h
+    AraHost.cpp
+    AraHost.h
     AudioAssetCache.cpp
     AudioAssetCache.h
     DeviceManager.cpp

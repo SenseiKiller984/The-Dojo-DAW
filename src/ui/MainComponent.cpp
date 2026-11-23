@@ -175,6 +175,25 @@ MainComponent::MainComponent(AppServices& services)
     clipList_.getPlayheadSeconds = [this] { return arranger_.getPlayheadSeconds(); };
     arranger_.onVideoImported = [this] { showVideoWindow(true); };
     arranger_.onOpenSpatialPanner = [this](const juce::ValueTree& track) { mixer_.openSpatialPanner(track); };
+    arranger_.getAraPlugins = [this]
+    {
+        juce::Array<juce::PluginDescription> found;
+        for (const auto& d : services_.plugins.getKnownPlugins().getTypes())
+            if (session::AraHost::isAraPlugin(d))
+                found.add(d);
+        return found;
+    };
+    // An ARA plug-in's editor drives the transport (its play button, a click in its ruler).
+    project_.getAra().onRequestLocate = [this](double seconds) { controller_.locateSeconds(seconds); };
+    project_.getAra().onRequestPlayback = [this](bool play)
+    {
+        if (play)
+            controller_.play();
+        else if (services_.recorder.isRecording())
+            services_.recorder.stop(); // (keeping the take, as Stop does)
+        else
+            controller_.stop();
+    };
     mixer_.setShortcuts(services_.commands.getKeyMappings());
     browser_.onFileActivated = [this](const juce::File& file)
     {
@@ -199,6 +218,8 @@ MainComponent::~MainComponent()
     services_.recorder.onStateChanged = nullptr;
     project_.getSession().getUndoManager().removeChangeListener(this);
     project_.onImportProblem = nullptr;
+    project_.getAra().onRequestLocate = nullptr;
+    project_.getAra().onRequestPlayback = nullptr;
 
     if (settingsWindow_ != nullptr)
         delete settingsWindow_.getComponent();

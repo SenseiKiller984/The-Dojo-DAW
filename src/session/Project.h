@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/RenderGraph.h"
+#include "session/AraHost.h"
 #include "session/AudioAssetCache.h"
 #include "session/DeviceManager.h"
 #include "session/GraphCompiler.h"
@@ -30,6 +31,8 @@ public:
     [[nodiscard]] AudioAssetCache& getAssets() noexcept { return assets_; }
     [[nodiscard]] DeviceManager& getDevices() noexcept { return devices_; }
     [[nodiscard]] GraphCompiler& getCompiler() noexcept { return compiler_; }
+    /** ARA plug-ins (Melodyne, VocAlign...) on audio tracks: their documents. */
+    [[nodiscard]] AraHost& getAra() noexcept { return ara_; }
 
     // --- Document --------------------------------------------------------------------------------
     [[nodiscard]] const juce::File& getFile() const noexcept { return file_; }
@@ -87,6 +90,7 @@ private:
     AudioAssetCache assets_;
     DeviceManager devices_;
     GraphCompiler compiler_;
+    AraHost ara_; ///< (after the devices: taken down before them, while its plug-ins are still alive)
 
     juce::File file_;
     bool dirty_ = false;

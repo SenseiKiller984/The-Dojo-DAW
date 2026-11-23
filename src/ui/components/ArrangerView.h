@@ -87,6 +87,12 @@ public:
     std::function<void()> onVideoImported;
     /** "Open 3D Panner..." in a track's menu (provided by MainComponent: the mixer owns the windows). */
     std::function<void(const juce::ValueTree& track)> onOpenSpatialPanner;
+    /** The installed ARA plug-ins (Track > ARA Plug-in): set by the main component from the
+        plug-in list. */
+    std::function<juce::Array<juce::PluginDescription>()> getAraPlugins;
+    /** An audio track's Track > ARA Plug-in submenu: None, then each installed ARA plug-in (the
+        track's own ticked); choosing one makes it the track's ARA plug-in (undoable). */
+    [[nodiscard]] juce::PopupMenu buildAraMenu(const juce::ValueTree& track);
 
     /** The decoder for video clip thumbnails (none: video clips show their name only). */
     void setVideoFrames(video::FrameServer* frames);

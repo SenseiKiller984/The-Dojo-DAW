@@ -18,6 +18,22 @@ FetchContent_Declare(juce
 FetchContent_MakeAvailable(juce)
 
 # --------------------------------------------------------------------------------------------------
+# ARA SDK 2.3.0 (Celemony, Apache 2.0; the version JUCE 9 requires): Audio Random Access, the
+# plug-in extension through which plug-ins such as Melodyne and VocAlign read a track's audio and
+# render their edits of it. JUCE's ARA hosting (JUCE_PLUGINHOST_ARA) compiles the SDK's host
+# dispatch library itself; it only needs the headers. The SDK has no CMakeLists.txt at its root, so
+# it is only fetched.
+if(DOJO_WITH_ARA)
+    FetchContent_Declare(ara_sdk
+        GIT_REPOSITORY https://github.com/Celemony/ARA_SDK.git
+        GIT_TAG        releases/2.3.0
+        GIT_SHALLOW    TRUE
+        GIT_SUBMODULES "ARA_API" "ARA_Library")
+    FetchContent_MakeAvailable(ara_sdk)
+    juce_set_ara_sdk_path("${ara_sdk_SOURCE_DIR}")
+endif()
+
+# --------------------------------------------------------------------------------------------------
 # dojo::juce — every JUCE module The Dojo uses, compiled exactly ONCE into a static library and then
 # shared by the app, the engine and the test-suite. (Linking juce::juce_* INTERFACE targets directly
 # into several targets would recompile the modules for each of them.)
@@ -65,7 +81,9 @@ target_compile_definitions(dojo_juce
         JUCE_PLUGINHOST_VST3=1
         JUCE_PLUGINHOST_LV2=0
         JUCE_PLUGINHOST_LADSPA=0
-        JUCE_PLUGINHOST_AU=0)
+        JUCE_PLUGINHOST_AU=0
+        # ARA 2 on VST3 plug-ins (Windows and Linux alike).
+        JUCE_PLUGINHOST_ARA=$<BOOL:${DOJO_WITH_ARA}>)
 
 # Re-export the module include paths and the (transitively evaluated) module definitions, so that
 # consumers see exactly the same JUCE configuration as the TUs that compiled the modules.

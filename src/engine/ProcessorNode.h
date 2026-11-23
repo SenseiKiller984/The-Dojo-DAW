@@ -7,6 +7,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 namespace dojo::engine
@@ -41,6 +42,14 @@ public:
 
     /** Switches offline (faster-than-real-time) rendering mode. Never concurrently with process(). */
     void setNonRealtime(bool nonRealtime);
+
+    /**
+        Runs `change` with the processor out of play: released before and prepared again after (as
+        it was), while process() outputs silence instead of waiting (it only try-locks). For changes a
+        processor only takes while it is not active, such as an ARA plug-in's playback regions.
+        Message thread.
+    */
+    void reconfigure(const std::function<void(juce::AudioProcessor&)>& change);
 
     /**
         Processes `numSamples` of `stereo` in place. `midi` is passed to processors that accept MIDI
@@ -93,6 +102,9 @@ private:
                       juce::MidiBuffer& midi, const juce::AudioBuffer<Sample>* sidechain) noexcept;
 
     std::unique_ptr<juce::AudioProcessor> processor_;
+    juce::SpinLock processLock_;      ///< held by reconfigure(); process() only tries it
+    double sampleRate_ = 48000.0;     ///< (as last prepared)
+    int blockSize_ = 512;
     InsertLoopHost* insertLoop_ = nullptr; ///< (the processor, when it has an insert loop)
     HardwareIoDevice* hardwareIo_ = nullptr; ///< (the processor, when it uses the sound card's channels)
     bool doublePrecision_ = false;

@@ -66,6 +66,8 @@ std::shared_ptr<engine::ProcessorNode> DeviceManager::getNode(const juce::ValueT
                 processor->setStateInformation(block.getData(), static_cast<int>(block.getSize()));
         }
 
+        if (onProcessorCreated)
+            onProcessorCreated(deviceTree, *processor); // (before it is prepared)
         auto node = std::make_shared<engine::ProcessorNode>(std::move(processor));
         node->setNonRealtime(nonRealtime_);
         node->prepare(sampleRate, blockSize, playHead_);
@@ -206,6 +208,7 @@ void DeviceManager::storeStates()
 void DeviceManager::purgeUnused()
 {
     std::vector<std::shared_ptr<engine::ProcessorNode>> dropped;
+    std::vector<std::uint32_t> droppedIds;
     {
         const std::lock_guard lock(mutex_);
         for (auto it = entries_.begin(); it != entries_.end();)
@@ -216,6 +219,7 @@ void DeviceManager::purgeUnused()
                 {
                     it->second.node->getProcessor().removeListener(this);
                     dropped.push_back(it->second.node);
+                    droppedIds.push_back(it->first);
                 }
                 it = entries_.erase(it);
             }
@@ -225,6 +229,9 @@ void DeviceManager::purgeUnused()
             }
         }
     }
+    if (onProcessorRemoved)
+        for (const auto id : droppedIds)
+            onProcessorRemoved(id); // (the instances are still alive: `dropped` holds them)
     // `dropped` releases our references here, outside the lock; graphs still using a node keep it alive.
 }
 

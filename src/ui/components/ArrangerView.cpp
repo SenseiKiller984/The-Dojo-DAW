@@ -3351,6 +3351,44 @@ void ArrangerView::showTakeMenu(const juce::ValueTree& lane)
     menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
 }
 
+juce::PopupMenu ArrangerView::buildAraMenu(const juce::ValueTree& track)
+{
+    juce::Component::SafePointer<ArrangerView> safe(this);
+    const auto trackId = session::track::getId(track);
+    const auto current = session::Session::getAraDevice(track);
+    juce::String currentId;
+    if (current.isValid())
+        if (const auto xml = juce::parseXML(current.getProperty(session::ids::description).toString()))
+        {
+            juce::PluginDescription d;
+            if (d.loadFromXml(*xml))
+                currentId = d.createIdentifierString();
+        }
+    const auto choose = [safe, trackId](const juce::String& descriptionXml, const juce::String& name)
+    {
+        return [safe, trackId, descriptionXml, name]
+        {
+            if (safe == nullptr)
+                return;
+            auto tree = safe->session_.findTrack(trackId);
+            if (!tree.isValid())
+                return;
+            safe->session_.beginTransaction(name.isEmpty() ? "No ARA Plug-in" : "ARA Plug-in " + name);
+            safe->session_.setAraPlugin(tree, descriptionXml, name);
+        };
+    };
+
+    juce::PopupMenu ara;
+    ara.addItem("None", true, !current.isValid(), choose({}, {}));
+    const auto plugins = getAraPlugins ? getAraPlugins() : juce::Array<juce::PluginDescription>();
+    if (plugins.isEmpty())
+        ara.addItem("No ARA plug-ins found (scan for plug-ins in the browser)", false, false, [] {});
+    for (const auto& d : plugins)
+        ara.addItem(d.name + (d.manufacturerName.isNotEmpty() ? " (" + d.manufacturerName + ")" : juce::String()), true,
+                    d.createIdentifierString() == currentId, choose(d.createXml()->toString(), d.name));
+    return ara;
+}
+
 void ArrangerView::showTrackMenu(const juce::ValueTree& t)
 {
     juce::Component::SafePointer<ArrangerView> safe(this);
@@ -3553,6 +3591,11 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
                                     }));
         }
     }
+
+    // ARA (Melodyne, VocAlign...): an audio track's ARA plug-in, in its first slot, plays its clips
+    // from the audio it reads itself; its editor opens in the clip editor.
+    if (kind == session::TrackKind::audio && session::AraHost::isAvailable())
+        menu.addSubMenu("ARA Plug-in", buildAraMenu(t));
 
     // MIDI tracks: the instrument track their MIDI plays.
     if (kind == session::TrackKind::midi)

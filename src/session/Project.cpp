@@ -8,15 +8,28 @@ namespace dojo::session
 Project::Project(GraphCompiler::Publisher publishGraph, DeviceManager::Creator createDevice)
     : devices_(session_, std::move(createDevice))
     , compiler_(session_, assets_, &devices_, std::move(publishGraph))
+    , ara_(session_, assets_, devices_)
 {
     session_.getState().addListener(this);
     devices_.onParameterChanged = [this] { setDirty(true); };
     devices_.onLatencyChanged = [this] { compiler_.rebuildSoon(); }; // re-align the delay compensation
+
+    // ARA plug-ins: bound as they are created (before they are prepared), their regions taken back
+    // before they go; the tracks they play leave their clips to them.
+    devices_.onProcessorCreated = [this](const juce::ValueTree& device, juce::AudioProcessor& processor)
+    { ara_.deviceCreated(device, processor); };
+    devices_.onProcessorRemoved = [this](std::uint32_t deviceId) { ara_.deviceRemoved(deviceId); };
+    compiler_.setClipsPlayedElsewhere([this](std::uint32_t trackId) { return ara_.rendersClipsOf(trackId); });
+    ara_.onRenderingChanged = [this] { compiler_.rebuildSoon(); };
 }
 
 Project::~Project()
 {
     session_.getState().removeListener(this);
+    devices_.onProcessorCreated = nullptr;
+    devices_.onProcessorRemoved = nullptr;
+    compiler_.setClipsPlayedElsewhere(nullptr);
+    ara_.onRenderingChanged = nullptr;
 }
 
 juce::String Project::getDisplayName() const
@@ -37,6 +50,7 @@ void Project::setDirty(bool dirty)
 void Project::newSession()
 {
     imports_.clear();
+    ara_.reset(); // (the old documents go with the old session)
     loading_ = true;
     session_.reset();
     loading_ = false;
@@ -50,6 +64,7 @@ void Project::newSession()
 juce::Result Project::open(const juce::File& file)
 {
     imports_.clear();
+    ara_.reset();
     loading_ = true;
     const auto result = session_.load(file);
     loading_ = false;
@@ -93,6 +108,7 @@ juce::Result Project::saveAs(const juce::File& file)
 {
     const auto target = file.hasFileExtension(".dojo") ? file : file.withFileExtension(".dojo");
     devices_.storeStates();
+    ara_.storeArchives(); // (the ARA plug-ins' edits)
     const auto result = session_.save(target);
 
     if (result.wasOk())

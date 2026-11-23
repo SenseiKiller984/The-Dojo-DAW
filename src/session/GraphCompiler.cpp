@@ -327,6 +327,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
     {
         for (std::size_t i = 0; i < count; ++i)
             for (const auto& d : Session::getDevices(trees[i]))
+            {
+                // An ARA plug-in only belongs in its track's first slot (it plays the track's clips
+                // there): moved further down, it is left out of the signal path.
+                if (device::isAra(d) && Session::getAraDevice(trees[i]) != d)
+                    continue;
                 if (auto node = devices->getNode(d))
                 {
                     std::vector<DeviceNode> loop;
@@ -337,6 +342,7 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
                     chainNodes[i].emplace_back(d, std::move(node));
                     loopNodes[i].push_back(std::move(loop));
                 }
+            }
     }
 
     // --- Routing edges, loops refused --------------------------------------------------------------
@@ -699,9 +705,11 @@ std::unique_ptr<engine::RenderGraph> GraphBuilder::build(const Session& session,
 
         if (rt.kind == TrackKind::audio)
         {
+            // (an ARA plug-in on the track plays its clips: it reads them through the host itself)
+            const bool clipsElsewhere = clipsElsewhere_ && clipsElsewhere_(track::getId(t));
             for (const auto& c : playing)
             {
-                if (!c.hasType(ids::clip))
+                if (!c.hasType(ids::clip) || clipsElsewhere)
                     continue;
 
                 const auto file = clip::getFile(c);

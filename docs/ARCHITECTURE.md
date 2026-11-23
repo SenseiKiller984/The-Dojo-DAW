@@ -11,6 +11,7 @@ This document describes how The Dojo is built: the layers, the threads, the real
 | Audio I/O, MIDI, plug-in hosting, file formats, DSP | **JUCE 9.0.4** (`juce_audio_*`, `juce_dsp`) | A single API over ASIO / WASAPI / DirectSound and ALSA / JACK, plus hot-pluggable MIDI device I/O, VST3 hosting, WAV/FLAC/MP3 codecs and SIMD DSP building blocks. It's the industry-standard framework, with a decade of production use in commercial DAWs and plug-ins. |
 | GUI | **JUCE `juce_gui_basics`**, custom look-and-feel | It draws every pixel itself, so the UI is identical on Windows (Direct2D) and Linux (X11). Fonts are embedded and the window chrome is drawn by JUCE, so even text metrics and title bars match. |
 | CLAP hosting | Our own `juce::AudioPluginFormat` on the official `free-audio/clap` SDK (MIT, headers only) | JUCE hosts VST3 natively; CLAP plug-ins go through the same `AudioPluginFormatManager` / `AudioPluginInstance` interfaces, so the rest of The Dojo treats both alike. |
+| ARA 2 hosting | JUCE's ARA host model (`JUCE_PLUGINHOST_ARA`, `juce::ARAHostModel`) on Celemony's ARA SDK 2.3.0 (Apache 2.0), `DOJO_WITH_ARA` | Melodyne, VocAlign and the like edit the audio itself, so they need the clips and their audio, not just a stream; ARA is how they get them, on both OSes (VST3). JUCE 9 builds the host dispatch and gives typed wrappers over the C API. |
 | Time-stretch / pitch-shift | Signalsmith Stretch (MIT, headers only) | High-quality, allocation-free processing after configuration; supports seeking, which clip playback needs after every locate. |
 | MP3 encoding | LAME 3.100 (LGPL), vendored | JUCE reads MP3 but does not write it. |
 | Tests | Catch2 v3 | The suite exercises the real engine headless, with the allocation trap armed. |
@@ -46,7 +47,7 @@ src/
   session/  the document: Session (juce::ValueTree + UndoManager; Takes.cpp: take lanes and
             comping), AudioAssetCache (decoding, peaks, disk streaming service), DeviceManager (live
             device instances), GraphCompiler (session -> RenderGraph), Recorder (takes, loop
-            recording), Exporter, Project (file I/O)
+            recording), Exporter, AraHost (the ARA documents ARA plug-ins see), Project (file I/O)
   ui/       look-and-feel and themes (theme/: a palette the active theme writes; switching rebuilds
             the main component, keeping the view), Preferences + PreferencesWindow,
             MainComponent (commands, menus, document actions), arranger, mixer,
@@ -59,7 +60,8 @@ src/
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
   app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
 resources/  embedded fonts (OFL)
-tests/      Catch2 suite (plus a real CLAP binary built for the hosting tests)
+tests/      Catch2 suite (plus a real CLAP binary and a real ARA VST3, DojoTestAra, built for the
+            hosting tests)
 third_party/lame  vendored MP3 encoder
 cmake/      options, compiler policy, pinned dependencies
 ```
@@ -193,6 +195,7 @@ device out += browser preview (live callbacks only)
   - `FfmpegMux`: the movie's container, with its codec tag where the container knows it. AAC via FFmpeg's encoder: its priming goes before zero (an MP4 edit list; Matroska keeps the negative time). PCM is 24-bit, or 32-bit in an MP4.
   - `MediaFoundationMux` (JUCE-free, Windows headers first): `IMFSourceReader` with no decoder, `IMFSinkWriter` to an MP4 with MF's AAC encoder (1, 2 or 6 channels; 44.1 or 48 kHz; up to 192 kbps). With no decode times it stops after 17 held pictures (H.264 reorders at most 16).
   - The built-in AVI muxer: Motion-JPEG frames copied, 24-bit PCM under each frame (WAVEFORMATEXTENSIBLE with its mask above two channels), `idx1`.
+- **ARA tracks.** A track whose ARA plug-in plays its clips (`AraHost::rendersClipsOf`: bound, in the first slot, not bypassed) gets no clip sources from the compiler (`GraphBuilder::setClipsPlayedElsewhere`). Its chain starts with the plug-in, whose playback renderer reads the clips' audio through the host and plays its regions at the transport's position. An ARA device anywhere but the first slot is left out of the chain. ARA lets a renderer's regions change only while it is not processing, so `ProcessorNode::reconfigure()` takes the node out of play: it holds the node's spin lock, releases the processor, applies the change and prepares it again at the node's rate and block size. The audio thread only try-locks (`ScopedTryLockType`); a block that finds the lock taken outputs silence instead of waiting.
 - **Offline renders are not monitoring.** While an offline render is active (`offlineActive_`), the output stage writes a surround master's channels to their own outputs, or the ITU fold-down into fewer, whatever the surround monitoring mode (virtualizer, device order) says.
 - **Routing.** A track feeds its output bus, else its folder, else the master. Busses pull their inputs (so parallel tracks never write to shared buffers). The compiler refuses any edge (output, send, aux return, sidechain) that would close a loop.
 - **Delay compensation.** Each track's output latency is computed from its devices and inputs; every source is delayed (per-slot ring buffer, up to 8192 samples) to match the latest path into the same destination, iterated to a fixed point. Exports skip the total latency so files line up with the timeline.
@@ -216,18 +219,27 @@ DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
                 elevation, distance, size)
     CLIP*         audio: file, position, offset, fades, gain, stretch, pitch
     MIDICLIP*     position, content offset (beats); NOTE* (with per-note pitch / pressure / slide curves) and CC* children
-    DEVICE*       type (native or "plugin" + PluginDescription), bypass, sidechain, saved state
+    DEVICE*       type (native or "plugin" + PluginDescription), bypass, sidechain, saved state,
+                  ara (the track's ARA plug-in, in the first slot)
       DEVICE*       (an insert loop's devices, in order; their lanes live on the track)
     SEND*         target bus, level, pre/post (or a device's outputs: sourceDevice, sourceLeft, sourceRight)
     AUTOMATION*   target (volume, pan, send:<id>, param:<device>:<index>); POINT* children
     TAKELANE*     name; CLIP* / MIDICLIP* (takes: they do not play; the comp is the track's clips)
     TRACK*        (folders contain tracks)
+  ARA_DOCUMENTS
+    ARA_DOCUMENT* factory (an ARA plug-in's factory id), archive (its edits: the plug-in's own bytes)
 ```
 
 - **Undo.** Every UI gesture opens one transaction, so a fader drag, a clip move or a recording is one undo step. Removing a device stores its latest state in the detached tree, so undo restores it exactly.
 - **Change tracking.** Components observe the tree. Those listeners also drive graph compilation, the unsaved-changes flag and the window title.
 - **Devices.** `DeviceManager` owns the live processor behind every DEVICE (created on demand, restored from its saved state, prepared at the device's rate). Parameter changes made in device editors or plug-in windows mark the project as changed; states are written into the tree on save.
 - **Content length.** `Session::getContentEnd(owner)` says how far an owner's material runs: the whole arrangement for the master, a track's last clip end, or for a bus or folder the latest end of whatever feeds it (routing, membership, sends, MIDI, aux sources, recursively; inactive tracks feed nothing). The tape machine's deck sizes its reels with it. Devices read the transport's time from the play head on the audio thread and publish it in an atomic (`TapeA800::getTapeSeconds`); the deck reads that and never touches the play head itself.
+- **ARA.** `AraHost` (owned by `Project`) keeps one ARA document per plug-in factory, through `juce::ARAHostModel`. A document holds a musical context (the tempo as tempo entries and 4/4 bar signatures, readable as content), a region sequence per ARA track, an audio source per audio file, and an audio modification and playback region per clip. A source's persistent id is its file name and length; its samples come from the decoded asset, or from the file through a reader of its own when the asset is streamed, on whatever thread the plug-in reads from.
+  - **Binding.** `DeviceManager::onProcessorCreated` fires after a device's state is restored and before its node is prepared. A track's ARA device is then bound: the VST3 component's `ARA::IPlugInEntryPoint2::bindToDocumentControllerWithRoles` with the playback renderer, editor renderer and editor view roles.
+  - **Following the session.** Changes trigger a coalesced `synchronise()` in four phases: (1) renderers give up the regions they lose (out of play); (2) one edit cycle (`ARAEditGuard`): tempo, removed clips, sequences, new or changed clips (the time-stretch flag where the factory supports it), unused sources and sequences; (3) a pending archive is restored once no clip waits for its audio; (4) renderers take their new regions (out of play).
+  - **Persistence.** `storeArchives()` runs before saving and writes each document's archive into ARA_DOCUMENTS. Opening a project reads the archive when the document is created and restores it (`restoreObjectsFromArchive`) once the regions exist, before the plug-in first plays.
+  - **Lifetime.** ARA lets a plug-in's extension objects go before or after their document controller, but the document's code lives in the plug-in's module, which its last instance may unload. So `DeviceManager::onProcessorRemoved`, called while the node is still alive, takes the plug-in's regions, releases its binding and, for a document's last plug-in, stores the archive into the session (not undoable, so undoing the removal brings the edits back) and takes the document down. A synchronous change message goes out first, so the clip editor deletes the plug-in's editor while the plug-in still exists.
+  - **Editors and transport.** For a clip on a bound track, the clip editor embeds the plug-in's editor (`createEditorAndMakeActive`, unless it is open in its own window) and passes the selection to its editor view (`showSelection` → `notifySelection`). The plug-in's transport requests are posted to the message thread: play, stop and locate go to the engine controller, and the cycle range and switch to the session's loop.
 - **Files.** A session is saved as XML (`.dojo`, format version 2; version 1 files still load). Clip paths are stored both absolute and relative to the session file, and the relative path wins on load.
 - **Audio.** `AudioAssetCache` decodes files up to 10 minutes into memory and streams longer ones from disk, with a min/max peak overview for drawing either way.
 
@@ -236,11 +248,13 @@ DOJO_SESSION  tempo, loop, speed, keep pitch, transpose, master volume
 ```
 initialise: logger -> look-and-feel -> settings -> AudioEngine -> AudioDeviceHost (opens the saved or
             default device, enables MIDI inputs; audio starts) -> EngineController -> PluginManager
-            -> Project (devices, compiler) -> Recorder, Exporter, PreviewService -> MainWindow
+            -> Project (devices, compiler, ARA host) -> Recorder, Exporter, PreviewService -> MainWindow
 shutdown:   MainWindow -> Exporter, Recorder, PreviewService -> AudioDeviceHost (device stopped; no callback in
             flight) -> Project -> PluginManager -> EngineController -> AudioEngine (frees the last
             graphs and their devices) -> settings -> look-and-feel -> logger
 ```
+
+Inside `Project` the ARA host is declared after the devices and the compiler, so it is destroyed first: its documents are taken down while their plug-ins, and so the plug-ins' modules, are still there.
 
 ## 10. Windows / Linux parity policy
 
@@ -253,4 +267,4 @@ shutdown:   MainWindow -> Exporter, Recorder, PreviewService -> AudioDeviceHost 
 
 ## 11. Licensing note
 
-JUCE 9 is dual-licensed: AGPLv3 or a commercial JUCE licence. The bundled ASIO SDK is GPLv3 or a Steinberg licence. Distributing The Dojo as closed source therefore requires a commercial JUCE licence and a Steinberg ASIO licence. Distributing it as open source requires an AGPLv3-compatible licence. LAME is LGPL 2.0 or later and is linked statically, so a binary distribution must let users relink against a modified LAME (or ship it as a shared library). The CLAP SDK and Signalsmith Stretch are MIT. The embedded fonts are SIL OFL 1.1.
+JUCE 9 is dual-licensed: AGPLv3 or a commercial JUCE licence. The bundled ASIO SDK is GPLv3 or a Steinberg licence. Distributing The Dojo as closed source therefore requires a commercial JUCE licence and a Steinberg ASIO licence. Distributing it as open source requires an AGPLv3-compatible licence. LAME is LGPL 2.0 or later and is linked statically, so a binary distribution must let users relink against a modified LAME (or ship it as a shared library). The CLAP SDK and Signalsmith Stretch are MIT. The ARA SDK (fetched at configure time, compiled into the host) is Apache 2.0, which asks for its notice in distributions. The ARA plug-ins themselves (Melodyne, VocAlign) are their makers' commercial products and are not part of The Dojo. The embedded fonts are SIL OFL 1.1.

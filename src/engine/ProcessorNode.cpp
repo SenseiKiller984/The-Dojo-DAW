@@ -56,6 +56,8 @@ void ProcessorNode::prepare(double sampleRate, int maximumBlockSize, juce::Audio
     processor_->setPlayHead(playHead);
     processor_->setRateAndBufferSizeDetails(sampleRate, maximumBlockSize);
     processor_->prepareToPlay(sampleRate, maximumBlockSize);
+    sampleRate_ = sampleRate;
+    blockSize_ = maximumBlockSize;
 
     if (doublePrecision_)
     {
@@ -78,6 +80,20 @@ void ProcessorNode::setNonRealtime(bool nonRealtime)
     processor_->setNonRealtime(nonRealtime);
 }
 
+void ProcessorNode::reconfigure(const std::function<void(juce::AudioProcessor&)>& change)
+{
+    const juce::SpinLock::ScopedLockType lock(processLock_);
+    if (prepared_)
+        processor_->releaseResources();
+    if (change)
+        change(*processor_);
+    if (prepared_)
+    {
+        processor_->setRateAndBufferSizeDetails(sampleRate_, blockSize_);
+        processor_->prepareToPlay(sampleRate_, blockSize_);
+    }
+}
+
 const Sample* ProcessorNode::getAuxOutput(int channel) const noexcept
 {
     if (channel < 0 || channel >= auxOutputs_)
@@ -90,6 +106,16 @@ void ProcessorNode::process(juce::AudioBuffer<Sample>& stereo, int numSamples, j
 {
     if (!prepared_ || numSamples <= 0)
         return;
+
+    // Out of play while reconfigure() changes it: silence, without waiting.
+    const juce::SpinLock::ScopedTryLockType inPlay(processLock_);
+    if (!inPlay.isLocked())
+    {
+        stereo.clear(0, numSamples);
+        for (int c = 0; c < auxOutputs_; ++c)
+            aux_.clear(c, 0, numSamples);
+        return;
+    }
 
     if (isBypassed())
     {
@@ -110,6 +136,9 @@ void ProcessorNode::processSend(juce::AudioBuffer<Sample>& stereo, int numSample
 {
     if (insertLoop_ == nullptr || !prepared_ || numSamples <= 0 || stereo.getNumChannels() < 2)
         return;
+    const juce::SpinLock::ScopedTryLockType inPlay(processLock_);
+    if (!inPlay.isLocked())
+        return;
     const juce::ScopedNoDenormals noDenormals;
     juce::AudioBuffer<double> view(stereo.getArrayOfWritePointers(), 2, numSamples);
     juce::MidiBuffer& midiForProcessor = processor_->acceptsMidi() ? midi : emptyMidi_;
@@ -120,6 +149,9 @@ void ProcessorNode::processSend(juce::AudioBuffer<Sample>& stereo, int numSample
 void ProcessorNode::processReturn(juce::AudioBuffer<Sample>& stereo, int numSamples, int loopLatency) noexcept
 {
     if (insertLoop_ == nullptr || !prepared_ || numSamples <= 0 || stereo.getNumChannels() < 2)
+        return;
+    const juce::SpinLock::ScopedTryLockType inPlay(processLock_);
+    if (!inPlay.isLocked())
         return;
     const juce::ScopedNoDenormals noDenormals;
     juce::AudioBuffer<double> view(stereo.getArrayOfWritePointers(), 2, numSamples);

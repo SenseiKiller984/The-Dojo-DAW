@@ -819,6 +819,14 @@ void setSidechain(juce::ValueTree d, std::uint32_t trackId, juce::UndoManager* u
 {
     d.setProperty(ids::sidechain, static_cast<int>(trackId), um);
 }
+bool isAra(const juce::ValueTree& d) { return d.getProperty(ids::ara, false); }
+void setAra(juce::ValueTree d, bool ara, juce::UndoManager* um)
+{
+    if (ara)
+        d.setProperty(ids::ara, true, um);
+    else
+        d.removeProperty(ids::ara, um);
+}
 } // namespace device
 
 namespace send
@@ -2662,6 +2670,29 @@ juce::ValueTree Session::getDeviceOwner(const juce::ValueTree& device)
     while (owner.isValid() && owner.hasType(ids::device))
         owner = owner.getParent();
     return owner;
+}
+
+juce::ValueTree Session::getAraDevice(const juce::ValueTree& t)
+{
+    if (!t.hasType(ids::track) || track::getKind(t) != TrackKind::audio)
+        return {};
+    const auto devices = getDevices(t);
+    return !devices.empty() && device::isAra(devices.front()) ? devices.front() : juce::ValueTree();
+}
+
+juce::ValueTree Session::setAraPlugin(juce::ValueTree t, const juce::String& descriptionXml, const juce::String& name)
+{
+    if (!t.hasType(ids::track) || track::getKind(t) != TrackKind::audio)
+        return {};
+    for (const auto& d : getDevices(t)) // (one ARA plug-in per track, first)
+        if (device::isAra(d))
+            removeDevice(d);
+    if (descriptionXml.isEmpty())
+        return {};
+    auto d = addDevice(t, "plugin", name, 0);
+    d.setProperty(ids::description, descriptionXml, &undo_);
+    device::setAra(d, true, &undo_);
+    return d;
 }
 
 // --- Sends ----------------------------------------------------------------------------------------

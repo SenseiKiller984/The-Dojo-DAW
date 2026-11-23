@@ -61,6 +61,7 @@ add_executable(dojo_tests
     AdmTests.cpp
     AdmExportTests.cpp
     AdmOscTests.cpp
+    AraTests.cpp
     ImmersiveBedTests.cpp
     SpatialPannerTests.cpp
     SpatialPannerUiTests.cpp
@@ -109,5 +110,40 @@ target_compile_definitions(dojo_tests PRIVATE
     DOJO_TEST_CLAP_PATH="$<TARGET_FILE:dojo_test_clap>"
     DOJO_SCANNER_PATH="$<TARGET_FILE:dojo-plugin-scanner>")
 set_target_properties(dojo_tests PROPERTIES FOLDER "Tests")
+
+# A small ARA 2 plug-in (VST3, built with JUCE's plug-in client and its own copy of JUCE) for the
+# ARA hosting tests: it reads its regions' audio through the host, archives what it measured and
+# renders the regions. Test fixture code, compiled quietly like JUCE itself.
+if(DOJO_WITH_ARA)
+    juce_add_plugin(dojo_test_ara
+        PRODUCT_NAME "DojoTestAra"
+        COMPANY_NAME "The Dojo Tests"
+        BUNDLE_ID "dev.thedojo.tests.ara"
+        PLUGIN_MANUFACTURER_CODE Dojo
+        PLUGIN_CODE DjAr
+        FORMATS VST3
+        IS_ARA_EFFECT TRUE
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT FALSE
+        NEEDS_MIDI_OUTPUT FALSE
+        VST3_AUTO_MANIFEST FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    target_sources(dojo_test_ara PRIVATE ara/DojoTestAra.cpp)
+    target_compile_definitions(dojo_test_ara PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_link_libraries(dojo_test_ara PRIVATE juce::juce_audio_utils PUBLIC juce::juce_recommended_config_flags)
+    if(MSVC)
+        target_compile_options(dojo_test_ara PRIVATE /W0 /bigobj)
+    else()
+        target_compile_options(dojo_test_ara PRIVATE -w)
+    endif()
+    set_target_properties(dojo_test_ara dojo_test_ara_VST3 PROPERTIES FOLDER "Tests")
+    add_dependencies(dojo_tests dojo_test_ara_VST3)
+    get_target_property(dojo_test_ara_bundle dojo_test_ara_VST3 JUCE_PLUGIN_ARTEFACT_FILE)
+    target_compile_definitions(dojo_tests PRIVATE DOJO_TEST_ARA_PATH="${dojo_test_ara_bundle}")
+endif()
 
 catch_discover_tests(dojo_tests DISCOVERY_MODE PRE_TEST)
