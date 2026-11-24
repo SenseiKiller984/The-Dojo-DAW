@@ -27,7 +27,13 @@ class Session;
     The documents follow the session (coalesced after each change, or synchronise()):
       - a musical context with the session's tempo and 4/4 (as tempo entries and bar signatures);
       - a region sequence per ARA track, named after it;
-      - an audio source per audio file, its samples read from the decoded asset or the file;
+      - an audio source per audio file, its samples read from the decoded asset or the file; a clip
+        with native edits (PITCH, SPECTRAL: AudioEdits) has one of its own instead, reading what the
+        clip plays: so the plug-in comes after those edits. When they render again (or are bypassed)
+        its samples change in place (access off, updateAudioSourceContent, access on): the plug-in
+        keeps the clip's modification and region, and reads it again. When the native edits come or
+        go, the clip's modification state (and its source's, where the samples are the same) goes
+        with it to its new source by a partial archive (storeObjectsToArchive / restore with a filter);
       - an audio modification and a playback region per clip: its place on the timeline, its part of
         the file (time-stretched clips as such where the plug-in can), named after the clip. The
         plug-in plays each clip's part of its file as it is: a clip's gain, fades, pitch, looping and

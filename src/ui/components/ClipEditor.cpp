@@ -1688,7 +1688,9 @@ void ClipEditor::showClip()
         araNote_.setText(note, juce::dontSendNotification);
         project_.getAra().showSelection(session::track::getId(track), {session::clip::getId(clip_)});
     }
-    araNote_.setVisible(araClip && view != AudioView::pitch && view != AudioView::spectral);
+    if (araClip && (view == AudioView::pitch || view == AudioView::spectral))
+        araNote_.setText(ara.plugin + " plays this clip after these edits (it is told when they change)", juce::dontSendNotification);
+    araNote_.setVisible(araClip);
 
     pianoRoll_.setClip(midi ? clip_ : juce::ValueTree());
     steps_.setClip(midi ? clip_ : juce::ValueTree());
@@ -1744,7 +1746,8 @@ void ClipEditor::resized()
     toolbar.removeFromLeft(220);
     {
         auto araBar = toolbar;
-        araButton_.setBounds(araBar.removeFromLeft(56));
+        if (araButton_.isVisible())
+            araButton_.setBounds(araBar.removeFromLeft(56));
         clipButton_.setBounds(araBar.removeFromLeft(56));
         pitchButton_.setBounds(araBar.removeFromLeft(60));
         spectralButton_.setBounds(araBar.removeFromLeft(80));

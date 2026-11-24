@@ -2,6 +2,7 @@
 
 #include "engine/ProcessorNode.h"
 #include "session/AudioAssetCache.h"
+#include "session/AudioEdits.h"
 #include "session/DeviceManager.h"
 #include "session/Session.h"
 
@@ -54,10 +55,12 @@ namespace Model = juce::ARAHostModel;
 constexpr auto kAllRoles = static_cast<ARA::ARAPlugInInstanceRoleFlags>(ARA::kARAPlaybackRendererRole | ARA::kARAEditorRendererRole
                                                                         | ARA::kARAEditorViewRole);
 
-/** An audio file in a document: what the plug-ins read. */
+/** An audio source in a document: what the plug-ins read. Usually an audio file, shared by its
+    clips; a clip with native edits (PITCH, SPECTRAL) has one of its own, reading its edited audio. */
 struct Source
 {
-    juce::File file;
+    juce::String key; ///< the file's path, or "clip:<id>" (a clip's own)
+    juce::File file;  ///< what it reads now
     std::string name;
     std::string persistentId;
     double sampleRate = 0.0;
@@ -67,6 +70,7 @@ struct Source
     juce::AudioFormatManager* formats = nullptr;
     std::unique_ptr<Model::AudioSource> ara;
     int users = 0;                        ///< clips using it
+    bool fresh = false;                   ///< made in this synchronisation
 };
 using SourceRef = Model::ConversionFunctions<Source*, ARA::ARAAudioSourceHostRef>;
 
@@ -420,7 +424,7 @@ struct Document
     std::unique_ptr<juce::ARAHostDocumentController> controller;
     std::unique_ptr<Model::MusicalContext> context;
     std::map<std::uint32_t, Sequence> sequences;           ///< by track id
-    std::map<juce::String, std::unique_ptr<Source>> sources; ///< by file path
+    std::map<juce::String, std::unique_ptr<Source>> sources; ///< by key
     std::map<std::uint32_t, std::unique_ptr<ClipModel>> clips; ///< by clip id
     std::shared_ptr<const time::TempoMap> tempoMap; ///< the map its musical context last had
     juce::MemoryBlock pendingArchive;                      ///< from the session, given back once the regions exist
@@ -688,6 +692,22 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
         AudioAssetPtr asset;
         std::string name;
         double start = 0.0, length = 0.0, offset = 0.0, stretch = 1.0;
+        // Its audio source: the file's, shared, or with native edits the clip's own (whatever
+        // file it plays: the edits' render, or its own file before the first or while bypassed).
+        juce::String sourceKey;
+        std::string sourceName, sourceId;
+    };
+
+    static bool isClipsOwn(const juce::String& key) { return key.startsWith("clip:"); }
+
+    /** A clip's state in its plug-in, carried to the source it moves to (native edits added or
+        removed): a partial archive of its audio modification and the source it had. */
+    struct Transfer
+    {
+        std::uint32_t clipId = 0;
+        juce::MemoryBlock archive;
+        std::string sourceId, modificationId;
+        juce::File file; ///< what its source read
     };
 
     void synchronise()
@@ -753,6 +773,21 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
                 w.file = file;
                 w.asset = std::move(asset);
                 w.name = clip::getName(c).toStdString();
+                const auto frames = std::to_string(w.asset->numFrames);
+                if (audioedits::getEdit(c).isValid())
+                {
+                    // (portable: the same clip of the same file, wherever the project folder is)
+                    const auto own = audioedits::getSource(c).getFileName();
+                    w.sourceKey = "clip:" + juce::String(clip::getId(c));
+                    w.sourceName = (own + " (edited)").toStdString();
+                    w.sourceId = own.toStdString() + "#" + frames + "#clip-" + std::to_string(clip::getId(c));
+                }
+                else
+                {
+                    w.sourceKey = file.getFullPathName();
+                    w.sourceName = file.getFileName().toStdString();
+                    w.sourceId = w.sourceName + "#" + frames; // (portable: the same file, wherever the project folder is)
+                }
                 w.start = clip::getStart(c);
                 w.length = clip::getLength(c);
                 w.offset = clip::getOffset(c);
@@ -762,9 +797,44 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
             }
         }
 
-        // 1. Plug-ins give up the regions they lose (or whose clip changes file): out of play.
+        // 1. Plug-ins give up the regions they lose (or whose clip changes source or track): out of play.
+        //    A clip's own source (native edits) stays as long as its audio has the same shape, the
+        //    file it reads changing in place (3).
         const auto sameSource = [&](const ClipModel& model, const Wanted& w)
-        { return model.source != nullptr && model.source->file == w.file && model.trackId == w.trackId; };
+        {
+            return model.source != nullptr && model.source->key == w.sourceKey && model.trackId == w.trackId
+                   && model.source->frames == w.asset->numFrames && model.source->channels == std::max(1, w.asset->numChannels)
+                   && std::abs(model.source->sampleRate - w.asset->sampleRate) < 1.0e-6;
+        };
+        // A clip whose native edits come or go keeps what its plug-in did with it: archived now (no
+        // edit cycle open), given to its new modification once it is there.
+        std::vector<Transfer> transfers;
+        for (const auto& [clipId, model] : document.clips)
+        {
+            const auto w = wanted.find(clipId);
+            if (w == wanted.end() || model->source == nullptr || model->modification == nullptr || model->trackId != w->second.trackId
+                || sameSource(*model, w->second) || !(isClipsOwn(model->source->key) || isClipsOwn(w->second.sourceKey)))
+                continue;
+            juce::MemoryOutputStream archive;
+            const ARA::ARAAudioSourceRef sources[] = {model->source->ara->getPluginRef()};
+            const ARA::ARAAudioModificationRef modifications[] = {model->modification->getPluginRef()};
+            ARA::ARAStoreObjectsFilter filter{};
+            filter.structSize = ARA::kARAStoreObjectsFilterMinSize;
+            filter.documentData = ARA::kARAFalse;
+            filter.audioSourceRefsCount = 1;
+            filter.audioSourceRefs = sources;
+            filter.audioModificationRefsCount = 1;
+            filter.audioModificationRefs = modifications;
+            if (!dc.storeObjectsToArchive(ArchiveWriterRef::toHostRef(&archive), &filter))
+                continue;
+            Transfer transfer;
+            transfer.clipId = clipId;
+            transfer.archive = archive.getMemoryBlock();
+            transfer.sourceId = model->source->persistentId;
+            transfer.modificationId = model->persistentId;
+            transfer.file = model->source->file;
+            transfers.push_back(std::move(transfer));
+        }
         for (auto& [deviceId, binding] : bindings)
         {
             if (binding.document != &document)
@@ -794,9 +864,28 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
                             });
         }
 
+        // A clip's own source whose file changed (edits rendered again, bypassed, or rendered the
+        // first time): no reading while it changes (this waits for reads under way).
+        std::vector<Source*> refilled;
+        for (const auto& [clipId, model] : document.clips)
+        {
+            const auto w = wanted.find(clipId);
+            if (w == wanted.end() || !sameSource(*model, w->second) || model->source->file == w->second.file
+                || std::find(refilled.begin(), refilled.end(), model->source) != refilled.end())
+                continue;
+            model->source->ara->enableAudioSourceSamplesAccess(false);
+            model->source->file = w->second.file;
+            model->source->asset = w->second.asset;
+            refilled.push_back(model->source);
+        }
+
         // 2. The model, in one edit cycle.
         {
             const juce::ARAEditGuard guard(dc);
+            // 3. ... its samples changed: the plug-in keeps its modification and region, and reads
+            //    it again (how its edits follow the new audio is up to it).
+            for (auto* source : refilled)
+                dc.updateAudioSourceContent(source->ara->getPluginRef(), nullptr, ARA::ContentUpdateScopes::samplesAreAffected());
             if (document.tempoMap != tempo->get() && document.context != nullptr)
             {
                 document.tempoMap = tempo->get();
@@ -888,6 +977,35 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
                 else
                     model->region->update(properties);
             }
+            // What the plug-in did with the clips that moved: their modification's state, and their old
+            // source's where the new one is theirs alone, new and reading the same audio (native
+            // edits added before they rendered, or removed while bypassed).
+            for (const auto& transfer : transfers)
+            {
+                const auto model = document.clips.find(transfer.clipId);
+                if (model == document.clips.end() || model->second->modification == nullptr)
+                    continue;
+                const auto* source = model->second->source;
+                const bool withSource = source->fresh && source->users == 1
+                                        && source->file == transfer.file;
+                const ARA::ARAPersistentID archivedSources[] = {transfer.sourceId.c_str()};
+                const ARA::ARAPersistentID currentSources[] = {source->persistentId.c_str()};
+                const ARA::ARAPersistentID archivedModifications[] = {transfer.modificationId.c_str()};
+                const ARA::ARAPersistentID currentModifications[] = {model->second->persistentId.c_str()};
+                ARA::ARARestoreObjectsFilter filter{};
+                filter.structSize = ARA::kARARestoreObjectsFilterMinSize;
+                filter.documentData = ARA::kARAFalse;
+                filter.audioSourceIDsCount = withSource ? 1u : 0u;
+                filter.audioSourceArchiveIDs = withSource ? archivedSources : nullptr;
+                filter.audioSourceCurrentIDs = withSource ? currentSources : nullptr;
+                filter.audioModificationIDsCount = 1;
+                filter.audioModificationArchiveIDs = archivedModifications;
+                filter.audioModificationCurrentIDs = currentModifications;
+                ArchiveReader reader;
+                reader.data = transfer.archive;
+                reader.archiveId = document.archiveId;
+                dc.restoreObjectsFromArchive(ArchiveReaderRef::toHostRef(&reader), &filter);
+            }
             // Sources and sequences nothing uses any more.
             for (auto it = document.sources.begin(); it != document.sources.end();)
             {
@@ -905,6 +1023,10 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
             for (auto it = document.sequences.begin(); it != document.sequences.end();)
                 it = trackNames.count(it->first) == 0 ? document.sequences.erase(it) : std::next(it);
         }
+        for (auto* source : refilled)
+            source->ara->enableAudioSourceSamplesAccess(true);
+        for (auto& [key, source] : document.sources)
+            source->fresh = false;
 
         // 3. The edits saved with the session, once every region they may belong to is there (before the
         //    plug-ins are prepared with the regions, so that they find them restored).
@@ -946,19 +1068,29 @@ struct AraHost::Impl final : private juce::ValueTree::Listener, private juce::As
 
     Source* sourceFor(Document& document, const Wanted& w)
     {
-        const auto key = w.file.getFullPathName();
+        const auto& key = w.sourceKey;
         if (const auto it = document.sources.find(key); it != document.sources.end())
-            return it->second.get();
+        {
+            auto& known = *it->second;
+            if (known.frames == w.asset->numFrames && known.channels == std::max(1, w.asset->numChannels)
+                && std::abs(known.sampleRate - w.asset->sampleRate) < 1.0e-6)
+                return &known;
+            // Its audio changed shape (so its clips all let it go): a new source for the new audio.
+            known.ara->enableAudioSourceSamplesAccess(false);
+            known.ara.reset();
+            document.sources.erase(it);
+        }
         auto source = std::make_unique<Source>();
+        source->key = key;
+        source->fresh = true;
         source->file = w.file;
         source->asset = w.asset;
         source->formats = &assets.getFormatManager();
         source->sampleRate = w.asset->sampleRate;
         source->channels = std::max(1, w.asset->numChannels);
         source->frames = w.asset->numFrames;
-        source->name = w.file.getFileName().toStdString();
-        // (portable: the same file, wherever the project folder is)
-        source->persistentId = source->name + "#" + std::to_string(source->frames);
+        source->name = w.sourceName;
+        source->persistentId = w.sourceId;
         auto properties = Model::AudioSource::getEmptyProperties();
         properties.name = source->name.c_str();
         properties.persistentID = source->persistentId.c_str();

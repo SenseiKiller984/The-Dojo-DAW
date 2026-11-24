@@ -11,14 +11,21 @@
 //  - Editor: its editor view lists the selected playback regions (and takes the host's selection
 //    even with no editor open, unlike a real plug-in, so headless tests can see it). Selecting a
 //    region named "play from <seconds>" asks the host to loop two seconds from there and play.
+//  - Edits: an audio modification has a gain of its own (its "edit"), set when the plug-in is
+//    prepared with a region named "gain <x>", applied to what its regions play, stored in the
+//    archive by the modification's persistent ID and restored from it.
+//  - Content updates: when the host says a source's samples changed, its peak is forgotten and
+//    measured again once the host lets it read the source again; its modifications keep their gain.
 //  - Telemetry for the tests, as read-only parameters: how many regions are selected in the editor
-//    view, how many sources it has analysed, how many peaks it has restored (each count / 64).
+//    view, how many sources it has analysed, how many peaks it has restored, how many content
+//    updates it has had, how many audio modifications it has made (each count / 64).
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <atomic>
+#include <cmath>
 #include <map>
 
 namespace
@@ -34,11 +41,13 @@ struct Telemetry
     AudioParameterFloat* selected = nullptr;
     AudioParameterFloat* analysed = nullptr;
     AudioParameterFloat* restored = nullptr;
+    AudioParameterFloat* updated = nullptr;
+    AudioParameterFloat* modifications = nullptr;
 
     static void bump(AudioParameterFloat* parameter, int by = 1)
     {
         if (parameter != nullptr)
-            parameter->setValueNotifyingHost(parameter->get() / kCountScale + static_cast<float>(by) / kCountScale);
+            parameter->setValueNotifyingHost(parameter->get() + static_cast<float>(by) / kCountScale);
     }
     static void set(AudioParameterFloat* parameter, int count)
     {
@@ -53,11 +62,22 @@ class TestAudioSource final : public ARAAudioSource
 public:
     using ARAAudioSource::ARAAudioSource;
     std::atomic<float> peak{0.0f};
+    bool stale = false; ///< (its samples changed: measured again once it can be read)
 };
+
+/** An audio modification with its edit: a gain (1: none). */
+class TestAudioModification final : public ARAAudioModification
+{
+public:
+    using ARAAudioModification::ARAAudioModification;
+    std::atomic<float> gain{1.0f};
+};
+
+bool isEdited(const TestAudioModification& modification) { return std::abs(modification.gain.load() - 1.0f) > 1.0e-6f; }
 
 class TestDocumentController;
 
-class TestPlaybackRenderer final : public ARAPlaybackRenderer
+class TestPlaybackRenderer final : public ARAPlaybackRenderer, private ARAAudioSource::Listener
 {
 public:
     TestPlaybackRenderer(ARA::PlugIn::DocumentController* dc, TestDocumentController& owner)
@@ -66,15 +86,18 @@ public:
     {
     }
 
+    ~TestPlaybackRenderer() override { releaseReaders(); }
+
     void prepareToPlay(double sampleRate, int maximumSamplesPerBlock, int numChannels, AudioProcessor::ProcessingPrecision,
                        AlwaysNonRealtime) override;
 
-    void releaseResources() override { readers_.clear(); }
+    void releaseResources() override { releaseReaders(); }
 
     bool processBlock(AudioBuffer<float>& buffer, AudioProcessor::Realtime, const AudioPlayHead::PositionInfo& position) noexcept override
     {
         buffer.clear();
-        if (!position.getIsPlaying())
+        const SpinLock::ScopedTryLockType lock(readersLock_);
+        if (!position.getIsPlaying() || !lock.isLocked())
             return true;
         const auto time = position.getTimeInSamples().orFallback(0);
         const auto block = Range<int64>::withStartAndLength(time, buffer.getNumSamples());
@@ -96,7 +119,7 @@ public:
             const auto at = static_cast<int>(range.getStart() - block.getStart());
             if (!reader->second->read(&scratch_, 0, count, range.getStart() + offset, true, true))
                 continue;
-            const float gain = kTargetPeak / source->peak.load();
+            const float gain = kTargetPeak / source->peak.load() * region->getAudioModification<TestAudioModification>()->gain.load();
             for (int c = 0; c < buffer.getNumChannels(); ++c)
                 buffer.addFrom(c, at, scratch_, std::min(c, scratch_.getNumChannels() - 1), 0, count, gain);
         }
@@ -106,7 +129,34 @@ public:
     using ARAPlaybackRenderer::processBlock;
 
 private:
+    // A content update leaves a source's reader invalid: a new one once the source can be read again.
+    void didEnableAudioSourceSamplesAccess(ARAAudioSource* audioSource, bool enable) override
+    {
+        const auto it = readers_.find(audioSource);
+        if (!enable || it == readers_.end() || it->second->isValid())
+            return;
+        auto fresh = std::make_unique<ARAAudioSourceReader>(audioSource);
+        const SpinLock::ScopedLockType lock(readersLock_);
+        std::swap(it->second, fresh);
+    }
+
+    void willDestroyAudioSource(ARAAudioSource* audioSource) override
+    {
+        audioSource->removeListener(this);
+        const SpinLock::ScopedLockType lock(readersLock_);
+        readers_.erase(audioSource);
+    }
+
+    void releaseReaders()
+    {
+        for (auto& [source, reader] : readers_)
+            source->removeListener(this);
+        const SpinLock::ScopedLockType lock(readersLock_);
+        readers_.clear();
+    }
+
     TestDocumentController& owner_;
+    SpinLock readersLock_; ///< (the audio thread only tries it)
     std::map<ARAAudioSource*, std::unique_ptr<ARAAudioSourceReader>> readers_;
     AudioBuffer<float> scratch_;
     double sampleRate_ = 48000.0;
@@ -181,6 +231,38 @@ protected:
         return new TestAudioSource(document, hostRef);
     }
 
+    ARAAudioModification* doCreateAudioModification(ARAAudioSource* audioSource, ARA::ARAAudioModificationHostRef hostRef,
+                                                    const ARAAudioModification* optionalModificationToClone) noexcept override
+    {
+        Telemetry::bump(telemetry != nullptr ? telemetry->modifications : nullptr);
+        auto* modification = new TestAudioModification(audioSource, hostRef, optionalModificationToClone);
+        if (auto* clone = dynamic_cast<const TestAudioModification*>(optionalModificationToClone))
+            modification->gain.store(clone->gain.load());
+        return modification;
+    }
+
+    // (as an audio source listener, which the specialisation is for every source)
+    // The host changed a source's samples: forget its peak, measure it again once it may be read.
+    void doUpdateAudioSourceContent(ARAAudioSource* audioSource, ARAContentUpdateScopes scopeFlags) override
+    {
+        if (!scopeFlags.affectSamples())
+            return;
+        auto* source = static_cast<TestAudioSource*>(audioSource);
+        source->peak.store(0.0f);
+        source->stale = true;
+        Telemetry::bump(telemetry != nullptr ? telemetry->updated : nullptr);
+    }
+
+    void didEnableAudioSourceSamplesAccess(ARAAudioSource* audioSource, bool enable) override
+    {
+        auto* source = static_cast<TestAudioSource*>(audioSource);
+        if (enable && source->stale)
+        {
+            source->stale = false;
+            analyse(*source);
+        }
+    }
+
     ARAPlaybackRenderer* doCreatePlaybackRenderer() noexcept override { return new TestPlaybackRenderer(getDocumentController(), *this); }
     ARAEditorView* doCreateEditorView() noexcept override { return new TestEditorView(getDocumentController()); }
 
@@ -199,6 +281,18 @@ protected:
             }
         }
         Telemetry::bump(telemetry != nullptr ? telemetry->restored : nullptr, restored);
+        // The modifications' gains (archives without them have none).
+        if (!input.failed() && !input.isExhausted())
+        {
+            const auto modifications = input.readInt();
+            for (int i = 0; i < modifications && !input.failed(); ++i)
+            {
+                const auto id = input.readString();
+                const auto gain = input.readFloat();
+                if (auto* modification = filter->getAudioModificationToRestoreStateWithID<TestAudioModification>(id.toRawUTF8()))
+                    modification->gain.store(gain);
+            }
+        }
         return !input.failed();
     }
 
@@ -214,6 +308,18 @@ protected:
             if (source->peak.load() > 0.0f)
                 if (!output.writeString(String(source->getPersistentID())) || !output.writeFloat(source->peak.load()))
                     return false;
+        const auto& modifications = filter->getAudioModificationsToStore<TestAudioModification>();
+        int edited = 0;
+        for (auto* modification : modifications)
+            edited += isEdited(*modification) ? 1 : 0;
+        if (edited == 0)
+            return true; // (as before there were edits: the sources' peaks only)
+        if (!output.writeInt(edited))
+            return false;
+        for (auto* modification : modifications)
+            if (isEdited(*modification))
+                if (!output.writeString(String(modification->getPersistentID())) || !output.writeFloat(modification->gain.load()))
+                    return false;
         return true;
     }
 };
@@ -223,13 +329,20 @@ void TestPlaybackRenderer::prepareToPlay(double sampleRate, int maximumSamplesPe
 {
     sampleRate_ = sampleRate;
     scratch_.setSize(std::max(2, numChannels), maximumSamplesPerBlock);
-    readers_.clear();
+    releaseReaders();
     for (auto* region : getPlaybackRegions())
     {
+        // A region named "gain <x>" edits its modification (as a user would in a real plug-in).
+        const String name(region->getName() != nullptr ? region->getName() : "");
+        if (name.startsWith("gain "))
+            region->getAudioModification<TestAudioModification>()->gain.store(name.fromFirstOccurrenceOf("gain ", false, false).getFloatValue());
         auto* source = region->getAudioModification()->getAudioSource<TestAudioSource>();
         owner_.analyse(*source); // (the message thread: prepareToPlay is called there)
         if (readers_.find(source) == readers_.end())
+        {
+            source->addListener(this);
             readers_.emplace(source, std::make_unique<ARAAudioSourceReader>(source));
+        }
     }
 }
 
@@ -284,12 +397,18 @@ public:
         auto selected = count("selected", "Selected regions");
         auto analysed = count("analysed", "Analysed sources");
         auto restored = count("restored", "Restored peaks");
+        auto updated = count("updated", "Content updates");
+        auto modifications = count("modifications", "Audio modifications made");
         telemetry.selected = selected.get();
         telemetry.analysed = analysed.get();
         telemetry.restored = restored.get();
+        telemetry.updated = updated.get();
+        telemetry.modifications = modifications.get();
         addParameter(selected.release());
         addParameter(analysed.release());
         addParameter(restored.release());
+        addParameter(updated.release());
+        addParameter(modifications.release());
     }
 
     const String getName() const override { return "DojoTestAra"; }

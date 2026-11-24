@@ -3,6 +3,7 @@
 #include "engine/EngineController.h"
 #include "engine/io/AudioDeviceHost.h"
 #include "session/AraHost.h"
+#include "session/AudioEdits.h"
 #include "session/Project.h"
 #include "ui/EditorState.h"
 #include "ui/components/ArrangerView.h"
@@ -161,7 +162,7 @@ double worst(const std::vector<float>& out, double from, double to, double start
     return error;
 }
 
-constexpr int kSelected = 0, kAnalysed = 1, kRestored = 2;
+constexpr int kSelected = 0, kAnalysed = 1, kRestored = 2, kUpdated = 3, kModifications = 4;
 } // namespace
 
 TEST_CASE("An ARA plug-in plays its track's clips from the audio it reads through the host", "[ara][plugins]")
@@ -315,6 +316,132 @@ TEST_CASE("An ARA plug-in's edits are saved with the session and given back when
     const auto out = app.play(2.5);
     CHECK(worst(out, 1.0, 2.0, 1.0, 0.5, 0.4f) < 2.0e-3);
     CHECK_THAT(test::peak(out, at(1.05), at(1.95)), WithinAbs(0.25, 0.01));
+}
+
+TEST_CASE("An ARA plug-in plays a clip after its native PITCH/SPECTRAL edits and keeps its own edits of it", "[ara][plugins][audioedit]")
+{
+    test::TempFolder temp;
+    App app;
+    auto& session = app.project.getSession();
+    auto& edits = app.project.getAudioEdits();
+    edits.setRenderFolder(temp.dir.getChildFile("Edits"));
+    const auto frames = static_cast<int>(at(3.0));
+    const auto file = test::writeWav(temp.dir.getChildFile("tone.wav"), test::sine(kTone, kRate, frames, kLevel), kRate, 2);
+    juce::String error;
+    REQUIRE(app.project.getAssets().loadNow(file, error) != nullptr);
+    auto vocal = session.addTrack(session::TrackKind::audio, "Vocal");
+    const auto trackId = session::track::getId(vocal);
+
+    // The whole file at 1.0 s. Named "gain 0.5", the test plug-in edits its modification (as a user
+    // would in Melodyne): it plays the clip at half its level, 0.25 at the peak.
+    auto clip = session.addClip(vocal, file, 1.0, 3.0, 0.0);
+    session::clip::setName(clip, "gain 0.5", nullptr);
+    const auto description = app.testPlugin();
+    const auto deviceId = session::device::getId(session.setAraPlugin(vocal, description.createXml()->toString(), description.name));
+    app.project.getCompiler().rebuildNow();
+    app.settle(trackId, true, 1);
+    auto out = app.play(4.0);
+    CHECK(app.count(deviceId, kModifications) == 1);
+    CHECK(app.count(deviceId, kAnalysed) == 1);
+    CHECK(worst(out, 1.0, 4.0, 1.0, 0.0, 2.0f * kLevel) < 2.0e-3);
+    session::clip::setName(clip, "Vocal", nullptr); // (its edit stays)
+    app.project.getAra().synchronise();
+
+    // A native spectral edit: the first second 40 dB down. The clip gets an ARA audio source of its
+    // own (one more modification), and the plug-in's edit and analysis go with it (same audio yet).
+    audioedit::spectral::Operation cut;
+    cut.kind = audioedit::spectral::Kind::gain;
+    cut.start = 0.0;
+    cut.end = 1.0;
+    cut.gainDb = -40.0;
+    auto op = edits.addSpectralOperation(clip, cut, "Attenuate");
+    REQUIRE(op.isValid());
+    app.project.getAra().synchronise(); // (before the render lands)
+    app.settle(trackId, true, 1);
+    CHECK(app.count(deviceId, kModifications) == 2);
+    CHECK(app.count(deviceId, kRestored) == 1);
+    CHECK(app.count(deviceId, kAnalysed) == 1);
+
+    // Rendered: the same source and modification, its samples changed in place; the plug-in reads it
+    // again and plays the edited audio, still at its own gain.
+    REQUIRE(edits.waitUntilIdle(30'000));
+    REQUIRE(session::clip::getFile(clip) != file);
+    app.project.getAra().synchronise();
+    app.settle(trackId, true, 1);
+    CHECK(app.count(deviceId, kModifications) == 2);
+    CHECK(app.count(deviceId, kUpdated) >= 1);
+    CHECK(app.count(deviceId, kAnalysed) >= 2);
+    out = app.play(4.0);
+    CHECK(test::peak(out, at(1.1), at(1.85)) < 0.25 * 0.02);
+    CHECK_THAT(test::peak(out, at(2.2), at(3.9)), WithinAbs(0.25, 0.01));
+    CHECK(worst(out, 2.2, 3.9, 1.0, 0.0, 2.0f * kLevel) < 5.0e-3);
+
+    // Saved: the clip's own source and its modification's edit, by their persistent IDs.
+    app.project.getAra().storeArchives();
+    {
+        juce::MemoryBlock bytes;
+        REQUIRE(bytes.fromBase64Encoding(
+            session.getState().getChildWithName(session::ids::araDocuments).getChild(0).getProperty(session::ids::araArchive).toString()));
+        juce::MemoryInputStream in(bytes, false);
+        const auto clipId = juce::String(session::clip::getId(clip));
+        REQUIRE(in.readInt() == 1);
+        CHECK(in.readString() == "tone.wav#" + juce::String(frames) + "#clip-" + clipId);
+        CHECK_THAT(in.readFloat(), WithinAbs(kLevel, 1.0e-3));
+        REQUIRE(in.readInt() == 1);
+        CHECK(in.readString() == "clip-" + clipId);
+        CHECK_THAT(in.readFloat(), WithinAbs(0.5, 1.0e-6));
+    }
+
+    // A/B (Original): the clip's own file, in place again; back to the render.
+    edits.setBypassed(clip, true);
+    REQUIRE(edits.waitUntilIdle(30'000));
+    REQUIRE(session::clip::getFile(clip) == file);
+    app.project.getAra().synchronise();
+    app.settle(trackId, true, 1);
+    out = app.play(4.0);
+    CHECK(app.count(deviceId, kModifications) == 2);
+    CHECK(worst(out, 1.0, 4.0, 1.0, 0.0, 2.0f * kLevel) < 2.0e-3);
+    edits.setBypassed(clip, false);
+    REQUIRE(edits.waitUntilIdle(30'000));
+    app.project.getAra().synchronise();
+    app.settle(trackId, true, 1);
+    out = app.play(4.0);
+    CHECK(app.count(deviceId, kModifications) == 2);
+    CHECK(test::peak(out, at(1.1), at(1.85)) < 0.25 * 0.02);
+
+    // The native edit removed: back to the file's shared source, the plug-in's edit with it.
+    edits.removeSpectralOperation(op);
+    CHECK_FALSE(session::audioedits::getEdit(clip).isValid());
+    REQUIRE(edits.waitUntilIdle(30'000));
+    app.project.getAra().synchronise();
+    app.settle(trackId, true, 1);
+    out = app.play(4.0);
+    CHECK(app.count(deviceId, kModifications) == 3);
+    CHECK(worst(out, 1.0, 4.0, 1.0, 0.0, 2.0f * kLevel) < 2.0e-3);
+
+    // Undone: the edit (and its own source) again, the plug-in's edit still there.
+    session.getUndoManager().undo();
+    REQUIRE(edits.waitUntilIdle(30'000));
+    app.project.getAra().synchronise();
+    app.settle(trackId, true, 1);
+    out = app.play(4.0);
+    CHECK(app.count(deviceId, kModifications) == 4);
+    CHECK(test::peak(out, at(1.1), at(1.85)) < 0.25 * 0.02);
+    CHECK_THAT(test::peak(out, at(2.2), at(3.9)), WithinAbs(0.25, 0.01));
+
+    // The clip editor says who plays it after the edits.
+    ui::EditorState editor;
+    ui::ClipEditor clipEditor(app.project, editor);
+    clipEditor.setSize(900, 400);
+    editor.setEditedClip(session::clip::getId(clip));
+    clipEditor.showAudioView(ui::ClipEditor::AudioView::pitch);
+    juce::Label* note = nullptr;
+    for (auto* child : clipEditor.getChildren())
+        if (auto* label = dynamic_cast<juce::Label*>(child); label != nullptr && label->getText().contains("after these edits"))
+            note = label;
+    REQUIRE(note != nullptr);
+    CHECK(note->isVisible());
+    CHECK(note->getText().startsWith("DojoTestAra plays this clip after these edits"));
 }
 
 namespace
