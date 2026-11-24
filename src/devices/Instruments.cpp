@@ -1,5 +1,6 @@
 #include "devices/Instruments.h"
 
+#include "devices/DrumKits.h"
 #include "devices/dsp/Biquad.h"
 
 #include <algorithm>
@@ -77,7 +78,7 @@ void Sampler::prepareDsp(double sampleRate, int)
 void Sampler::writeExtraState(juce::XmlElement& xml) const
 {
     if (const auto sample = sample_.get())
-        xml.setAttribute("sample", sample->file.getFullPathName());
+        xml.setAttribute("sample", kits::referenceFor(sample->file)); // (a built-in kit sample by reference)
 }
 
 void Sampler::readExtraState(const juce::XmlElement& xml)
@@ -90,7 +91,7 @@ void Sampler::readExtraState(const juce::XmlElement& xml)
     }
 
     juce::String error;
-    if (!loadSample(juce::File(path), error))
+    if (!loadSample(kits::fileFor(path), error))
         juce::Logger::writeToLog("Sampler: " + error);
 }
 
@@ -382,7 +383,7 @@ void DrumRack::writeExtraState(juce::XmlElement& xml) const
         {
             auto* element = xml.createNewChildElement("PAD");
             element->setAttribute("index", pad);
-            element->setAttribute("sample", sample->file.getFullPathName());
+            element->setAttribute("sample", kits::referenceFor(sample->file)); // (a built-in kit sample by reference)
         }
 }
 
@@ -395,7 +396,7 @@ void DrumRack::readExtraState(const juce::XmlElement& xml)
         if (pad < 0 || pad >= kPads)
             continue;
         juce::String error;
-        loaded[static_cast<std::size_t>(pad)] = loadPadSample(pad, juce::File(element->getStringAttribute("sample")), error);
+        loaded[static_cast<std::size_t>(pad)] = loadPadSample(pad, kits::fileFor(element->getStringAttribute("sample")), error);
     }
     for (int pad = 0; pad < kPads; ++pad)
         if (!loaded[static_cast<std::size_t>(pad)])

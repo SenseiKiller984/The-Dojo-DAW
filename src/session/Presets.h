@@ -40,8 +40,14 @@ class Session;
       chain. A device of the chain loading it takes the entry of its kind at its own position: the
       second EQ on a track takes the chain's second EQ entry.
 
-    Presets come from two places: the built-in ones compiled into The Dojo (resources/presets) and
-    the user's presets folder (Documents/The Dojo/Presets, searched with its sub-folders).
+    A drum kit is a Drum Rack preset (kit="1" machine="Linn LM-1") whose pads' samples are the
+    built-in drum machines' (by "kit:" reference: devices/DrumKits.h), with a demo beat:
+
+        <DEMO tempo="108" bars="2" swing="0"> <LANE pad="0" steps="X.......X.x....."/> ... </DEMO>
+
+    Presets come from two places: the built-in ones compiled into The Dojo (resources/presets, the
+    kits in resources/presets/kits) and the user's presets folder (Documents/The Dojo/Presets,
+    searched with its sub-folders).
 */
 namespace dojo::session::presets
 {
@@ -60,6 +66,26 @@ struct DeviceSettings
     std::vector<DeviceSettings> loop;
 };
 
+/** A drum kit's demo beat: steps (sixteenths) per pad, played at its own tempo. */
+struct DemoBeat
+{
+    struct Lane
+    {
+        int pad = 0;        ///< Drum Rack pad, 0-15
+        juce::String steps; ///< one character per sixteenth: X loud, x normal, o soft, anything else a rest
+    };
+    double tempo = 110.0;   ///< BPM
+    int bars = 2;           ///< (of 4/4, sixteen steps each)
+    double swing = 0.0;     ///< 0-0.5: how far every second sixteenth is played late, in sixteenths
+    std::vector<Lane> lanes;
+
+    [[nodiscard]] bool isEmpty() const noexcept { return lanes.empty(); }
+    /** The beat played for a kit with none of its own (the pads of the built-in kits' layout). */
+    [[nodiscard]] static DemoBeat standard();
+    /** The velocity (0-1) of a step character; 0 for a rest. */
+    [[nodiscard]] static float velocityOf(juce::juce_wchar step) noexcept;
+};
+
 /** A preset: a name, a description and settings for one or more devices (or a whole chain). */
 struct Preset
 {
@@ -70,6 +96,14 @@ struct Preset
     std::vector<DeviceSettings> devices;
     bool builtIn = false;
     juce::File file; ///< where it was read from (none for a built-in one)
+
+    // Drum kits (kit="1": a Drum Rack preset shown as a kit, with a demo beat the browser plays).
+    bool kit = false;
+    juce::String machine; ///< the drum machine its samples come from ("Linn LM-1"), may be empty
+    DemoBeat demo;        ///< its own beat (empty: DemoBeat::standard())
+
+    /** A drum kit: marked as one, or any preset with nothing but Drum Rack settings. */
+    [[nodiscard]] bool isDrumKit() const;
 
     /**
         The settings for the device kind `key`, or nullptr when the preset does not fit it. In a

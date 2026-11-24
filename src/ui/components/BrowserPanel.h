@@ -8,6 +8,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 
 namespace dojo::ui
@@ -20,6 +21,10 @@ namespace dojo::ui
                               plug-in, grouped, with a search field. Drag one onto a track or the
                               Devices panel, or double-click (Return) to add it to the selected track.
                               Scan / rescan / search folders / blacklist live in its "..." menu.
+                              DRUM KITS (after the instruments): the built-in kits (Drum Rack
+                              presets made from the drum machines' samples) and any Drum Rack
+                              preset; selecting one plays its demo beat when the headphones button
+                              is on, and it is dragged or double-clicked like any preset.
                               Below the devices: PRESETS, the built-in presets and the user's
                               (.dojopreset files in the presets folder). Drag a preset onto a
                               device to load it, or onto the Devices panel to add a device that
@@ -70,7 +75,7 @@ public:
     void setDeviceSearch(const juce::String& query);
     /** Names of the devices and plug-ins currently listed (tests). */
     [[nodiscard]] juce::StringArray getListedDeviceNames() const;
-    /** Names of the presets currently listed (tests). */
+    /** Names of the presets currently listed, but for the drum kits (tests). */
     [[nodiscard]] juce::StringArray getListedPresetNames() const;
     /** The drag description of the listed preset called `name` (tests; empty when not listed). */
     [[nodiscard]] juce::String getPresetDragDescription(const juce::String& name) const;
@@ -80,6 +85,12 @@ public:
     [[nodiscard]] bool isPreviewEnabled() const noexcept { return previewEnabled_; }
     /** Previews `file` if previewing is on (what selecting a file does). */
     void fileSelected(const juce::File& file);
+    /** Plays the drum kit's demo beat if previewing is on (what selecting a kit does). */
+    void kitSelected(const session::presets::Preset& kit);
+    /** Names of the drum kits currently listed (tests). */
+    [[nodiscard]] juce::StringArray getListedKitNames() const;
+    /** Selects the listed preset or kit called `name`, as a click would (tests); false if not listed. */
+    bool selectListedPreset(const juce::String& name);
     /** The file being previewed right now (none when silent). */
     [[nodiscard]] juce::File getPreviewingFile() const
     {
@@ -137,6 +148,7 @@ private:
     juce::File shownPreviewFile_;
     int slowTicks_ = 0;
     juce::String presetFolderSignature_; ///< what the presets folder held when last read
+    std::map<juce::String, juce::AudioBuffer<float>> demoCache_; ///< kits' demo beats, by source id and rate
 
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::Rectangle<int> devicesHeader_;

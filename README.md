@@ -436,7 +436,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 - **Wavetable**: two morphing wavetable oscillators (eight band-limited tables), unison up to 8, sub and noise, multimode filter, three envelopes, two LFOs and an 8-slot modulation matrix.
 - **Operator**: 4-operator FM with 11 algorithms, per-operator waveform, ratio or fixed frequency, envelope and velocity, feedback, filter with envelope, pitch envelope and LFO.
 - **Sampler**: polyphonic, ADSR, root note, tuning, start/end and loop; drop a file on it.
-- **Drum Rack**: 16 pads (drag samples onto any pad from the browser or the file manager), per-pad volume, pan, pitch, choke groups and **outputs** — one click creates a return track for each pad output (multi-out).
+- **Drum Rack**: 16 pads (drag samples onto any pad from the browser or the file manager), per-pad volume, pan, pitch, choke groups and **outputs** — one click creates a return track for each pad output (multi-out). Comes with **built-in drum kits** (below).
 - **Impulse**: 8 sample slots (drag onto any slot) with start, transpose, drive, transient, decay, filter, pan, volume and velocity per slot; slots 7 and 8 can choke each other (hi-hats).
 - **Analog**: vintage subtractive synthesis.
   - Two band-limited oscillators (sine, saw, rectangle with width and PWM, noise) with octave, semitone, fine tuning, pitch modulation by LFO 1, and a balance between the two filters; oscillator 2 can hard-sync to oscillator 1. Noise with colour.
@@ -555,6 +555,21 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Channel EQ**: low cut (80 Hz), low shelf -3 dB, mid +6 dB at 3 kHz, high shelf +5.5 dB, output -1.5 dB.
   - Net result on either device: about -18 dB at 35 Hz, +4.5 dB at 3 kHz and +2.5 to +3.5 dB from 10 kHz up.
 
+**Drum kits**: built-in kits for the Drum Rack, made from five classic drum machines' samples, every pad already arranged: sample, level, pan and choke group (hats choke each other).
+- **16 kits from 5 machines**, and every one of their 191 samples is on a pad of at least one kit:
+  - **Linn LM-1** (19 samples): *LM-1 Kit*, *LM-1 Alt Kit*.
+  - **Linn LM-2** (23): *LM-2 Kit* (the hard hits), *LM-2 Soft Kit*.
+  - **LinnDrum** (30): *LinnDrum Kit*, *LinnDrum Tuned Kit* (the tuned-down and -up sounds), *LinnDrum Percussion Kit* (every conga tuning).
+  - **AdrenaLinn** (40): *AdrenaLinn Kit*, *AdrenaLinn Kit 2*, *AdrenaLinn Sub Kit* (its sub kicks and the rest of its kicks and snares).
+  - **Linn 9000** (79): *Linn 9000 Kit* and *Kit 2* to *Kit 5*, and *Linn 9000 Selector Kit* (its other kicks, crashes and open hats).
+- **One layout** for every kit, General MIDI where it can be (pads C1-D#2): kick, side stick or rim, snare, clap, second snare, low tom, closed hat, mid tom, second hat, high tom, open hat, two percussion, crash, percussion, ride. Toms and congas go low to high by their measured pitch.
+- They are in the browser's **DRUM KITS** list (after the instruments; search "kit", a machine, or a sound). **Select a kit to hear its demo beat** (its own groove at its own tempo, played by a Drum Rack with the kit, as on a track) when the headphones button is on, like previewing a file; the preview strip shows it and its drum lights up while it plays. Walk through the kits with the arrow keys.
+- **Double-click** a kit to add a Drum Rack with it to the selected track (or a new instrument track, both named after the kit); a track that already has a Drum Rack loads the kit into it. Drag one onto a track, the Devices panel or a Drum Rack, or pick it in the Drum Rack's **≡** presets menu. One undo step each.
+- The samples are built into The Dojo and unpacked into *Documents/The Dojo/Library/Drum Machines/<machine>* the first time a kit of that machine is used, so they are also there to drag from (add that folder to the browser's folders). Projects and presets save them as **kit references**, not paths, so a project using them opens on any computer.
+- Your own Drum Rack presets (Save Preset...) are listed with the kits too, previewed with a standard beat.
+
+  ![The browser's drum kits: the Linn 9000 Kit on a new track's Drum Rack, and the AdrenaLinn Sub Kit's demo beat playing (its drum lit, the preview strip below)](docs/images/drum-kits.png)
+
 **Preset chains**: a chain preset is a whole device chain in one `.dojopreset` file: every device in order, each with its own settings and its role in the chain as its name ("Subtractive EQ", "Slapback Delay"). A chain can use the same kind of device more than once.
 - To add one, double-click it in the browser's **PRESET CHAINS** list, drag it onto a track or the Devices panel, or pick it in **+ Add Device > Preset Chains**. Its devices go after the track's own, and adding them is one undo step.
 - Dropped onto one device, a chain loads only that device's part. The device takes the entry of its kind at its own position, so the second EQ on a track takes the chain's second EQ.
@@ -589,7 +604,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
 2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop.
 3. The bottom panel has four tabs: **Mixer** (F3), **Devices** of the selected track (F4), the **Editor** (F5) for the clip you double-clicked and the **Clip List** (F6). In the mixer, double-click the volume or pan value under a fader (or the master's GAIN) to type it: `-6`, `-inf`, `C`, `L20`, `R35`.
-4. The browser lists devices, plug-ins and presets at the top (with search, by name, kind or what it is for: "comp" also finds The Glue, "sibilance" the De-Esser; drag one onto a track, a device or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
+4. The browser lists devices, plug-ins and presets at the top (with search, by name, kind or what it is for: "comp" also finds The Glue, "sibilance" the De-Esser; drag one onto a track, a device or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Select a **drum kit** to hear its demo beat. Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
 5. Export with **Ctrl+R**; save with **Ctrl+S**.
 
 | Keys | Action |
@@ -702,7 +717,9 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning, the threadin
 ```
 cmake/        build options, compiler policy, pinned dependencies
 docs/         architecture
-resources/    embedded fonts and built-in presets (presets/*.dojopreset)
+resources/    embedded fonts, built-in presets (presets/*.dojopreset), drum kits (presets/kits/) and their
+              drum machines' samples (kits/<machine>.zip)
+tools/        drumkits/make_kits.py: builds the drum kits and sample archives from the original sample sets
 scripts/      setup and build helpers (bash + PowerShell)
 src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), musical time
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
@@ -752,4 +769,6 @@ third_party/  vendored LAME
 
 No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). The ARA SDK is Apache 2.0. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.
 
-Product and company names mentioned here (Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.
+The built-in drum kits' samples are recordings of Linn drum machines (LM-1, LM-2, LinnDrum, Linn 9000 and the AdrenaLinn), supplied for the project and included as they came (only renamed). Whoever distributes The Dojo must make sure they may redistribute these samples.
+
+Product and company names mentioned here (Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes, Linn, LinnDrum, LM-1, Linn 9000, AdrenaLinn, Roger Linn Design and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.

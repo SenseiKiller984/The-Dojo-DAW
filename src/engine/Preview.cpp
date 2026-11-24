@@ -174,10 +174,57 @@ bool PreviewService::preview(const juce::File& file)
         jobGeneration_ = ++generation_;
         decodeDone_ = false;
         currentFile_ = file;
+        currentName_ = file.getFileName();
     }
     engine_.getPreviewPlayer().stop();
     engine_.getPreviewPlayer().collectGarbage();
     notify();
+    return true;
+}
+
+bool PreviewService::preview(const juce::String& name, const juce::AudioBuffer<float>& audio, double sampleRate)
+{
+    const double rate = engine_.getSampleRate();
+    if (!engine_.isPrepared() || rate <= 0.0 || sampleRate <= 0.0 || audio.getNumSamples() == 0 || audio.getNumChannels() == 0)
+        return false;
+
+    auto sound = std::make_shared<PreviewSound>();
+    sound->name = name;
+    sound->sampleRate = rate;
+    const double seconds = std::min(static_cast<double>(audio.getNumSamples()) / sampleRate, kMaxSeconds);
+    sound->truncated = static_cast<double>(audio.getNumSamples()) / sampleRate > kMaxSeconds;
+    sound->totalFrames = std::max(1, static_cast<int>(std::ceil(seconds * rate)));
+    sound->audio.setSize(2, sound->totalFrames);
+    sound->audio.clear();
+    const double ratio = sampleRate / rate; // (source frames per output frame)
+    for (int c = 0; c < 2; ++c)
+    {
+        const int from = std::min(c, audio.getNumChannels() - 1);
+        if (std::abs(ratio - 1.0) < 1.0e-9)
+        {
+            sound->audio.copyFrom(c, 0, audio, from, 0, std::min(sound->totalFrames, audio.getNumSamples()));
+            continue;
+        }
+        juce::LagrangeInterpolator interpolator;
+        const int available = static_cast<int>(std::floor(static_cast<double>(audio.getNumSamples()) / ratio)) - 4;
+        const int frames = juce::jlimit(0, sound->totalFrames, available);
+        interpolator.process(ratio, audio.getReadPointer(from), sound->audio.getWritePointer(c), frames);
+    }
+    sound->framesReady.store(sound->totalFrames, std::memory_order_release);
+
+    {
+        const std::lock_guard lock(jobMutex_);
+        if (decoding_ != nullptr)
+            decoding_->cancelled.store(true);
+        decoding_.reset();
+        jobPending_ = false;
+        decodeDone_ = true;
+        ++generation_;
+        currentFile_ = juce::File();
+        currentName_ = name;
+    }
+    engine_.getPreviewPlayer().play(sound);
+    engine_.getPreviewPlayer().collectGarbage();
     return true;
 }
 
@@ -205,6 +252,17 @@ juce::File PreviewService::getCurrentFile() const
 {
     const std::lock_guard lock(jobMutex_);
     return currentFile_;
+}
+
+juce::String PreviewService::getCurrentName() const
+{
+    const std::lock_guard lock(jobMutex_);
+    return currentName_;
+}
+
+double PreviewService::getSampleRate() const noexcept
+{
+    return engine_.isPrepared() ? engine_.getSampleRate() : 0.0;
 }
 
 float PreviewService::getProgress() const noexcept
@@ -273,6 +331,7 @@ void PreviewService::run()
 
         auto sound = std::make_shared<PreviewSound>();
         sound->file = file;
+        sound->name = file.getFileName();
         sound->sampleRate = rate;
         const double seconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
         sound->truncated = seconds > kMaxSeconds;

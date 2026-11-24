@@ -23,6 +23,8 @@ add_library(dojo_session STATIC
     GraphCompiler.h
     MediaInfo.cpp
     MediaInfo.h
+    DrumKitDemo.cpp
+    DrumKitDemo.h
     Presets.cpp
     Presets.h
     Project.cpp

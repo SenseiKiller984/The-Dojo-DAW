@@ -41,7 +41,8 @@ src/
             CvDevices (CV/Gate to modular synths through DC-coupled outputs: CV Instrument with
             calibration, CV Triggers, CV Clock, CV Utility; CV In as a modulation source);
             dsp/ (biquads, SynthCore: envelopes, ZDF filters, LFOs,
-            band-limited mipmapped wavetables); SampleSlot (RT-safe sample hand-over); registry
+            band-limited mipmapped wavetables); SampleSlot (RT-safe sample hand-over); DrumKits
+            (the built-in drum machines' samples: unpacked on demand, "kit:" references); registry
   plugins/  ClapPluginFormat (CLAP host), PluginManager (formats, known list, out-of-process scan)
   scanner/  dojo-plugin-scanner: opens one plug-in file and reports what it contains
   video/    VideoSource decoders (built-in Motion-JPEG AVI, FFmpeg, Media Foundation), FrameServer
@@ -53,7 +54,9 @@ src/
             recording), Exporter, AraHost (the ARA documents ARA plug-ins see), AudioEdits (pitch
             and spectral edits of clips: background analysis and renders), audioedit/ (Stft,
             PitchAnalysis: YIN and multi-f0 notes, PitchRender: the peak-shifting vocoder,
-            Spectral: region operations, de-noise, de-hum, spectrograms), Project (file I/O)
+            Spectral: region operations, de-noise, de-hum, spectrograms), Presets (device presets,
+            chains and drum kits), DrumKitDemo (a kit's demo beat rendered by a Drum Rack), Project
+            (file I/O)
   ui/       look-and-feel and themes (theme/: a palette the active theme writes; switching rebuilds
             the main component, keeping the view), Preferences + PreferencesWindow,
             MainComponent (commands, menus, document actions), arranger, mixer,
@@ -66,7 +69,8 @@ src/
             browser (devices/plug-ins and user folders, search, preview; BrowserDrag carries file
             paths to any drop target), transport, export dialog, EditorState (selection, grid, clipboard)
   app/      JUCEApplication (UI-thread entry), MainWindow, settings, CLI options, smoke test
-resources/  embedded fonts (OFL)
+resources/  embedded fonts (OFL), built-in presets and drum kits, the drum machines' sample archives
+tools/      drumkits/make_kits.py (builds the kits and archives from the original sample sets)
 tests/      Catch2 suite (plus a real CLAP binary and a real ARA VST3, DojoTestAra, built for the
             hosting tests)
 third_party/lame  vendored MP3 encoder
@@ -104,7 +108,7 @@ flowchart LR
 | Plug-in scanning | `PluginManager` thread + one `dojo-plugin-scanner` child process per file | A plug-in that crashes or hangs while being scanned only kills the child and gets blacklisted. |
 | Browser search | `BrowserPanel::SearchThread` | UI. Searches the added folders recursively; results are posted back to the message thread. |
 | Audio edits (2 threads) | `AudioEdits` job pool | Session. Pitch analysis, spectral and pitch renders of edited clips and spectrograms. Jobs read a clip's decoded source region (shared, immutable) and post their results back to the message thread, which writes them into the session; a render is written to a new file and loaded before the clip plays it. Cancelled by newer edits (a flag the jobs poll). |
-| Preview decoding | `PreviewService` thread | Engine. Decodes and resamples a previewed file into a buffer allocated up front, publishing how far it got (`framesReady`, release/acquire) so playback starts before decoding ends. The audio thread adds the sound to the device output after the mix (never metered, recorded or exported); sounds are handed over and retired like `SampleSlot`. |
+| Preview decoding | `PreviewService` thread | Engine. Decodes and resamples a previewed file into a buffer allocated up front, publishing how far it got (`framesReady`, release/acquire) so playback starts before decoding ends. Audio made for previewing (a drum kit's demo beat) is handed over whole, resampled on the message thread if needed. The audio thread adds the sound to the device output after the mix (never metered, recorded or exported); sounds are handed over and retired like `SampleSlot`. |
 
 ## 4. Real-time rules and how they are enforced
 
@@ -257,6 +261,7 @@ DOJO_SESSION  tempo (the start tempo), loop, speed, keep pitch, transpose, maste
   - **Editors and transport.** For a clip on a bound track, the clip editor embeds the plug-in's editor (`createEditorAndMakeActive`, unless it is open in its own window) and passes the selection to its editor view (`showSelection` → `notifySelection`). The plug-in's transport requests are posted to the message thread: play, stop and locate go to the engine controller, and the cycle range and switch to the session's loop.
 - **Tempo map.** `time::TempoMap` is built from TEMPOMAP whenever it changes and held, immutable and shared, by the session and the render graph (the audio thread never sees a map being built). Tempo is linear in beats within a segment, so a beat's time is closed-form (60 / k · ln(t / t0)); curves are sub-ramps sampled evenly in beats and in tempo. Signatures change at bar starts and bar|beat|tick counts in the signature's beat unit. Tempo edits retime MIDI clips (musical: they keep their beats); audio, video, automation and time-locked clips keep their seconds.
 - **Audio edits.** `AudioEdits` (owned by `Project`) keeps, per edited clip, its decoded source region (`Material`, shared with the jobs), the spectral result (keyed by the operations) and the pitch renderer's per-span cache. Every edit is an undoable change of AUDIOEDIT; a listener marks the clip dirty and, 120 ms later, a background render runs: the spectral operations on the region, then the pitch edits on their result (only edited spans, crossfaded in, cached), written with the rest of the source into a new 32-bit float WAV in the render folder. The file is loaded through `AudioAssetCache` before the clip's `file` (set without undo) points at it, so playback never meets a missing file; the previous render is deleted when nothing refers to it. Undo or redo change AUDIOEDIT and so render again; removing AUDIOEDIT gives the clip its source back. Opening a project re-renders what is missing; exports wait (`waitUntilIdle`).
+- **Drum kits.** A kit is a Drum Rack preset (`kit="1"`, `machine`, and a DEMO of step lanes) compiled in from resources/presets/kits. Its pads name their samples as `kit:<machine>/<sample>.wav`. `devices::kits` resolves such a reference to `<library>/<machine>/<sample>.wav`, unpacking the machine's archive (resources/kits/<machine>.zip, binary data, deflated) into the library folder first if the file is missing: one machine at a time under a mutex, each sample written to a temporary file and moved into place. Drum Rack, Impulse and Sampler write a sample inside the library back as its reference (`referenceFor`), so projects and presets do not depend on where the library is. The browser's DRUM KITS list previews a kit by rendering its demo (`presets::renderDemo`: a `DrumRack` restored from the kit, fed the lanes' note-ons with swing at the engine's rate, ring-out faded, peak under -1 dBFS; a few kits' renders cached), then `PreviewService::preview(name, audio, rate)` hands the finished buffer to the PreviewPlayer like a decoded file.
 - **Files.** A session is saved as XML (`.dojo`, format version 2; version 1 files still load). Clip paths are stored both absolute and relative to the session file, and the relative path wins on load.
 - **Audio.** `AudioAssetCache` decodes files up to 10 minutes into memory and streams longer ones from disk, with a min/max peak overview for drawing either way.
 

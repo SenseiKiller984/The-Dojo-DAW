@@ -33,6 +33,8 @@ add_library(dojo_devices STATIC
     HardwareInsert.h
     Impulse.cpp
     Impulse.h
+    DrumKits.cpp
+    DrumKits.h
     Instruments.cpp
     Instruments.h
     LfoDevice.cpp
@@ -85,6 +87,6 @@ add_library(dojo::devices ALIAS dojo_devices)
 
 target_link_libraries(dojo_devices
     PUBLIC  dojo::core dojo::juce
-    PRIVATE dojo::stretch)
+    PRIVATE dojo::stretch dojo::resources)
 dojo_apply_project_warnings(dojo_devices)
 set_target_properties(dojo_devices PROPERTIES FOLDER "Dojo")

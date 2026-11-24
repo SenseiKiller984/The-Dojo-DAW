@@ -1,6 +1,7 @@
 #include "ui/components/BrowserPanel.h"
 
 #include "devices/DeviceRegistry.h"
+#include "session/DrumKitDemo.h"
 #include "ui/BrowserDrag.h"
 #include "ui/PresetActions.h"
 #include "ui/theme/DojoTheme.h"
@@ -11,6 +12,12 @@ namespace dojo::ui
 {
 namespace
 {
+/** What the preview strip calls a drum kit's demo beat. */
+juce::String demoNameOf(const session::presets::Preset& kit)
+{
+    return kit.name + " (demo beat)";
+}
+
 constexpr int kHeaderHeight = 34;
 constexpr int kSectionHeader = 28;
 constexpr int kSearchHeight = 30;
@@ -396,10 +403,33 @@ public:
     {
         juce::StringArray names;
         for (const auto& row : rows_)
-            if (row.preset != nullptr)
+            if (row.preset != nullptr && !row.preset->isDrumKit())
                 names.add(row.preset->name);
         return names;
     }
+
+    [[nodiscard]] juce::StringArray getListedKitNames() const
+    {
+        juce::StringArray names;
+        for (const auto& row : rows_)
+            if (row.preset != nullptr && row.preset->isDrumKit())
+                names.add(row.preset->name);
+        return names;
+    }
+
+    /** Selects the listed row of the preset called `name` (as a click would); false if not listed. */
+    bool selectPreset(const juce::String& name)
+    {
+        for (std::size_t i = 0; i < rows_.size(); ++i)
+            if (rows_[i].preset != nullptr && rows_[i].preset->name == name)
+            {
+                list_.selectRow(static_cast<int>(i));
+                return true;
+            }
+        return false;
+    }
+
+    void repaintRows() { list_.repaint(); }
 
     [[nodiscard]] juce::String getPresetDragDescription(const juce::String& name) const
     {
@@ -441,6 +471,21 @@ private:
             }
         };
         addGroup("INSTRUMENTS", false, 0);
+        // Drum kits: Drum Rack presets with their pads arranged (the built-in drum machines' first).
+        {
+            bool first = true;
+            for (const auto& preset : presets_)
+            {
+                if (!preset.isDrumKit())
+                    continue;
+                if (!matchesAll(preset.name + " kit drum kit drums drum rack " + preset.machine + " " + preset.description, terms))
+                    continue;
+                if (first)
+                    rows_.push_back({"DRUM KITS", nullptr, nullptr});
+                first = false;
+                rows_.push_back({{}, nullptr, &preset});
+            }
+        }
         addGroup("MIDI EFFECTS", false, 1);
         addGroup("AUDIO EFFECTS", false, 2);
         const auto addPresets = [&](const juce::String& heading, bool chains)
@@ -448,7 +493,7 @@ private:
             bool first = true;
             for (const auto& preset : presets_)
             {
-                if (preset.chain != chains)
+                if (preset.chain != chains || preset.isDrumKit())
                     continue;
                 // (searchable by name, what it is for, its devices' roles and kinds)
                 juce::String text = preset.name + (chains ? " chain " : " preset ") + preset.category;
@@ -488,6 +533,28 @@ private:
         if (row < 0 || row >= getNumRows())
             return;
         const auto& r = rows_[static_cast<std::size_t>(row)];
+        if (r.preset != nullptr && r.preset->isDrumKit())
+        {
+            if (selected)
+                g.fillAll(colour::accent.withAlpha(0.28f));
+            // A drum: its shell and head, playing while its demo beat is.
+            const float cy = static_cast<float>(height) * 0.5f;
+            const bool playing = browser_.preview_.isPlaying() && browser_.preview_.getCurrentName() == demoNameOf(*r.preset);
+            g.setColour(playing ? colour::accentBright : colour::gold);
+            g.fillRoundedRectangle(10.0f, cy - 2.0f, 10.0f, 6.0f, 1.5f);
+            g.setColour(playing ? colour::accentBright.brighter(0.3f) : colour::gold.brighter(0.35f));
+            g.fillEllipse(10.0f, cy - 4.0f, 10.0f, 4.0f);
+            const auto detail = r.preset->machine.isNotEmpty() ? r.preset->machine : juce::String("Drum Rack");
+            g.setFont(sans(10.5f));
+            const int detailWidth = std::min(width / 2, juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), detail) + 4);
+            g.setColour(colour::textPrimary);
+            g.setFont(sans(12.5f));
+            g.drawText(r.preset->name, 26, 0, width - 34 - detailWidth, height, juce::Justification::centredLeft, true);
+            g.setColour(colour::textMuted);
+            g.setFont(sans(10.5f));
+            g.drawText(detail, width - 6 - detailWidth, 0, detailWidth, height, juce::Justification::centredRight, true);
+            return;
+        }
         if (r.preset != nullptr)
         {
             if (selected)
@@ -552,6 +619,21 @@ private:
             browser_.onPresetActivated(*preset);
     }
 
+    // Selecting a kit (a click, or the arrow keys) plays its demo beat when previewing is on; a click on
+    // the kit already selected plays it again once it has stopped.
+    void selectedRowsChanged(int lastRowSelected) override
+    {
+        if (const auto* preset = presetAt(lastRowSelected); preset != nullptr && preset->isDrumKit())
+            browser_.kitSelected(*preset);
+    }
+
+    void listBoxItemClicked(int row, const juce::MouseEvent&) override
+    {
+        if (const auto* preset = presetAt(row); preset != nullptr && preset->isDrumKit())
+            if (!browser_.preview_.isPlaying() || browser_.preview_.getCurrentName() != demoNameOf(*preset))
+                browser_.kitSelected(*preset);
+    }
+
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override { activate(row); }
     void returnKeyPressed(int row) override { activate(row); }
 
@@ -570,6 +652,10 @@ private:
         if (const auto* preset = presetAt(row))
         {
             const auto description = preset->description.isNotEmpty() ? preset->description + "\n" : juce::String();
+            if (preset->isDrumKit())
+                return description + "Drum kit" + (preset->machine.isNotEmpty() ? " (" + preset->machine + ")" : juce::String()) +
+                       ": select it to hear its demo beat (headphones on); drag onto a track or the Devices panel for a Drum Rack "
+                       "with it, onto a Drum Rack to load it, or double-click to add it to the selected track";
             if (preset->chain)
                 return description + "Chain: " + preset->getDeviceNames().joinIntoString(" > ") +
                        "\nDrag onto a track or the Devices panel to add the whole chain (or double-click to add it to the "
@@ -611,7 +697,7 @@ public:
         headphones_.shouldUseOnColours(true);
         headphones_.setOnColours(theme::colour::accentBright, theme::colour::accentBright.brighter(0.2f), theme::colour::accent);
         headphones_.setToggleState(browser_.previewEnabled_, juce::dontSendNotification);
-        headphones_.setTooltip("Preview files when they are selected");
+        headphones_.setTooltip("Preview files when they are selected, and drum kits' demo beats");
         headphones_.onClick = [this] { browser_.setPreviewEnabled(headphones_.getToggleState()); };
         addAndMakeVisible(headphones_);
 
@@ -649,13 +735,13 @@ public:
         g.fillRect(getLocalBounds().removeFromTop(1));
 
         const bool playing = browser_.preview_.isPlaying();
-        const auto file = browser_.preview_.getCurrentFile();
+        const auto name = browser_.preview_.getCurrentName();
         auto area = info_;
         g.setColour(playing ? colour::textPrimary : colour::textMuted);
         g.setFont(sans(11.5f));
         const auto text = !browser_.previewEnabled_ ? juce::String("Preview off")
-                          : file == juce::File()   ? juce::String("Select a file to preview")
-                                                   : file.getFileName();
+                          : name.isEmpty()          ? juce::String("Select a file or kit")
+                                                    : name;
         g.drawText(text, area.removeFromTop(area.getHeight() - 10), juce::Justification::bottomLeft, true);
 
         auto bar = area.removeFromTop(3).toFloat().withY(static_cast<float>(area.getY()) + 1.0f);
@@ -1092,6 +1178,36 @@ void BrowserPanel::setPreviewEnabled(bool enabled)
     folderTree_->repaint();
 }
 
+void BrowserPanel::kitSelected(const session::presets::Preset& kit)
+{
+    if (!previewEnabled_ || !kit.isDrumKit())
+        return;
+    const double rate = preview_.getSampleRate() > 0.0 ? preview_.getSampleRate() : 48000.0;
+    const auto key = kit.getSourceId() + "@" + juce::String(rate);
+    auto cached = demoCache_.find(key);
+    if (cached == demoCache_.end())
+    {
+        if (demoCache_.size() >= 8) // (a few kits' beats, a few MB each)
+            demoCache_.clear();
+        cached = demoCache_.emplace(key, session::presets::renderDemo(kit, rate)).first;
+    }
+    if (cached->second.getNumSamples() > 0 && preview_.preview(demoNameOf(kit), cached->second, rate))
+    {
+        previewStrip_->repaint();
+        deviceList_->repaintRows();
+    }
+}
+
+juce::StringArray BrowserPanel::getListedKitNames() const
+{
+    return deviceList_->getListedKitNames();
+}
+
+bool BrowserPanel::selectListedPreset(const juce::String& name)
+{
+    return deviceList_->selectPreset(name);
+}
+
 void BrowserPanel::fileSelected(const juce::File& file)
 {
     if (!previewEnabled_ || !file.existsAsFile())
@@ -1109,6 +1225,8 @@ void BrowserPanel::timerCallback()
     const auto file = playing ? preview_.getCurrentFile() : juce::File();
     if (playing || playing != wasPlaying_)
         previewStrip_->repaint();
+    if (playing != wasPlaying_)
+        deviceList_->repaintRows(); // (a kit's drum lit while its demo plays)
     if (file != shownPreviewFile_)
         folderTree_->repaint();
     wasPlaying_ = playing;

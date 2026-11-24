@@ -247,6 +247,16 @@ juce::ValueTree addDevice(session::Project& project, plugins::PluginManager& plu
         if (!device.isValid())
             break;
         (void) presets::apply(preset, device, session, project.getDevices()); // (same undo step)
+        if (preset.isDrumKit())
+        {
+            // A kit names its Drum Rack, and the track made for it (as in other DAWs' kit racks).
+            auto* um = &session.getUndoManager();
+            auto renamed = device;
+            renamed.setProperty(session::ids::name, preset.name, um);
+            auto track = session::Session::getDeviceOwner(device);
+            if (track.hasType(session::ids::track) && track != owner && session::track::getName(track) == choice->name)
+                session::track::setName(track, preset.name, um);
+        }
         if (message != nullptr)
             *message = "Added " + choice->name + " with " + quoted(preset.name);
         return device;

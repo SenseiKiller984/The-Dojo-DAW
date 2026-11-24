@@ -23,7 +23,8 @@ class AudioEngine;
 */
 struct PreviewSound
 {
-    juce::File file;
+    juce::File file;   ///< (none for audio previewed by name)
+    juce::String name; ///< what it is
     juce::AudioBuffer<float> audio; ///< 2 channels x totalFrames
     int totalFrames = 0;
     double sampleRate = 0.0;
@@ -107,10 +108,20 @@ public:
 
     /** Starts previewing `file`. False if no audio device is running or the file is not audio. */
     bool preview(const juce::File& file);
+    /**
+        Previews audio made for the purpose (a drum kit's demo beat), called `name`: 1 or 2
+        channels at `sampleRate` (resampled when it is not the engine's). Up to kMaxSeconds. False
+        if no audio device is running or there is no audio.
+    */
+    bool preview(const juce::String& name, const juce::AudioBuffer<float>& audio, double sampleRate);
     void stop();
     [[nodiscard]] bool isPlaying() const noexcept;
-    /** The file being previewed (or last previewed). */
+    /** The file being previewed (or last previewed); none for audio previewed by name. */
     [[nodiscard]] juce::File getCurrentFile() const;
+    /** What is being previewed (or was last): the file's name, or the audio's. */
+    [[nodiscard]] juce::String getCurrentName() const;
+    /** The engine's sample rate (0 when it is not running): what previewed audio is best made at. */
+    [[nodiscard]] double getSampleRate() const noexcept;
     [[nodiscard]] float getProgress() const noexcept;
     void setVolume(float linearGain) noexcept;
     [[nodiscard]] float getVolume() const noexcept;
@@ -136,6 +147,7 @@ private:
     bool decodeDone_ = true; ///< the latest job was decoded completely (or could not be)
     std::shared_ptr<PreviewSound> decoding_;
     juce::File currentFile_;
+    juce::String currentName_;
 };
 
 } // namespace dojo::engine

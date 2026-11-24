@@ -1,5 +1,7 @@
 #include "devices/Impulse.h"
 
+#include "devices/DrumKits.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -93,7 +95,7 @@ void Impulse::writeExtraState(juce::XmlElement& xml) const
         {
             auto* element = xml.createNewChildElement("SLOT");
             element->setAttribute("index", slot);
-            element->setAttribute("sample", sample->file.getFullPathName());
+            element->setAttribute("sample", kits::referenceFor(sample->file)); // (a built-in kit sample by reference)
         }
 }
 
@@ -106,7 +108,7 @@ void Impulse::readExtraState(const juce::XmlElement& xml)
         if (slot < 0 || slot >= kSlots)
             continue;
         juce::String error;
-        loaded[static_cast<std::size_t>(slot)] = loadSlotSample(slot, juce::File(element->getStringAttribute("sample")), error);
+        loaded[static_cast<std::size_t>(slot)] = loadSlotSample(slot, kits::fileFor(element->getStringAttribute("sample")), error);
     }
     for (int slot = 0; slot < kSlots; ++slot)
         if (!loaded[static_cast<std::size_t>(slot)])

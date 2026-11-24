@@ -16,6 +16,9 @@ constexpr const char* kPresetTag = "DOJO_PRESET";
 constexpr const char* kDeviceTag = "DEVICE";
 constexpr const char* kNativeStateTag = "DOJO_DEVICE";
 constexpr const char* kLoopTag = "LOOP";
+constexpr const char* kDemoTag = "DEMO";
+constexpr const char* kLaneTag = "LANE";
+constexpr const char* kDrumRackKey = "builtin:drumrack";
 
 /** Writes a device's settings (and, for chains, its insert loop's devices) as a DEVICE element. */
 void writeDevice(juce::XmlElement& parent, const DeviceSettings& d)
@@ -117,6 +120,39 @@ private:
 } // namespace
 
 //==================================================================================================
+DemoBeat DemoBeat::standard()
+{
+    // A plain pop beat on the built-in kits' layout: kick, snare, clap, closed and open hat, crash.
+    DemoBeat beat;
+    beat.tempo = 110.0;
+    beat.bars = 2;
+    beat.lanes = {{0, "X.......X.x.....X.......X.....x."},
+                  {2, "....X.......X.......X.......X..."},
+                  {3, "............X...............X..."},
+                  {6, "x.x.x.x.x.x.x.x.x.x.x.x.x.x....."},
+                  {10, "..............................x."},
+                  {13, "X..............................."}};
+    return beat;
+}
+
+float DemoBeat::velocityOf(juce::juce_wchar step) noexcept
+{
+    switch (step)
+    {
+        case 'X': return 1.0f;
+        case 'x': return 0.75f;
+        case 'o': return 0.5f;
+        default: return 0.0f;
+    }
+}
+
+bool Preset::isDrumKit() const
+{
+    if (chain || devices.size() != 1 || devices.front().key != kDrumRackKey)
+        return false;
+    return kit || category.isEmpty() || category == "Drums";
+}
+
 const DeviceSettings* Preset::findFor(const juce::String& key, int occurrence) const
 {
     if (key.isEmpty())
@@ -176,9 +212,28 @@ std::unique_ptr<juce::XmlElement> Preset::toXml() const
         xml->setAttribute("category", category);
     if (chain)
         xml->setAttribute("chain", 1);
+    if (kit)
+    {
+        xml->setAttribute("kit", 1);
+        if (machine.isNotEmpty())
+            xml->setAttribute("machine", machine);
+    }
 
     for (const auto& d : devices)
         writeDevice(*xml, d);
+    if (!demo.isEmpty())
+    {
+        auto* element = xml->createNewChildElement(kDemoTag);
+        element->setAttribute("tempo", demo.tempo);
+        element->setAttribute("bars", demo.bars);
+        element->setAttribute("swing", demo.swing);
+        for (const auto& lane : demo.lanes)
+        {
+            auto* l = element->createNewChildElement(kLaneTag);
+            l->setAttribute("pad", lane.pad);
+            l->setAttribute("steps", lane.steps);
+        }
+    }
     return xml;
 }
 
@@ -200,6 +255,21 @@ std::optional<Preset> Preset::fromXml(const juce::XmlElement& xml, juce::String&
     preset.description = xml.getStringAttribute("description");
     preset.category = xml.getStringAttribute("category");
     preset.chain = xml.getBoolAttribute("chain", false);
+    preset.kit = !preset.chain && xml.getBoolAttribute("kit", false);
+    preset.machine = xml.getStringAttribute("machine");
+    if (const auto* demo = xml.getChildByName(kDemoTag))
+    {
+        preset.demo.tempo = juce::jlimit(20.0, 400.0, demo->getDoubleAttribute("tempo", 110.0));
+        preset.demo.bars = juce::jlimit(1, 16, demo->getIntAttribute("bars", 2));
+        preset.demo.swing = juce::jlimit(0.0, 0.5, demo->getDoubleAttribute("swing", 0.0));
+        for (const auto* lane : demo->getChildWithTagNameIterator(kLaneTag))
+        {
+            const int pad = lane->getIntAttribute("pad", -1);
+            const auto steps = lane->getStringAttribute("steps");
+            if (pad >= 0 && pad < 16 && steps.isNotEmpty())
+                preset.demo.lanes.push_back({pad, steps});
+        }
+    }
     for (const auto* element : xml.getChildWithTagNameIterator(kDeviceTag))
     {
         auto d = readDevice(*element, preset.chain);
