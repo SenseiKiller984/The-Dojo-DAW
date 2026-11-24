@@ -19,3 +19,6 @@ Thumbs.db
 # Crash dumps / logs from local runs
 *.dmp
 core.*
+
+# Python bytecode (tools)
+__pycache__/
