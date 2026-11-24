@@ -5,8 +5,11 @@
 /**
     The built-in drum machines' samples (the drum kits' library).
 
-    Each machine's samples are compiled into The Dojo as one archive (resources/kits/<Machine>.zip)
-    and unpacked, all at once, into the library folder the first time one of them is needed:
+    Each machine's samples are one archive of their WAV files: compiled into The Dojo for the Linn
+    machines (resources/kits/<Machine>.zip), or, for the Roland ones (too big to compile in), a file
+    beside the application ("Drum Machines/<Machine>.zip", copied there by the build from
+    resources/drum-machines). A machine's samples are unpacked, all at once, into the library folder
+    the first time one of them is needed:
 
         <library>/<Machine>/<Sample>.wav       (Documents/The Dojo/Library/Drum Machines by default)
 
@@ -21,11 +24,19 @@ namespace dojo::devices::kits
 {
 
 inline constexpr const char* kReferencePrefix = "kit:";
+/** The folder beside the application holding the archives that are not compiled in. */
+inline constexpr const char* kArchiveFolderName = "Drum Machines";
 
 /** The drum machines whose samples are built in ("AdrenaLinn", "Linn 9000", ...), sorted. */
 [[nodiscard]] juce::StringArray getMachines();
 /** A machine's sample file names ("Kick 1.wav", ...), sorted; empty for an unknown machine. */
 [[nodiscard]] juce::StringArray getSampleNames(const juce::String& machine);
+
+/** Where archives that are not compiled in are looked for: "Drum Machines" beside the application, then
+    any folder added. */
+[[nodiscard]] juce::Array<juce::File> getArchiveFolders();
+/** Adds a folder to look for archives in (tests, development builds). */
+void addArchiveFolder(const juce::File& folder);
 
 /** Where the samples are unpacked (Documents/The Dojo/Library/Drum Machines unless set). */
 [[nodiscard]] juce::File getLibraryFolder();

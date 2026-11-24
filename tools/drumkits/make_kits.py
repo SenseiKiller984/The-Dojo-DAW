@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
-Builds The Dojo's built-in drum kits from the five Linn sample sets.
+Builds The Dojo's built-in drum kits from the Linn and Roland sample sets.
 
-    python3 tools/drumkits/make_kits.py <folder with the original sample folders>
+    python3 tools/drumkits/make_kits.py <folder with the original sample folders> [<another> ...]
 
-The folder holds the sets as they came ("Linn LM-1/", "Linn LM-2/", "Linn Linndrum/",
-"Linn AdrenaLinn1/", "Linn 9000/", each a folder of WAV files, possibly one level down). Writes:
+The folders hold the sets as they came ("Linn LM-1/", "Linn LM-2/", "Linn Linndrum/",
+"Linn AdrenaLinn1/", "Linn 9000/", "Roland MC-202/", "Roland MC-303/", "Roland MC-808/",
+"Roland R8 MKII/", "Roland R-70/": folders of WAV files, possibly one level down, the R-70's with
+sub-folders). Writes:
 
-  resources/kits/<Machine>.zip              every sample of a machine, renamed readably
-                                            (the bytes as they came), compiled into the app
+  resources/kits/<Machine>.zip              the Linn machines' samples, renamed readably (the WAV
+                                            files' bytes as they came), compiled into the app
+  resources/drum-machines/<Machine>.zip     the Roland machines' samples, likewise (WAV, as they
+                                            came): too big to compile in (88 MB), so they are
+                                            copied beside the application ("Drum Machines")
   resources/presets/kits/<Kit>.dojopreset   the kits: Drum Rack presets with every pad
                                             arranged (sample, level, pan, choke) and a demo beat
+
+Besides the playable kits (below and tools/drumkits/roland.py), every machine gets selector kits
+for the samples no playable kit uses, one kind of sound each ("R-70 Kicks 2"), so that every sample
+is on a pad. Their demo plays each pad in turn.
 
 and checks that every sample of every machine is on a pad of at least one kit. A kit's pads hold
 "kit:<Machine>/<Sample>.wav" references; The Dojo unpacks a machine's samples into its library
@@ -25,9 +34,13 @@ Hats on pads 7, 9 and 11 choke each other (choke group 1). Percussion and the ex
 machine (so that every sample has a pad) use the same places where they can.
 """
 import os
+import re
 import sys
 import zipfile
 from xml.sax.saxutils import quoteattr
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import roland  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -184,6 +197,25 @@ G["selector"] = {  # kits of variants: each kick and snare heard in turn
     11: "..............x...............x.",
 }
 
+G["bassline"] = {  # the MC-202: hits on the beat, the bass notes in sixteenths
+    1: "X...X...X...X...X...X...X...X...",
+    2: "..x...x...x...x...x...x...x...x.",
+    3: "....X.......X.......X.......X...",
+    9: "X..x......x.....X..x............",
+    10: "......x.......x.......x.........",
+    11: "....................x..x......x.",
+    12: "............x.................x.",
+    13: "...............................x",
+}
+G["breakbeat"] = {  # fast broken beat for the jungle kit
+    1: "X.........X.....X.....X...X.....",
+    3: "....X.......X.o.....X..o....X...",
+    12: "..o...o..o.........o.....o..o.o.",
+    7: "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.",
+    11: "..............x...............x.",
+    14: "X...............................",
+}
+
 # --- The kits: name, machine, tempo, swing, groove, pads (1-16 -> sample), description ----------
 STD_HATS = (7, 9, 11)
 KITS = [
@@ -261,15 +293,79 @@ def is_hat(name):
     return name.startswith("Hat")
 
 
-def source_files(source_root, folder):
-    for base in (os.path.join(source_root, folder), os.path.join(source_root, folder.replace(" ", "_"), folder),
-                 os.path.join(source_root, folder.replace(" ", "_"))):
-        if os.path.isdir(base) and any(f.lower().endswith(".wav") for f in os.listdir(base)):
-            return {os.path.splitext(f)[0]: os.path.join(base, f) for f in os.listdir(base) if f.lower().endswith(".wav")}
-    sys.exit(f"no WAV files for {folder} under {source_root}")
+def source_files(source_roots, folder):
+    """ A set's WAV files, by their path in its folder without the extension ("BD/kick - (1)")."""
+    for source_root in source_roots:
+        for base in (os.path.join(source_root, folder), os.path.join(source_root, folder.replace(" ", "_"), folder),
+                     os.path.join(source_root, folder.replace(" ", "_"))):
+            if not os.path.isdir(base):
+                continue
+            found = {}
+            for directory, _, files in os.walk(base):
+                for f in files:
+                    if f.lower().endswith(".wav"):
+                        path = os.path.join(directory, f)
+                        found[os.path.splitext(os.path.relpath(path, base))[0].replace(os.sep, "/")] = path
+            if found:
+                return found
+    sys.exit(f"no WAV files for {folder} under {source_roots}")
+
+
+def category(name):
+    """ What kind of sound a sample is, from its name (the selector kits group by it)."""
+    n = name.lower()
+    words = set(re.findall(r"[a-z0-9]+", n))
+    if "kick" in words or "bass drum" in n:
+        return "Kicks"
+    if words & {"snare", "roll"}:
+        return "Snares"
+    if words & {"clap", "snap", "snaps"}:
+        return "Claps"
+    if "rim" in words or "side stick" in n or "sticks" in words:
+        return "Rims"
+    if "tom" in words:
+        return "Toms"
+    if "hat" in words:
+        return "Hats"
+    if words & {"crash", "ride", "cymbal", "china", "splash", "gong"}:
+        return "Cymbals"
+    if "bass" in words or "sub" in words:
+        return "Bass"
+    if words & {"scratch", "noise", "gun", "fx", "reverse", "shot", "blip", "heartbeat", "spark", "squash", "thriller",
+                "shadow", "air", "click", "ring", "pipe", "plate", "wheel", "ambience", "q", "rub", "can", "hit"}:
+        return "FX"
+    return "Percussion"
+
+
+# The selector kits' groups of sounds, in order.
+SELECTOR_GROUPS = [("Kicks", {"Kicks"}), ("Snares & Claps", {"Snares", "Claps", "Rims"}), ("Toms", {"Toms"}),
+                   ("Hats & Cymbals", {"Hats", "Cymbals"}), ("Percussion", {"Percussion"}), ("Bass & FX", {"Bass", "FX"})]
+
+
+def natural_key(text):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", text)]
+
+
+def selector_kits(machine, short, names, used):
+    """ Kits of the samples no playable kit uses, sixteen of one kind each, so that every one is on a pad."""
+    kits = []
+    left = sorted(names - used, key=natural_key)
+    for label, kinds in SELECTOR_GROUPS:
+        group = [n for n in left if category(n) in kinds]
+        chunks = [group[i:i + 16] for i in range(0, len(group), 16)]
+        for k, chunk in enumerate(chunks):
+            name = f"{short} {label}" + (f" {k + 1}" if len(chunks) > 1 else "")
+            pads = chunk + [None] * (16 - len(chunk))
+            kits.append((name, machine, 110, 0.0, "audition", pads,
+                         f"More of the {machine}'s {label.lower()}, one per pad: its demo plays each in turn."))
+    return kits
 
 
 def demo_xml(groove, pads, tempo, swing):
+    if groove == "audition":  # each pad in turn, in eighths
+        lanes = [f'    <LANE pad="{pad}" steps="{"." * (2 * pad) + "x" + "." * (31 - 2 * pad)}"/>'
+                 for pad in range(16) if pads[pad] is not None]
+        return f'  <DEMO tempo="{tempo}" bars="2" swing="{swing}">\n' + "\n".join(lanes) + "\n  </DEMO>\n"
     lanes = []
     for pad, steps in sorted(G[groove].items()):
         steps = (steps + "." * 32)[:32]
@@ -287,13 +383,16 @@ def kit_xml(name, machine, tempo, swing, groove, pads, description):
            f'             description={quoteattr(description)}>\n',
            '  <DEVICE key="builtin:drumrack" name="Drum Rack">\n',
            '    <DOJO_DEVICE type="builtin:drumrack" version="1">\n']
+    selector = groove == "audition"
     for pad in range(1, 17):
-        sample = pads[pad - 1]
-        level = PAD_ROLE_LEVEL.get(pad, 0.0)
-        if sample.startswith(("Crash", "Ride")):
+        sample = pads[pad - 1] or ""
+        level = 0.0 if selector else PAD_ROLE_LEVEL.get(pad, 0.0)
+        if category(sample) == "Cymbals":
             level = -6.0
-        pan = PAD_ROLE_PAN.get(pad, 0.0)
-        choke = 1 if pad in STD_HATS and is_hat(sample) else 0
+        elif selector and category(sample) == "Hats":
+            level = -3.0
+        pan = 0.0 if selector else PAD_ROLE_PAN.get(pad, 0.0)
+        choke = 1 if not selector and pad in STD_HATS and is_hat(sample) else 0
         out.append(f'      <PARAM id="pad{pad}Volume" value="{level}"/>\n')
         out.append(f'      <PARAM id="pad{pad}Pan" value="{pan}"/>\n')
         out.append(f'      <PARAM id="pad{pad}Pitch" value="0.0"/>\n')
@@ -302,25 +401,37 @@ def kit_xml(name, machine, tempo, swing, groove, pads, description):
     out.append('      <PARAM id="master" value="-3.0"/>\n')
     out.append("      <EXTRA>\n")
     for pad in range(1, 17):
-        out.append(f'        <PAD index="{pad - 1}" sample={quoteattr("kit:" + machine + "/" + pads[pad - 1] + ".wav")}/>\n')
+        if pads[pad - 1] is not None:
+            out.append(f'        <PAD index="{pad - 1}" sample={quoteattr("kit:" + machine + "/" + pads[pad - 1] + ".wav")}/>\n')
     out.append("      </EXTRA>\n    </DOJO_DEVICE>\n  </DEVICE>\n")
     out.append(demo_xml(groove, pads, tempo, swing))
     out.append("</DOJO_PRESET>\n")
     return "".join(out)
 
 
-def main():
-    if len(sys.argv) != 2:
-        sys.exit(__doc__)
-    source_root = sys.argv[1]
-    kits_dir = os.path.join(ROOT, "resources", "kits")
-    presets_dir = os.path.join(ROOT, "resources", "presets", "kits")
-    os.makedirs(kits_dir, exist_ok=True)
-    os.makedirs(presets_dir, exist_ok=True)
+SHORT_NAMES = {"Roland MC-202": "MC-202", "Roland MC-303": "MC-303", "Roland MC-808": "MC-808",
+               "Roland R-8 MKII": "R-8 MKII", "Roland R-70": "R-70", "Linn LM-1": "LM-1", "Linn LM-2": "LM-2",
+               "LinnDrum": "LinnDrum", "AdrenaLinn": "AdrenaLinn", "Linn 9000": "Linn 9000"}
 
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    source_roots = sys.argv[1:]
+    kits_dir = os.path.join(ROOT, "resources", "kits")
+    external_dir = os.path.join(ROOT, "resources", "drum-machines")
+    presets_dir = os.path.join(ROOT, "resources", "presets", "kits")
+    for d in (kits_dir, external_dir, presets_dir):
+        os.makedirs(d, exist_ok=True)
+    for old in os.listdir(presets_dir):  # (kits are written afresh)
+        if old.endswith(".dojopreset"):
+            os.remove(os.path.join(presets_dir, old))
+
+    machines = dict(MACHINES)
+    machines.update(roland.MACHINES)
     names = {}
-    for machine, (folder, renames) in MACHINES.items():
-        files = source_files(source_root, folder)
+    for machine, (folder, renames) in machines.items():
+        files = source_files(source_roots, folder)
         missing = set(files) - set(renames)
         unknown = set(renames) - set(files)
         if missing or unknown:
@@ -328,7 +439,8 @@ def main():
         if len(set(renames.values())) != len(renames):
             sys.exit(f"{machine}: two samples with the same name")
         names[machine] = set(renames.values())
-        with zipfile.ZipFile(os.path.join(kits_dir, machine + ".zip"), "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        archive_dir = external_dir if machine in roland.MACHINES else kits_dir
+        with zipfile.ZipFile(os.path.join(archive_dir, machine + ".zip"), "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             for original in sorted(files, key=lambda o: renames[o]):
                 info = zipfile.ZipInfo(renames[original] + ".wav", date_time=(2024, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
@@ -336,12 +448,22 @@ def main():
                 with open(files[original], "rb") as f:
                     z.writestr(info, f.read())
 
-    used = {m: set() for m in MACHINES}
+    used = {m: set() for m in machines}
     written = []
-    for name, machine, tempo, swing, groove, pads, description in KITS:
+    playable = KITS + roland.KITS
+    for name, machine, tempo, swing, groove, pads, description in playable:
+        for sample in pads:
+            if sample is not None:
+                used[machine].add(sample)
+    selectors = []
+    for machine in machines:
+        selectors += selector_kits(machine, SHORT_NAMES[machine], names[machine], used[machine])
+    for name, machine, tempo, swing, groove, pads, description in playable + selectors:
         if len(pads) != 16:
             sys.exit(f"{name}: {len(pads)} pads")
         for sample in pads:
+            if sample is None:
+                continue
             if sample not in names[machine]:
                 sys.exit(f"{name}: no sample {sample} in {machine}")
             used[machine].add(sample)
@@ -350,13 +472,13 @@ def main():
             f.write(kit_xml(name, machine, tempo, swing, groove, pads, description))
         written.append(path)
 
-    for machine in MACHINES:
+    for machine in machines:
         unused = sorted(names[machine] - used[machine])
         if unused:
             sys.exit(f"{machine}: samples on no pad: {unused}")
-        print(f"{machine}: {len(names[machine])} samples, all on pads")
-    print("\n".join('        "presets/kits/' + os.path.basename(p) + '"' for p in written))
-    print("\n".join('        "kits/' + m + '.zip"' for m in MACHINES))
+        kits = sum(1 for k in playable + selectors if k[1] == machine)
+        print(f"{machine}: {len(names[machine])} samples, all on pads, {kits} kits")
+    print(f"{len(written)} kits")
 
 
 if __name__ == "__main__":

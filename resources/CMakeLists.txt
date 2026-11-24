@@ -10,7 +10,14 @@
 # library folder when first used: devices/DrumKits.h). Both are made by
 # tools/drumkits/make_kits.py from the original sample sets.
 #
+# The Roland machines' samples (88 MB of WAV) are too big to compile in: their archives
+# (drum-machines/<Machine>.zip) are copied beside the application into "Drum Machines" (and beside
+# the test runner), where devices/DrumKits.h finds them: dojo_copy_drum_machines(<target>).
+#
 # Licences: both families are SIL Open Font License 1.1 — see fonts/LICENSE-*.txt.
+
+file(GLOB DOJO_KIT_PRESETS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/kits/*.dojopreset")
+file(GLOB DOJO_EMBEDDED_KITS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/kits/*.zip")
 
 juce_add_binary_data(dojo_resources
     NAMESPACE   DojoBinaryData
@@ -29,27 +36,19 @@ juce_add_binary_data(dojo_resources
         "presets/Old Radio.dojopreset"
         "presets/Gritty Bass Weight.dojopreset"
         "presets/Shimmer Bloom.dojopreset"
-        "presets/kits/LM-1 Kit.dojopreset"
-        "presets/kits/LM-1 Alt Kit.dojopreset"
-        "presets/kits/LM-2 Kit.dojopreset"
-        "presets/kits/LM-2 Soft Kit.dojopreset"
-        "presets/kits/LinnDrum Kit.dojopreset"
-        "presets/kits/LinnDrum Tuned Kit.dojopreset"
-        "presets/kits/LinnDrum Percussion Kit.dojopreset"
-        "presets/kits/AdrenaLinn Kit.dojopreset"
-        "presets/kits/AdrenaLinn Kit 2.dojopreset"
-        "presets/kits/AdrenaLinn Sub Kit.dojopreset"
-        "presets/kits/Linn 9000 Kit.dojopreset"
-        "presets/kits/Linn 9000 Kit 2.dojopreset"
-        "presets/kits/Linn 9000 Kit 3.dojopreset"
-        "presets/kits/Linn 9000 Kit 4.dojopreset"
-        "presets/kits/Linn 9000 Kit 5.dojopreset"
-        "presets/kits/Linn 9000 Selector Kit.dojopreset"
-        "kits/Linn LM-1.zip"
-        "kits/Linn LM-2.zip"
-        "kits/LinnDrum.zip"
-        "kits/AdrenaLinn.zip"
-        "kits/Linn 9000.zip")
+        ${DOJO_KIT_PRESETS}
+        ${DOJO_EMBEDDED_KITS})
 
 add_library(dojo::resources ALIAS dojo_resources)
 set_target_properties(dojo_resources PROPERTIES FOLDER "Resources")
+
+file(GLOB DOJO_DRUM_MACHINE_ARCHIVES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/drum-machines/*.zip")
+set(DOJO_DRUM_MACHINE_ARCHIVES "${DOJO_DRUM_MACHINE_ARCHIVES}" CACHE INTERNAL "The drum machines' sample archives shipped beside the application")
+
+# Copies the drum machines' archives into "Drum Machines" beside `target`'s binary after each build.
+function(dojo_copy_drum_machines target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/Drum Machines"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DOJO_DRUM_MACHINE_ARCHIVES} "$<TARGET_FILE_DIR:${target}>/Drum Machines"
+        VERBATIM)
+endfunction()

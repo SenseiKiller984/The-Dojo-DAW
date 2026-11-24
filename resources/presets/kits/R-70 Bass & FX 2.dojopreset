@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Built-in drum kit (tools/drumkits/make_kits.py): the Roland R-70's samples, arranged on the
+     Drum Rack's pads, with a demo beat the browser plays when the kit is selected. -->
+<DOJO_PRESET version="1" name="R-70 Bass &amp; FX 2" category="Drums" kit="1" machine="Roland R-70"
+             description="More of the Roland R-70's bass &amp; fx, one per pad: its demo plays each in turn.">
+  <DEVICE key="builtin:drumrack" name="Drum Rack">
+    <DOJO_DEVICE type="builtin:drumrack" version="1">
+      <PARAM id="pad1Volume" value="0.0"/>
+      <PARAM id="pad1Pan" value="0.0"/>
+      <PARAM id="pad1Pitch" value="0.0"/>
+      <PARAM id="pad1Output" value="0.0"/>
+      <PARAM id="pad1Choke" value="0.0"/>
+      <PARAM id="pad2Volume" value="0.0"/>
+      <PARAM id="pad2Pan" value="0.0"/>
+      <PARAM id="pad2Pitch" value="0.0"/>
+      <PARAM id="pad2Output" value="0.0"/>
+      <PARAM id="pad2Choke" value="0.0"/>
+      <PARAM id="pad3Volume" value="0.0"/>
+      <PARAM id="pad3Pan" value="0.0"/>
+      <PARAM id="pad3Pitch" value="0.0"/>
+      <PARAM id="pad3Output" value="0.0"/>
+      <PARAM id="pad3Choke" value="0.0"/>
+      <PARAM id="pad4Volume" value="0.0"/>
+      <PARAM id="pad4Pan" value="0.0"/>
+      <PARAM id="pad4Pitch" value="0.0"/>
+      <PARAM id="pad4Output" value="0.0"/>
+      <PARAM id="pad4Choke" value="0.0"/>
+      <PARAM id="pad5Volume" value="0.0"/>
+      <PARAM id="pad5Pan" value="0.0"/>
+      <PARAM id="pad5Pitch" value="0.0"/>
+      <PARAM id="pad5Output" value="0.0"/>
+      <PARAM id="pad5Choke" value="0.0"/>
+      <PARAM id="pad6Volume" value="0.0"/>
+      <PARAM id="pad6Pan" value="0.0"/>
+      <PARAM id="pad6Pitch" value="0.0"/>
+      <PARAM id="pad6Output" value="0.0"/>
+      <PARAM id="pad6Choke" value="0.0"/>
+      <PARAM id="pad7Volume" value="0.0"/>
+      <PARAM id="pad7Pan" value="0.0"/>
+      <PARAM id="pad7Pitch" value="0.0"/>
+      <PARAM id="pad7Output" value="0.0"/>
+      <PARAM id="pad7Choke" value="0.0"/>
+      <PARAM id="pad8Volume" value="0.0"/>
+      <PARAM id="pad8Pan" value="0.0"/>
+      <PARAM id="pad8Pitch" value="0.0"/>
+      <PARAM id="pad8Output" value="0.0"/>
+      <PARAM id="pad8Choke" value="0.0"/>
+      <PARAM id="pad9Volume" value="0.0"/>
+      <PARAM id="pad9Pan" value="0.0"/>
+      <PARAM id="pad9Pitch" value="0.0"/>
+      <PARAM id="pad9Output" value="0.0"/>
+      <PARAM id="pad9Choke" value="0.0"/>
+      <PARAM id="pad10Volume" value="0.0"/>
+      <PARAM id="pad10Pan" value="0.0"/>
+      <PARAM id="pad10Pitch" value="0.0"/>
+      <PARAM id="pad10Output" value="0.0"/>
+      <PARAM id="pad10Choke" value="0.0"/>
+      <PARAM id="pad11Volume" value="0.0"/>
+      <PARAM id="pad11Pan" value="0.0"/>
+      <PARAM id="pad11Pitch" value="0.0"/>
+      <PARAM id="pad11Output" value="0.0"/>
+      <PARAM id="pad11Choke" value="0.0"/>
+      <PARAM id="pad12Volume" value="0.0"/>
+      <PARAM id="pad12Pan" value="0.0"/>
+      <PARAM id="pad12Pitch" value="0.0"/>
+      <PARAM id="pad12Output" value="0.0"/>
+      <PARAM id="pad12Choke" value="0.0"/>
+      <PARAM id="pad13Volume" value="0.0"/>
+      <PARAM id="pad13Pan" value="0.0"/>
+      <PARAM id="pad13Pitch" value="0.0"/>
+      <PARAM id="pad13Output" value="0.0"/>
+      <PARAM id="pad13Choke" value="0.0"/>
+      <PARAM id="pad14Volume" value="0.0"/>
+      <PARAM id="pad14Pan" value="0.0"/>
+      <PARAM id="pad14Pitch" value="0.0"/>
+      <PARAM id="pad14Output" value="0.0"/>
+      <PARAM id="pad14Choke" value="0.0"/>
+      <PARAM id="pad15Volume" value="0.0"/>
+      <PARAM id="pad15Pan" value="0.0"/>
+      <PARAM id="pad15Pitch" value="0.0"/>
+      <PARAM id="pad15Output" value="0.0"/>
+      <PARAM id="pad15Choke" value="0.0"/>
+      <PARAM id="pad16Volume" value="0.0"/>
+      <PARAM id="pad16Pan" value="0.0"/>
+      <PARAM id="pad16Pitch" value="0.0"/>
+      <PARAM id="pad16Output" value="0.0"/>
+      <PARAM id="pad16Choke" value="0.0"/>
+      <PARAM id="master" value="-3.0"/>
+      <EXTRA>
+        <PAD index="0" sample="kit:Roland R-70/Perc Rub 1C.wav"/>
+        <PAD index="1" sample="kit:Roland R-70/Perc Scratch 1A.wav"/>
+        <PAD index="2" sample="kit:Roland R-70/Perc Scratch 1B.wav"/>
+        <PAD index="3" sample="kit:Roland R-70/Perc Scratch 1C.wav"/>
+        <PAD index="4" sample="kit:Roland R-70/Perc Shot.wav"/>
+        <PAD index="5" sample="kit:Roland R-70/Scratch Pull.wav"/>
+        <PAD index="6" sample="kit:Roland R-70/Scratch Push.wav"/>
+        <PAD index="7" sample="kit:Roland R-70/Slap Bass.wav"/>
+      </EXTRA>
+    </DOJO_DEVICE>
+  </DEVICE>
+  <DEMO tempo="110" bars="2" swing="0.0">
+    <LANE pad="0" steps="x..............................."/>
+    <LANE pad="1" steps="..x............................."/>
+    <LANE pad="2" steps="....x..........................."/>
+    <LANE pad="3" steps="......x........................."/>
+    <LANE pad="4" steps="........x......................."/>
+    <LANE pad="5" steps="..........x....................."/>
+    <LANE pad="6" steps="............x..................."/>
+    <LANE pad="7" steps="..............x................."/>
+  </DEMO>
+</DOJO_PRESET>

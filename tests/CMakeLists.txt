@@ -115,6 +115,7 @@ add_dependencies(dojo_tests dojo_test_clap dojo-plugin-scanner)
 target_compile_definitions(dojo_tests PRIVATE
     DOJO_TEST_CLAP_PATH="$<TARGET_FILE:dojo_test_clap>"
     DOJO_SCANNER_PATH="$<TARGET_FILE:dojo-plugin-scanner>")
+dojo_copy_drum_machines(dojo_tests) # (the Roland kits' samples, as beside the application)
 set_target_properties(dojo_tests PROPERTIES FOLDER "Tests")
 
 # A small ARA 2 plug-in (VST3, built with JUCE's plug-in client and its own copy of JUCE) for the

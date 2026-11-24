@@ -88,32 +88,47 @@ double onsetAfter(const juce::AudioBuffer<float>& audio, double from, double rat
 }
 } // namespace
 
-TEST_CASE("Five drum machines are built in, and every one of their samples is on a kit's pad", "[kits]")
+TEST_CASE("Ten drum machines are built in, and every one of their samples is on a kit's pad", "[kits]")
 {
-    // The machines and their samples (the bytes as they came, renamed readably).
+    // The machines and their samples (the WAV files' bytes as they came, renamed readably): the Linn
+    // ones compiled in, the Roland ones in archives beside the application (here the test runner).
     const auto machines = kits::getMachines();
-    CHECK(machines == juce::StringArray{"AdrenaLinn", "Linn 9000", "Linn LM-1", "Linn LM-2", "LinnDrum"});
-    const std::map<juce::String, int> counts{{"AdrenaLinn", 40}, {"Linn 9000", 79}, {"Linn LM-1", 19}, {"Linn LM-2", 23}, {"LinnDrum", 30}};
+    CHECK(machines == juce::StringArray{"AdrenaLinn", "Linn 9000", "Linn LM-1", "Linn LM-2", "LinnDrum", "Roland MC-202",
+                                        "Roland MC-303", "Roland MC-808", "Roland R-8 MKII", "Roland R-70"});
+    const std::map<juce::String, int> counts{{"AdrenaLinn", 40},     {"Linn 9000", 79},      {"Linn LM-1", 19},      {"Linn LM-2", 23},
+                                             {"LinnDrum", 30},       {"Roland MC-202", 9},   {"Roland MC-303", 148}, {"Roland MC-808", 31},
+                                             {"Roland R-8 MKII", 209}, {"Roland R-70", 391}};
+    const auto beside = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory().getChildFile("Drum Machines");
+    CHECK(kits::getArchiveFolders().getFirst() == beside);
+    CHECK(beside.getChildFile("Roland R-70.zip").existsAsFile());
+    std::map<juce::String, juce::StringArray> names;
     int total = 0;
     for (const auto& machine : machines)
     {
-        const auto names = kits::getSampleNames(machine);
-        CHECK(names.size() == counts.at(machine));
-        total += names.size();
-        for (const auto& name : names)
+        names[machine] = kits::getSampleNames(machine);
+        CHECK(names[machine].size() == counts.at(machine));
+        total += names[machine].size();
+        for (const auto& name : names[machine])
             CHECK(name.endsWith(".wav"));
     }
-    CHECK(total == 191);
-    CHECK(kits::getSampleNames("Linn LM-1").contains("Kick 1.wav"));
+    CHECK(total == 979);
+    CHECK(names["Linn LM-1"].contains("Kick 1.wav"));
+    CHECK(names["Roland R-70"].contains("TR-808 Kick.wav"));
+    CHECK(names["Roland R-8 MKII"].contains("909 Snare.wav"));
     CHECK(kits::getSampleNames("Nothing").isEmpty());
 
-    // Sixteen kits, each a Drum Rack preset with all sixteen pads arranged from one machine.
+    // 75 kits: Drum Rack presets from one machine each. The playable kits ("... Kit") have their pads
+    // arranged in the common layout, hats choking each other; the selector kits ("R-70 Kicks 2") hold
+    // up to sixteen of one kind of sound, their demo playing each in turn.
     const auto all = builtInKits();
-    REQUIRE(all.size() == 16);
+    REQUIRE(all.size() == 75);
     std::map<juce::String, std::set<juce::String>> used;
+    int selectors = 0;
     for (const auto& kit : all)
     {
         INFO(kit.name.toStdString());
+        const bool playable = kit.name.contains("Kit");
+        selectors += playable ? 0 : 1;
         CHECK(kit.kit);
         CHECK(kit.builtIn);
         CHECK(kit.category == "Drums");
@@ -130,26 +145,28 @@ TEST_CASE("Five drum machines are built in, and every one of their samples is on
             const auto reference = pad->getStringAttribute("sample");
             REQUIRE(reference.startsWith("kit:" + kit.machine + "/"));
             const auto name = reference.fromFirstOccurrenceOf("/", false, false);
-            CHECK(kits::getSampleNames(kit.machine).contains(name));
+            CHECK(names[kit.machine].contains(name));
             used[kit.machine].insert(name);
-            pads.insert(pad->getIntAttribute("index"));
-            // Hats on the hat pads choke each other.
             const int index = pad->getIntAttribute("index");
-            if ((index == 6 || index == 8 || index == 10) && name.startsWith("Hat"))
+            pads.insert(index);
+            if (playable && (index == 6 || index == 8 || index == 10) && name.startsWith("Hat"))
                 CHECK(parameter(*state, "pad" + juce::String(index + 1) + "Choke") == 1.0f);
         }
-        CHECK(pads.size() == 16);
-        // The demo plays pads that have samples (all of them do), and the kick pad at least.
-        bool kick = false;
+        if (kit.machine.startsWith("Roland"))
+            CHECK(!pads.empty());
+        else
+            CHECK(pads.size() == 16);
+        // The demo plays only pads that have samples, the first pad among them.
+        bool first = false;
         for (const auto& lane : kit.demo.lanes)
         {
-            CHECK(lane.pad >= 0);
-            CHECK(lane.pad < 16);
+            CHECK(pads.count(lane.pad) == 1);
             CHECK(lane.steps.length() == kit.demo.bars * 16);
-            kick = kick || lane.pad == 0;
+            first = first || lane.pad == 0;
         }
-        CHECK(kick);
+        CHECK(first);
     }
+    CHECK(selectors == 38);
     for (const auto& machine : machines)
         CHECK(static_cast<int>(used[machine].size()) == counts.at(machine)); // (every sample on a pad somewhere)
 
@@ -211,6 +228,26 @@ TEST_CASE("Kit samples are unpacked when first needed and saved by reference", "
     CHECK(kits::fileFor("kit:Linn LM-1/Not There.wav") == juce::File());
     CHECK(kits::fileFor("") == juce::File());
 
+    // A Roland machine's samples come from its archive beside the application, unpacked as the WAV
+    // files they came as; and a kit of them loads like any other.
+    const auto tr808 = kits::fileFor("kit:Roland R-8 MKII/808 Kick.wav");
+    REQUIRE(tr808.existsAsFile());
+    CHECK(library.folder().getChildFile("Roland R-8 MKII").findChildFiles(juce::File::findFiles, false, "*.wav").size() == 209);
+    {
+        juce::FileInputStream in(tr808);
+        char header[12] = {};
+        REQUIRE(in.read(header, 12) == 12);
+        CHECK(juce::String(header, 4) == "RIFF");
+        CHECK(juce::String(header + 8, 4) == "WAVE");
+    }
+    {
+        devices::DrumRack roland;
+        presets::restore(*builtInKit("R-70 808 Kit").findFor(devices::DrumRack::kTypeId), roland);
+        REQUIRE(roland.getPadSample(0) != nullptr);
+        CHECK(roland.getPadSample(0)->file == library.folder().getChildFile("Roland R-70/TR-808 Kick.wav"));
+        CHECK(roland.getPadSample(0)->getNumFrames() > 1000);
+    }
+
     // A Drum Rack loading a kit: every pad's sample from the library, the levels and chokes too...
     const auto kit = builtInKit("LM-2 Kit");
     devices::DrumRack rack;
@@ -270,8 +307,12 @@ TEST_CASE("A kit's demo beat: its hits at its tempo and swing, played by a Drum 
     constexpr double kRate = 48'000.0;
 
     // The built-in kits' beats: their bars at their tempo, then the ring-out; loud but not clipping.
+    // (Every Linn kit, and a playable and a selector kit of each Roland machine.)
     for (const auto& kit : builtInKits())
     {
+        if (kit.machine.startsWith("Roland")
+            && !juce::StringArray{"MC-202 Kit", "MC-303 Jungle Kit", "MC-808 Kicks", "R-8 MKII Kit", "R-70 Toms 2"}.contains(kit.name))
+            continue;
         INFO(kit.name.toStdString());
         const auto audio = presets::renderDemo(kit, kRate);
         REQUIRE(audio.getNumChannels() == 2);
@@ -342,9 +383,10 @@ TEST_CASE("The browser lists the drum kits; selecting one plays its demo beat wh
         ui::BrowserPanel browser(formats.getWildcardForAllFormats(), plugins, preview, settings);
         browser.setSize(260, 900);
 
-        // DRUM KITS: the sixteen kits (not among the other presets).
+        // DRUM KITS: the 75 kits (not among the other presets).
         const auto listed = browser.getListedKitNames();
-        CHECK(listed.size() == 16);
+        CHECK(listed.size() == 75);
+        CHECK(listed.contains("R-70 808 Kit"));
         CHECK(listed.contains("LM-1 Kit"));
         CHECK(listed.contains("Linn 9000 Selector Kit"));
         CHECK_FALSE(browser.getListedPresetNames().isEmpty());
@@ -352,6 +394,8 @@ TEST_CASE("The browser lists the drum kits; selecting one plays its demo beat wh
         CHECK(browser.getListedKitNames().size() == 6);
         browser.setDeviceSearch("lm-2 soft");
         CHECK(browser.getListedKitNames() == juce::StringArray{"LM-2 Soft Kit"});
+        browser.setDeviceSearch("roland 808");
+        CHECK(browser.getListedKitNames() == juce::StringArray{"MC-808 Kicks", "MC-808 Kit", "MC-808 Sub Kit", "R-8 MKII 808 Kit", "R-70 808 Kit"});
         browser.setDeviceSearch("");
 
         // Selected with the headphones on: its demo beat goes to the preview player (which the audio
