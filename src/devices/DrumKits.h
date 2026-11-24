@@ -6,7 +6,7 @@
     The built-in drum machines' samples (the drum kits' library).
 
     Each machine's samples are one archive of their WAV files: compiled into The Dojo for the Linn
-    machines (resources/kits/<Machine>.zip), or, for the Roland ones (too big to compile in), a file
+    machines (resources/kits/<Machine>.zip), or, for the Roland and Akai ones (too big to compile in), a file
     beside the application ("Drum Machines/<Machine>.zip", copied there by the build from
     resources/drum-machines). A machine's samples are unpacked, all at once, into the library folder
     the first time one of them is needed:

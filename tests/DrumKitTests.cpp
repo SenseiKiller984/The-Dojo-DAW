@@ -88,16 +88,18 @@ double onsetAfter(const juce::AudioBuffer<float>& audio, double from, double rat
 }
 } // namespace
 
-TEST_CASE("Ten drum machines are built in, and every one of their samples is on a kit's pad", "[kits]")
+TEST_CASE("Fifteen drum machines are built in, and every one of their samples is on a kit's pad", "[kits]")
 {
     // The machines and their samples (the WAV files' bytes as they came, renamed readably): the Linn
-    // ones compiled in, the Roland ones in archives beside the application (here the test runner).
+    // ones compiled in, the Roland and Akai ones in archives beside the application (here the test runner).
     const auto machines = kits::getMachines();
-    CHECK(machines == juce::StringArray{"AdrenaLinn", "Linn 9000", "Linn LM-1", "Linn LM-2", "LinnDrum", "Roland MC-202",
-                                        "Roland MC-303", "Roland MC-808", "Roland R-8 MKII", "Roland R-70"});
-    const std::map<juce::String, int> counts{{"AdrenaLinn", 40},     {"Linn 9000", 79},      {"Linn LM-1", 19},      {"Linn LM-2", 23},
-                                             {"LinnDrum", 30},       {"Roland MC-202", 9},   {"Roland MC-303", 148}, {"Roland MC-808", 31},
-                                             {"Roland R-8 MKII", 209}, {"Roland R-70", 391}};
+    CHECK(machines == juce::StringArray{"AdrenaLinn", "Akai MPC2500", "Akai MPC3000", "Akai MPC5000", "Akai XE8", "Akai XR-10",
+                                        "Linn 9000", "Linn LM-1", "Linn LM-2", "LinnDrum", "Roland MC-202", "Roland MC-303",
+                                        "Roland MC-808", "Roland R-8 MKII", "Roland R-70"});
+    const std::map<juce::String, int> counts{{"AdrenaLinn", 40},      {"Linn 9000", 79},       {"Linn LM-1", 19},       {"Linn LM-2", 23},
+                                             {"LinnDrum", 30},        {"Roland MC-202", 9},    {"Roland MC-303", 148},  {"Roland MC-808", 31},
+                                             {"Roland R-8 MKII", 209}, {"Roland R-70", 391},   {"Akai XR-10", 57},      {"Akai XE8", 32},
+                                             {"Akai MPC3000", 97},    {"Akai MPC2500", 212},   {"Akai MPC5000", 158}};
     const auto beside = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory().getChildFile("Drum Machines");
     CHECK(kits::getArchiveFolders().getFirst() == beside);
     CHECK(beside.getChildFile("Roland R-70.zip").existsAsFile());
@@ -111,17 +113,19 @@ TEST_CASE("Ten drum machines are built in, and every one of their samples is on 
         for (const auto& name : names[machine])
             CHECK(name.endsWith(".wav"));
     }
-    CHECK(total == 979);
+    CHECK(total == 1535);
     CHECK(names["Linn LM-1"].contains("Kick 1.wav"));
     CHECK(names["Roland R-70"].contains("TR-808 Kick.wav"));
     CHECK(names["Roland R-8 MKII"].contains("909 Snare.wav"));
+    CHECK(names["Akai MPC3000"].contains("Heavy Kick.wav"));
+    CHECK(names["Akai MPC2500"].contains("Tabla Bayan 01.wav"));
     CHECK(kits::getSampleNames("Nothing").isEmpty());
 
-    // 75 kits: Drum Rack presets from one machine each. The playable kits ("... Kit") have their pads
+    // 124 kits: Drum Rack presets from one machine each. The playable kits ("... Kit") have their pads
     // arranged in the common layout, hats choking each other; the selector kits ("R-70 Kicks 2") hold
     // up to sixteen of one kind of sound, their demo playing each in turn.
     const auto all = builtInKits();
-    REQUIRE(all.size() == 75);
+    REQUIRE(all.size() == 124);
     std::map<juce::String, std::set<juce::String>> used;
     int selectors = 0;
     for (const auto& kit : all)
@@ -152,7 +156,7 @@ TEST_CASE("Ten drum machines are built in, and every one of their samples is on 
             if (playable && (index == 6 || index == 8 || index == 10) && name.startsWith("Hat"))
                 CHECK(parameter(*state, "pad" + juce::String(index + 1) + "Choke") == 1.0f);
         }
-        if (kit.machine.startsWith("Roland"))
+        if (kit.machine.startsWith("Roland") || kit.machine.startsWith("Akai"))
             CHECK(!pads.empty());
         else
             CHECK(pads.size() == 16);
@@ -166,7 +170,7 @@ TEST_CASE("Ten drum machines are built in, and every one of their samples is on 
         }
         CHECK(first);
     }
-    CHECK(selectors == 38);
+    CHECK(selectors == 69);
     for (const auto& machine : machines)
         CHECK(static_cast<int>(used[machine].size()) == counts.at(machine)); // (every sample on a pad somewhere)
 
@@ -241,6 +245,13 @@ TEST_CASE("Kit samples are unpacked when first needed and saved by reference", "
         CHECK(juce::String(header + 8, 4) == "WAVE");
     }
     {
+        devices::DrumRack akaiRack;
+        presets::restore(*builtInKit("MPC3000 Kit").findFor(devices::DrumRack::kTypeId), akaiRack);
+        REQUIRE(akaiRack.getPadSample(0) != nullptr);
+        CHECK(akaiRack.getPadSample(0)->file == library.folder().getChildFile("Akai MPC3000/Heavy Kick.wav"));
+        CHECK(library.folder().getChildFile("Akai MPC3000").findChildFiles(juce::File::findFiles, false, "*.wav").size() == 97);
+    }
+    {
         devices::DrumRack roland;
         presets::restore(*builtInKit("R-70 808 Kit").findFor(devices::DrumRack::kTypeId), roland);
         REQUIRE(roland.getPadSample(0) != nullptr);
@@ -307,11 +318,13 @@ TEST_CASE("A kit's demo beat: its hits at its tempo and swing, played by a Drum 
     constexpr double kRate = 48'000.0;
 
     // The built-in kits' beats: their bars at their tempo, then the ring-out; loud but not clipping.
-    // (Every Linn kit, and a playable and a selector kit of each Roland machine.)
+    // (Every Linn kit, and kits of each Roland and Akai machine.)
     for (const auto& kit : builtInKits())
     {
-        if (kit.machine.startsWith("Roland")
-            && !juce::StringArray{"MC-202 Kit", "MC-303 Jungle Kit", "MC-808 Kicks", "R-8 MKII Kit", "R-70 Toms 2"}.contains(kit.name))
+        if ((kit.machine.startsWith("Roland") || kit.machine.startsWith("Akai"))
+            && !juce::StringArray{"MC-202 Kit", "MC-303 Jungle Kit", "MC-808 Kicks", "R-8 MKII Kit", "R-70 Toms 2", "XR-10 Kit",
+                                  "XE8 Ext Kit", "MPC3000 Kit", "MPC2500 Tabla Kit", "MPC5000 Solilla Kit", "MPC5000 Loops & Vocals"}
+                    .contains(kit.name))
             continue;
         INFO(kit.name.toStdString());
         const auto audio = presets::renderDemo(kit, kRate);
@@ -383,15 +396,18 @@ TEST_CASE("The browser lists the drum kits; selecting one plays its demo beat wh
         ui::BrowserPanel browser(formats.getWildcardForAllFormats(), plugins, preview, settings);
         browser.setSize(260, 900);
 
-        // DRUM KITS: the 75 kits (not among the other presets).
+        // DRUM KITS: the 124 kits (not among the other presets).
         const auto listed = browser.getListedKitNames();
-        CHECK(listed.size() == 75);
+        CHECK(listed.size() == 124);
+        CHECK(listed.contains("MPC3000 Kit"));
         CHECK(listed.contains("R-70 808 Kit"));
         CHECK(listed.contains("LM-1 Kit"));
         CHECK(listed.contains("Linn 9000 Selector Kit"));
         CHECK_FALSE(browser.getListedPresetNames().isEmpty());
         browser.setDeviceSearch("9000");
-        CHECK(browser.getListedKitNames().size() == 6);
+        CHECK(browser.getListedKitNames().size() == 7); // (the Linn 9000's six, and the MPC5000's Linn 9000 Kit)
+        browser.setDeviceSearch("akai tabla");
+        CHECK(browser.getListedKitNames() == juce::StringArray{"MPC2500 Tabla Kit"});
         browser.setDeviceSearch("lm-2 soft");
         CHECK(browser.getListedKitNames() == juce::StringArray{"LM-2 Soft Kit"});
         browser.setDeviceSearch("roland 808");

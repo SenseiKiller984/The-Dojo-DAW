@@ -6,14 +6,14 @@ Builds The Dojo's built-in drum kits from the Linn and Roland sample sets.
 
 The folders hold the sets as they came ("Linn LM-1/", "Linn LM-2/", "Linn Linndrum/",
 "Linn AdrenaLinn1/", "Linn 9000/", "Roland MC-202/", "Roland MC-303/", "Roland MC-808/",
-"Roland R8 MKII/", "Roland R-70/": folders of WAV files, possibly one level down, the R-70's with
-sub-folders). Writes:
+"Roland R8 MKII/", "Roland R-70/", "Akai XR-10/", "Akai XE8/", "Akai MPC3000/", "Akai MPC2500/",
+"Akai MPC5000/": folders of WAV files, possibly one level down, some with sub-folders). Writes:
 
   resources/kits/<Machine>.zip              the Linn machines' samples, renamed readably (the WAV
                                             files' bytes as they came), compiled into the app
-  resources/drum-machines/<Machine>.zip     the Roland machines' samples, likewise (WAV, as they
-                                            came): too big to compile in (88 MB), so they are
-                                            copied beside the application ("Drum Machines")
+  resources/drum-machines/<Machine>.zip     the Roland and Akai machines' samples, likewise (WAV, as
+                                            they came): too big to compile in (127 MB), so they
+                                            are copied beside the application ("Drum Machines")
   resources/presets/kits/<Kit>.dojopreset   the kits: Drum Rack presets with every pad
                                             arranged (sample, level, pan, choke) and a demo beat
 
@@ -40,6 +40,7 @@ import zipfile
 from xml.sax.saxutils import quoteattr
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import akai  # noqa: E402
 import roland  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -216,6 +217,25 @@ G["breakbeat"] = {  # fast broken beat for the jungle kit
     14: "X...............................",
 }
 
+G["boombap"] = {  # laid-back hip hop: lazy kick, hard snare, swung hats
+    1: "X......x..X.....X.x.......X.....",
+    3: "....X.......X.......X.......X...",
+    4: "............X...............X...",
+    7: "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.",
+    11: "..............x.................",
+    12: "...........o...............o....",
+    15: "......o...............o.........",
+}
+G["trap"] = {  # half-time trap: 808s, rolling hats
+    1: "X.........X.....X..X............",
+    2: "X.........X.....X..X......x.....",
+    3: "........X...............X.......",
+    4: "........X...............X.......",
+    7: "x.x.x.x.x.x.xxxxx.x.x.x.x.x.xxxx",
+    9: "..............................o.",
+    14: "X...............................",
+}
+
 # --- The kits: name, machine, tempo, swing, groove, pads (1-16 -> sample), description ----------
 STD_HATS = (7, 9, 11)
 KITS = [
@@ -329,7 +349,10 @@ def category(name):
         return "Hats"
     if words & {"crash", "ride", "cymbal", "china", "splash", "gong"}:
         return "Cymbals"
-    if "bass" in words or "sub" in words:
+    if words & {"loop", "vox", "voice", "laugh"}:
+        return "Loops"
+    if words & {"bass", "sub", "piano", "pad", "stab", "strings", "orchestra", "guitar", "square", "sine",
+                "arp", "tron", "wobbler"}:
         return "Bass"
     if words & {"scratch", "noise", "gun", "fx", "reverse", "shot", "blip", "heartbeat", "spark", "squash", "thriller",
                 "shadow", "air", "click", "ring", "pipe", "plate", "wheel", "ambience", "q", "rub", "can", "hit"}:
@@ -339,7 +362,8 @@ def category(name):
 
 # The selector kits' groups of sounds, in order.
 SELECTOR_GROUPS = [("Kicks", {"Kicks"}), ("Snares & Claps", {"Snares", "Claps", "Rims"}), ("Toms", {"Toms"}),
-                   ("Hats & Cymbals", {"Hats", "Cymbals"}), ("Percussion", {"Percussion"}), ("Bass & FX", {"Bass", "FX"})]
+                   ("Hats & Cymbals", {"Hats", "Cymbals"}), ("Percussion", {"Percussion"}), ("Bass & FX", {"Bass", "FX"}),
+                   ("Loops & Vocals", {"Loops"})]
 
 
 def natural_key(text):
@@ -411,7 +435,8 @@ def kit_xml(name, machine, tempo, swing, groove, pads, description):
 
 SHORT_NAMES = {"Roland MC-202": "MC-202", "Roland MC-303": "MC-303", "Roland MC-808": "MC-808",
                "Roland R-8 MKII": "R-8 MKII", "Roland R-70": "R-70", "Linn LM-1": "LM-1", "Linn LM-2": "LM-2",
-               "LinnDrum": "LinnDrum", "AdrenaLinn": "AdrenaLinn", "Linn 9000": "Linn 9000"}
+               "LinnDrum": "LinnDrum", "AdrenaLinn": "AdrenaLinn", "Linn 9000": "Linn 9000", "Akai XR-10": "XR-10",
+               "Akai XE8": "XE8", "Akai MPC3000": "MPC3000", "Akai MPC2500": "MPC2500", "Akai MPC5000": "MPC5000"}
 
 
 def main():
@@ -429,6 +454,7 @@ def main():
 
     machines = dict(MACHINES)
     machines.update(roland.MACHINES)
+    machines.update(akai.MACHINES)
     names = {}
     for machine, (folder, renames) in machines.items():
         files = source_files(source_roots, folder)
@@ -439,7 +465,7 @@ def main():
         if len(set(renames.values())) != len(renames):
             sys.exit(f"{machine}: two samples with the same name")
         names[machine] = set(renames.values())
-        archive_dir = external_dir if machine in roland.MACHINES else kits_dir
+        archive_dir = external_dir if machine in roland.MACHINES or machine in akai.MACHINES else kits_dir
         with zipfile.ZipFile(os.path.join(archive_dir, machine + ".zip"), "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             for original in sorted(files, key=lambda o: renames[o]):
                 info = zipfile.ZipInfo(renames[original] + ".wav", date_time=(2024, 1, 1, 0, 0, 0))
@@ -450,7 +476,7 @@ def main():
 
     used = {m: set() for m in machines}
     written = []
-    playable = KITS + roland.KITS
+    playable = KITS + roland.KITS + akai.KITS
     for name, machine, tempo, swing, groove, pads, description in playable:
         for sample in pads:
             if sample is not None:

@@ -10,7 +10,7 @@
 # library folder when first used: devices/DrumKits.h). Both are made by
 # tools/drumkits/make_kits.py from the original sample sets.
 #
-# The Roland machines' samples (88 MB of WAV) are too big to compile in: their archives
+# The Roland and Akai machines' samples (127 MB of WAV) are too big to compile in: their archives
 # (drum-machines/<Machine>.zip) are copied beside the application into "Drum Machines" (and beside
 # the test runner), where devices/DrumKits.h finds them: dojo_copy_drum_machines(<target>).
 #

@@ -555,8 +555,8 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Channel EQ**: low cut (80 Hz), low shelf -3 dB, mid +6 dB at 3 kHz, high shelf +5.5 dB, output -1.5 dB.
   - Net result on either device: about -18 dB at 35 Hz, +4.5 dB at 3 kHz and +2.5 to +3.5 dB from 10 kHz up.
 
-**Drum kits**: built-in kits for the Drum Rack, made from ten classic drum machines' samples (the WAV files as they came, only renamed), every pad already arranged: sample, level, pan and choke group (hats choke each other).
-- **75 kits from 10 machines**, and every one of their 979 samples is on a pad of at least one kit:
+**Drum kits**: built-in kits for the Drum Rack, made from fifteen classic drum machines' samples (the WAV files as they came, only renamed), every pad already arranged: sample, level, pan and choke group (hats choke each other). Every kit has a demo beat.
+- **124 kits from 15 machines**, and every one of their 1,535 samples is on a pad of at least one kit:
   - **Linn LM-1** (19 samples): *LM-1 Kit*, *LM-1 Alt Kit*.
   - **Linn LM-2** (23): *LM-2 Kit* (the hard hits), *LM-2 Soft Kit*.
   - **LinnDrum** (30): *LinnDrum Kit*, *LinnDrum Tuned Kit* (the tuned-down and -up sounds), *LinnDrum Percussion Kit* (every conga tuning).
@@ -567,16 +567,23 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - **Roland MC-808** (31): *MC-808 Kit*, *MC-808 Sub Kit* (808 kicks and sub basses), and a selector kit. Its samples came unnamed (Sample01-59): they are named by what they sound like (measured length, decay, brightness, pitch and low end), their number kept ("Kick (01)").
   - **Roland R-8 MKII** (209): *R-8 MKII Kit*, *Rock Kit*, *808 Kit*, *909 Kit*, *CR-78 Kit*, *Brush Kit*, *Latin Kit*, and selector kits.
   - **Roland R-70** (391): *R-70 Kit*, *Rock Kit*, *808 Kit*, *909 Kit*, *Vintage Kit*, *Brush Kit*, *Latin Kit*, and selector kits.
-- **Selector kits** ("R-70 Kicks 2", "R-8 MKII Snares & Claps 1", "MC-303 Percussion 2") hold the sounds no playable kit uses, up to sixteen of one kind each (kicks; snares and claps; toms; hats and cymbals; percussion; bass and FX), so a big machine's whole library is on pads: swap one onto your kit's pad by dragging it from the library folder. Their demo plays each pad in turn.
+  - **Akai XR-10** (57): *XR-10 Kit*, *XR-10 Kit 2*, *XR-10 Latin Kit*, and selector kits.
+  - **Akai XE8** (32): *XE8 Kit* (its own sounds) and *XE8 Ext Kit* (its expansion card's).
+  - **Akai MPC3000** (97): *MPC3000 Kit*, *Kit 2* (boom-bap), *Latin Kit*, and selector kits.
+  - **Akai MPC2500** (212): *MPC2500 Kit*, *Acoustic Kit*, *Electric Kit*, *Electric Kit 2*, *Percussion Kit*, *Tabla Kit*, and selector kits (with its loops and vocal sounds). Its unnamed tabla strokes (Byn1-10, T01-32, beside its tabla loop) are named as the bayan's and the tabla's.
+  - **Akai MPC5000** (158): *MPC5000 Kit*, *Linn 9000 Kit* (the Linn 9000 sounds in its library), *Solilla Kit* (trap: kicks, 808 bass, hats, stabs), *Sym Kit*, and selector kits (with its loops and vocals).
+- **Selector kits** ("R-70 Kicks 2", "R-8 MKII Snares & Claps 1", "MC-303 Percussion 2") hold the sounds no playable kit uses, up to sixteen of one kind each (kicks; snares and claps; toms; hats and cymbals; percussion; bass and FX; loops and vocals), so a big machine's whole library is on pads: swap one onto your kit's pad by dragging it from the library folder. Their demo plays each pad in turn.
 - **One layout** for every kit, General MIDI where it can be (pads C1-D#2): kick, side stick or rim, snare, clap, second snare, low tom, closed hat, mid tom, second hat, high tom, open hat, two percussion, crash, percussion, ride. Toms and congas go low to high by their measured pitch.
 - They are in the browser's **DRUM KITS** list (after the instruments; search "kit", a machine, or a sound). **Select a kit to hear its demo beat** (its own groove at its own tempo, played by a Drum Rack with the kit, as on a track) when the headphones button is on, like previewing a file; the preview strip shows it and its drum lights up while it plays. Walk through the kits with the arrow keys.
 - **Double-click** a kit to add a Drum Rack with it to the selected track (or a new instrument track, both named after the kit); a track that already has a Drum Rack loads the kit into it. Drag one onto a track, the Devices panel or a Drum Rack, or pick it in the Drum Rack's **≡** presets menu. One undo step each.
-- The Linn samples are built into The Dojo; the Roland ones (88 MB of WAV, too much to compile in) come as one archive per machine in a **Drum Machines** folder beside the application (the build puts it there). A machine's samples are unpacked, as the WAV files they came as, into *Documents/The Dojo/Library/Drum Machines/<machine>* the first time a kit of that machine is used, so they are also there to drag from (add that folder to the browser's folders). Projects and presets save them as **kit references**, not paths, so a project using them opens on any computer that has The Dojo.
+- The Linn samples are built into The Dojo; the Roland and Akai ones (127 MB of WAV, too much to compile in) come as one archive per machine in a **Drum Machines** folder beside the application (the build puts it there). A machine's samples are unpacked, as the WAV files they came as, into *Documents/The Dojo/Library/Drum Machines/<machine>* the first time a kit of that machine is used, so they are also there to drag from (add that folder to the browser's folders). Projects and presets save them as **kit references**, not paths, so a project using them opens on any computer that has The Dojo.
 - Your own Drum Rack presets (Save Preset...) are listed with the kits too, previewed with a standard beat.
 
   ![The browser's drum kits: the Linn 9000 Kit on a new track's Drum Rack, and the AdrenaLinn Sub Kit's demo beat playing (its drum lit, the preview strip below)](docs/images/drum-kits.png)
 
   ![The Roland kits: the R-70 808 Kit on a new track's Drum Rack, the R-70 Kicks 1 selector kit's demo playing](docs/images/drum-kits-roland.png)
+
+  ![The Akai kits: the MPC3000 Kit on a new track's Drum Rack, the MPC3000 Latin Kit's demo playing](docs/images/drum-kits-akai.png)
 
 **Preset chains**: a chain preset is a whole device chain in one `.dojopreset` file: every device in order, each with its own settings and its role in the chain as its name ("Subtractive EQ", "Slapback Delay"). A chain can use the same kind of device more than once.
 - To add one, double-click it in the browser's **PRESET CHAINS** list, drag it onto a track or the Devices panel, or pick it in **+ Add Device > Preset Chains**. Its devices go after the track's own, and adding them is one undo step.
@@ -778,6 +785,6 @@ third_party/  vendored LAME
 
 No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). The ARA SDK is Apache 2.0. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.
 
-The built-in drum kits' samples are recordings of Linn drum machines (LM-1, LM-2, LinnDrum, Linn 9000 and the AdrenaLinn) and Roland instruments (MC-202, MC-303, MC-808, R-8 MKII and R-70), supplied for the project and included as they came (WAV files, only renamed). Whoever distributes The Dojo must make sure they may redistribute these samples.
+The built-in drum kits' samples are recordings of Linn drum machines (LM-1, LM-2, LinnDrum, Linn 9000 and the AdrenaLinn) , Roland instruments (MC-202, MC-303, MC-808, R-8 MKII and R-70) and Akai instruments (XR-10, XE8, MPC3000, MPC2500 and MPC5000), supplied for the project and included as they came (WAV files, only renamed). Whoever distributes The Dojo must make sure they may redistribute these samples.
 
-Product and company names mentioned here (Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes, Linn, LinnDrum, LM-1, Linn 9000, AdrenaLinn, Roger Linn Design, Roland, MC-202, MC-303, MC-808, R-8, R-70, TR-606, TR-707, TR-808, TR-909, CR-78 and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.
+Product and company names mentioned here (Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes, Linn, LinnDrum, LM-1, Linn 9000, AdrenaLinn, Roger Linn Design, Roland, MC-202, MC-303, MC-808, R-8, R-70, TR-606, TR-707, TR-808, TR-909, CR-78, Akai, MPC, XR-10, XE8 and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.
