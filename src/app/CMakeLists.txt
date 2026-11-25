@@ -9,6 +9,8 @@ target_sources(TheDojo PRIVATE
     CommandLineOptions.h
     DojoApplication.cpp
     DojoApplication.h
+    Hardening.cpp
+    Hardening.h
     LicenseGuard.cpp
     LicenseGuard.h
     Main.cpp
@@ -34,6 +36,20 @@ add_custom_command(TARGET TheDojo POST_BUILD
     VERBATIM)
 # The Roland drum machines' samples live beside the application (resources/CMakeLists.txt).
 dojo_copy_drum_machines(TheDojo)
+
+# Stamp the finished executable for the run-time tamper check (DOJO_TAMPER_CHECK). The stamp must be
+# the last thing to touch the binary.
+if(DOJO_TAMPER_CHECK)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_custom_command(TARGET TheDojo POST_BUILD
+            COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/stamp_integrity.py" "$<TARGET_FILE:TheDojo>"
+            COMMENT "Stamping TheDojo for the tamper check"
+            VERBATIM)
+    else()
+        message(WARNING "DOJO_TAMPER_CHECK is ON but Python3 was not found: the binary will not be stamped (tamper check inert).")
+    endif()
+endif()
 dojo_apply_project_warnings(TheDojo)
 
 set_target_properties(TheDojo PROPERTIES FOLDER "Dojo")

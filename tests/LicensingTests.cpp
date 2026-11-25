@@ -4,10 +4,13 @@
 #include "licensing/Features.h"
 #include "licensing/LicenseKey.h"
 #include "licensing/LicenseManager.h"
+#include "licensing/Obfuscation.h"
+#include "licensing/Integrity.h"
 #include "licensing/PublicKey.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 using namespace dojo::licensing;
@@ -557,4 +560,94 @@ TEST_CASE("Licensing: recording software and virtual devices are recognised", "[
     CHECK_FALSE(isVirtualAudioDevice("Focusrite USB ASIO"));
     CHECK_FALSE(isVirtualAudioDevice("system"));
     (void)findRecordingSoftware(); // (lists this machine's processes without failing)
+}
+
+TEST_CASE("Licensing: keyed BLAKE2b matches the stamp tool (hashlib)", "[licensing]")
+{
+    // hashlib.blake2b(msg, digest_size=32, key=bytes(range(32))) for this message.
+    std::array<std::uint8_t, 32> key{};
+    for (std::size_t i = 0; i < key.size(); ++i)
+        key[i] = static_cast<std::uint8_t>(i);
+    const juce::String message = "The Dojo integrity check vector";
+    std::array<std::uint8_t, 32> out{};
+    crypto::keyedHash(out, key, {reinterpret_cast<const std::uint8_t*>(message.toRawUTF8()), message.getNumBytesAsUTF8()});
+    juce::MemoryBlock expected;
+    expected.loadFromHexString("4c29f0a7926167a5ad68791a6f290a408daed6b51f85fe2cf7f62bf875f02e46");
+    CHECK(crypto::equal(out, {static_cast<const std::uint8_t*>(expected.getData()), expected.getSize()}));
+}
+
+TEST_CASE("Licensing: string obfuscation round-trips", "[licensing]")
+{
+    CHECK(DOJO_OBF("DOJO1") == "DOJO1");
+    CHECK(DOJO_OBF("TheDojo/license/v1") == "TheDojo/license/v1");
+    CHECK(DOJO_OBF("") == "");
+    CHECK(DOJO_OBF("a b-c_1/2.3!") == "a b-c_1/2.3!");
+    // The encoded bytes differ from the plaintext (so it is not stored in the clear).
+    static constexpr obf::Obfuscated<6> encoded("DOJO1");
+    CHECK(std::memcmp(encoded.bytes.data(), "DOJO1", 5) != 0);
+}
+
+TEST_CASE("Licensing: the integrity self-check on an in-memory image", "[licensing]")
+{
+    using namespace integrity;
+    const auto marker = detail::marker();
+
+    std::vector<std::uint8_t> image;
+    for (int i = 0; i < 500; ++i)
+        image.push_back(static_cast<std::uint8_t>(i * 37 + 11));
+    const auto markerAt = image.size();
+    image.insert(image.end(), marker.begin(), marker.end());
+    image.insert(image.end(), 32, 0); // the zero stamp field
+    for (int i = 0; i < 500; ++i)
+        image.push_back(static_cast<std::uint8_t>(i * 13 + 7));
+
+    CHECK(detail::evaluateImage(image) == Status::unstamped); // not stamped yet
+    REQUIRE(detail::stampImage(image));
+    CHECK(detail::evaluateImage(image) == Status::ok);
+
+    SECTION("a byte changed anywhere is caught")
+    {
+        auto bad = image;
+        bad[10] ^= 0x01;
+        CHECK(detail::evaluateImage(bad) == Status::tampered);
+    }
+    SECTION("changing the stored stamp is caught")
+    {
+        auto bad = image;
+        bad[markerAt + marker.size()] ^= 0x80;
+        CHECK(detail::evaluateImage(bad) == Status::tampered);
+    }
+    SECTION("re-stamping after a change makes it valid again (as the build does)")
+    {
+        auto changed = image;
+        changed[20] ^= 0x01;
+        REQUIRE(detail::stampImage(changed));
+        CHECK(detail::evaluateImage(changed) == Status::ok);
+    }
+    SECTION("no marker: not enforced")
+    {
+        std::vector<std::uint8_t> plain(200, 0xab);
+        CHECK(detail::evaluateImage(plain) == Status::unstamped);
+    }
+}
+
+TEST_CASE("Licensing: a modified binary locks everything (gate tamper)", "[licensing]")
+{
+    gate::reset();
+    gate::publish(Tier::pro);
+    CHECK(gate::allows(Feature::use));
+    gate::setTamperLocked(true);
+    CHECK(gate::isTamperLocked());
+    CHECK_FALSE(gate::allows(Feature::use));
+    CHECK_FALSE(gate::allows(Feature::exporting));
+    CHECK(gate::tier() == Tier::none);
+    gate::reset();
+    CHECK_FALSE(gate::isTamperLocked());
+    CHECK(gate::allows(Feature::use));
+}
+
+TEST_CASE("Licensing: the embedded public key passes its own cross-check", "[licensing]")
+{
+    const auto key = getProductionPublicKey();
+    CHECK_FALSE(std::all_of(key.begin(), key.end(), [](std::uint8_t b) { return b == 0; }));
 }

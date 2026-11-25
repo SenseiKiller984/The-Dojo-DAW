@@ -1,6 +1,8 @@
 #include "app/DojoApplication.h"
 
+#include "app/Hardening.h"
 #include "app/LicenseGuard.h"
+#include "licensing/Integrity.h"
 #include "licensing/Features.h"
 #include "licensing/LicenseManager.h"
 
@@ -50,6 +52,8 @@ const juce::String DojoApplication::getApplicationVersion()
 
 void DojoApplication::initialise(const juce::String&)
 {
+    hardening::applyProcessHardening(); // (before any library or plug-in is loaded)
+
     options_ = CommandLineOptions::parse(getCommandLineParameterArray());
 
     if (options_.printVersion)
@@ -78,6 +82,13 @@ void DojoApplication::initialise(const juce::String&)
 
     // The license first: what it allows is asked by everything created afterwards.
     license_ = licensing::LicenseManager::createForApplication(*settings_->getUserSettings());
+
+    // A modified executable locks the application, whatever the key.
+    if (licensing::integrity::check() == licensing::integrity::Status::tampered)
+    {
+        licensing::gate::setTamperLocked(true);
+        juce::Logger::writeToLog("Integrity: this copy of The Dojo has been modified.");
+    }
 
     // The chosen theme, before any window or component exists.
     preferences_ = std::make_unique<ui::Preferences>(*settings_->getUserSettings());

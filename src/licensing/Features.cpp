@@ -10,6 +10,7 @@ constexpr std::uint32_t bit(Feature f) noexcept { return static_cast<std::uint32
 
 std::atomic<std::uint32_t> publishedFeatures{0};
 std::atomic<int> publishedTier{-1}; // -1: nothing published
+std::atomic<bool> tamperLocked{false};
 
 juce::ChangeBroadcaster& broadcaster()
 {
@@ -82,12 +83,16 @@ bool isPublished() noexcept
 
 Tier tier() noexcept
 {
+    if (tamperLocked.load())
+        return Tier::none;
     const int t = publishedTier.load();
     return t < 0 ? Tier::pro : static_cast<Tier>(t);
 }
 
 bool allows(Feature feature) noexcept
 {
+    if (tamperLocked.load())
+        return false;
     if (!isPublished())
         return true;
     return has(publishedFeatures.load(), feature);
@@ -103,10 +108,22 @@ juce::ChangeBroadcaster& changes()
     return broadcaster();
 }
 
+void setTamperLocked(bool locked) noexcept
+{
+    if (tamperLocked.exchange(locked) != locked)
+        broadcaster().sendChangeMessage();
+}
+
+bool isTamperLocked() noexcept
+{
+    return tamperLocked.load();
+}
+
 void reset()
 {
     publishedTier.store(-1);
     publishedFeatures.store(0);
+    tamperLocked.store(false);
 }
 } // namespace gate
 

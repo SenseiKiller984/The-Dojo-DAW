@@ -625,42 +625,24 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 
-## License keys
+## License
 
-The Dojo needs a license key. Without one it opens behind its license window: the DAW is dimmed behind it and nothing can be clicked or played (the sound card stays silent), only the window's close and maximise buttons. Enter a key there, or later in **Options > License...**.
+The Dojo needs a license key. Without one it opens behind its license window (the DAW is dimmed and the sound card stays silent); enter a key there, or later in **Options > License...**.
 
-![The license window over the dimmed DAW: a field for the key, Activate, and Try The Dojo for free!](docs/images/license-lock.png)
+**Trial key:** `DOJO1-2G00009K-HEPSBMAA-G3CWGJCM-FWW0JGSD-7C534SB3-A7912702-BE908NF3-Q3TX7HSM-HKSGC2S9-W0K9XTXD-P6XS1TB1-B1JZ0A79-8A0EY8JG-CX40J444`
+
+Paste it into the license window (the **Try The Dojo for free!** button opens this section) for a 7-day free trial, once per computer.
 
 | | Free Trial | Basic | Pro |
 |---|---|---|---|
-| How long | 7 days from activation, once per computer | forever | forever |
+| How long | 7 days, once per computer | forever | forever |
 | Exporting (audio, stems, ADM BWF, video, clip files, MusicXML) | no | yes | yes |
 | Surround (3.1, 5.1, 7.1, Dolby Digital, DTS; surround and 3D panners; surround monitoring) | yes | no | yes |
 | Dolby Atmos (5.1.4, 7.1.4, 9.1.6; ADM objects; ADM BWF; the external renderer) | yes | no | yes |
 | Pro devices: Studer A800, Harrison 4032, EMI TG12345, The Glue, 1980s Rhodes Suitcase 73 Mk II | yes | no | yes |
 | Sound | audible watermark; muted while recording software runs | clean | clean |
 
-### Free trial
-
-The one free-trial key (7 days, once per computer, no exporting):
-
-```
-DOJO1-2G00009K-HEPSBMAA-G3CWGJCM-FWW0JGSD-7C534SB3-A7912702-BE908NF3-Q3TX7HSM-HKSGC2S9-W0K9XTXD-P6XS1TB1-B1JZ0A79-8A0EY8JG-CX40J444
-```
-
-Paste it into The Dojo's license window (its **Try The Dojo for free!** button leads here). The 7 days run from the moment it is activated. When they are over, The Dojo locks again and this key does not work on that computer again: reinstalling The Dojo, editing its records or setting the clock back does not bring the trial back. A Basic or Pro key unlocks it. During the trial:
-- Every export is off.
-- What the sound card plays carries an audible watermark: a short noise burst after every 30 seconds of sound (the first after 15), on every output channel, so a recording of it (OBS, Voicemeeter, a loopback or virtual cable) has it too.
-- The output is muted while a program that records or reroutes it runs (OBS Studio, Streamlabs, XSplit, Bandicam, Camtasia, ShareX, Fraps, Voicemeeter, Voicemeeter Banana and Potato, Audacity, AudioRelay; on Linux also SimpleScreenRecorder, Kazam, vokoscreen, GPU Screen Recorder, Kooha, pw-record, parecord), or while the output is a virtual audio device (VB-Cable, Voicemeeter's inputs, BlackHole, Soundflower, "Stereo Mix", PulseAudio monitors...). The status bar says why.
-- On Windows the window is left out of screen recordings (it records as black).
-
-### Basic and Pro
-
-A Basic or Pro key works forever. What Basic does not include is greyed out with "(Pro)" or a PRO tag: the surround and Dolby Atmos choices in the track, folder and master format pickers, the 3D panner and ADM object items, the Surround and Renderer tabs of the Preferences, and the pro devices (in the browser, **+ Add Device** and the chains that use one). A project made with Pro still opens: its pro devices stay off (their settings are kept, and come back with a Pro key), a surround master is heard as a stereo fold-down, and exporting asks for a stereo master. Entering a Pro key upgrades on the spot.
-
-### How the keys work
-
-Keys are signed with Ed25519 (RFC 8032; [Monocypher](https://monocypher.org)): The Dojo holds only the public key, so a key cannot be made, or changed from Basic to Pro, without the private key, which never leaves the issuer's computer. A key is 112 characters of Crockford Base32 after `DOJO1-` (4 bytes of tier and serial, the 64-byte signature, a 2-byte check that catches typos); it is pasted, and case, dashes and spaces do not matter. The key is checked again every time The Dojo starts, so editing the settings does not change what it allows. Keys that leak can be revoked in a later release by their serial.
+![The license window over the dimmed DAW](docs/images/license-lock.png)
 
 ## Using it
 

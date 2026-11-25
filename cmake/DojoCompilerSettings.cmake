@@ -62,3 +62,31 @@ function(dojo_apply_project_warnings target)
         endif()
     endif()
 endfunction()
+
+# --------------------------------------------------------------------------------------------------
+# dojo::hardening — exploit-mitigation compile/link flags (DOJO_HARDENING). Linked PUBLIC into
+# dojo_core, so every Dojo object and executable picks them up. Skipped under a sanitizer (they
+# bring their own instrumentation and clash with FORTIFY/RELRO).
+add_library(dojo_hardening INTERFACE)
+add_library(dojo::hardening ALIAS dojo_hardening)
+
+if(DOJO_HARDENING AND NOT DOJO_SANITIZER)
+    if(MSVC)
+        target_compile_options(dojo_hardening INTERFACE /GS /guard:cf)
+        target_link_options(dojo_hardening INTERFACE
+            /GUARD:CF /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /CETCOMPAT /DEPENDENTLOADFLAG:0x800)
+    else()
+        # Control-flow and stack mitigations (x86-64; harmless names on the CI runners).
+        target_compile_options(dojo_hardening INTERFACE
+            -fstack-protector-strong
+            $<$<NOT:$<CONFIG:Debug>>:-U_FORTIFY_SOURCE>
+            $<$<NOT:$<CONFIG:Debug>>:-D_FORTIFY_SOURCE=2>)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+            target_compile_options(dojo_hardening INTERFACE -fcf-protection=full -fstack-clash-protection)
+        endif()
+        target_link_options(dojo_hardening INTERFACE
+            -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
+        # Position-independent executables (ASLR for the main image).
+        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    endif()
+endif()

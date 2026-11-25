@@ -20,3 +20,6 @@ option(DOJO_WITH_ARA "Host ARA 2 plug-ins (Melodyne, VocAlign, ...) on audio tra
 
 set(DOJO_SANITIZER "" CACHE STRING "GCC/Clang sanitizer to instrument Dojo targets with: (empty), address, undefined, thread")
 set_property(CACHE DOJO_SANITIZER PROPERTY STRINGS "" address undefined thread)
+
+option(DOJO_HARDENING "Add exploit-mitigation compiler/linker flags (CFG, ASLR, DEP, CET; RELRO, PIE, stack protector)" ON)
+option(DOJO_TAMPER_CHECK "Build the executable tamper self-check and stamp the binary after the build" ON)

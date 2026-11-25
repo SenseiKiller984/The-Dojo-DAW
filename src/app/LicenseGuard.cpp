@@ -1,6 +1,7 @@
 #include "app/LicenseGuard.h"
 
 #include "licensing/CaptureGuard.h"
+#include "licensing/Integrity.h"
 
 namespace dojo::app
 {
@@ -33,6 +34,8 @@ void LicenseGuard::check()
 {
     const bool trial = license_.getTier() == licensing::Tier::demo;
     recorders_ = trial ? licensing::capture::findRecordingSoftware() : juce::StringArray();
+    if (trial && licensing::integrity::isDebuggerPresent())
+        recorders_.addIfNotAlreadyThere("a debugger");
     const auto device = deviceHost_.getStatus();
     virtualDevice_ = trial && device.isOpen && licensing::capture::isVirtualAudioDevice(device.deviceName) ? device.deviceName : juce::String();
     apply();

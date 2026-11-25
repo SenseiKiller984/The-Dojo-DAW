@@ -60,6 +60,9 @@ void publish(Tier tier);
 [[nodiscard]] juce::String why(Feature feature);
 /** Tells listeners when the license changes (message thread). */
 [[nodiscard]] juce::ChangeBroadcaster& changes();
+/** A modified binary (integrity check failed): locks everything regardless of the key. */
+void setTamperLocked(bool locked) noexcept;
+[[nodiscard]] bool isTamperLocked() noexcept;
 /** Forgets what was published (tests). */
 void reset();
 } // namespace gate

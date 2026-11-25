@@ -1,5 +1,7 @@
 #include "app/SmokeTest.h"
 
+#include "licensing/Integrity.h"
+
 #include "core/rt/RealtimeGuard.h"
 
 #include <cstdio>
@@ -130,6 +132,16 @@ void SmokeTest::timerCallback()
     for (const auto& failure : windowFailures_)
         failures.add("window: " + failure);
 
+    // The freshly built (and stamped) binary must not report itself as modified.
+    const auto integrity = licensing::integrity::status();
+    const char* integrityText = integrity == licensing::integrity::Status::ok          ? "ok"
+                                : integrity == licensing::integrity::Status::unstamped  ? "unstamped (not enforced)"
+                                : integrity == licensing::integrity::Status::unreadable ? "unreadable (not enforced)"
+                                : integrity == licensing::integrity::Status::tampered   ? "TAMPERED"
+                                                                                        : "disabled";
+    if (integrity == licensing::integrity::Status::tampered)
+        failures.add("integrity: the executable reports itself as modified");
+
     juce::String report;
     report << "[smoke-test] UI frames: " << static_cast<juce::int64>(frames) << "\n"
            << "[smoke-test] Audio device: "
@@ -144,6 +156,7 @@ void SmokeTest::timerCallback()
            << ", violations: " << static_cast<juce::int64>(violations) << "\n"
            << "[smoke-test] Window maximise / restore / full screen: "
            << (windowFailures_.isEmpty() ? "OK" : juce::String(windowFailures_.size()) + " problem(s)") << "\n"
+           << "[smoke-test] Integrity: " << integrityText << "\n"
            << "[smoke-test] Result: "
            << (failures.isEmpty() ? "PASS" : "FAIL - " + failures.joinIntoString("; "));
 

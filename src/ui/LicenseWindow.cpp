@@ -2,6 +2,8 @@
 
 #include "ui/theme/DojoTheme.h"
 
+#include "licensing/Features.h"
+
 namespace dojo::ui
 {
 namespace
@@ -90,6 +92,20 @@ LicensePanel::~LicensePanel()
 
 void LicensePanel::update()
 {
+    if (licensing::gate::isTamperLocked())
+    {
+        status_.setText("This copy of The Dojo has been modified or is damaged. Please reinstall it from the official download.",
+                        juce::dontSendNotification);
+        key_.setVisible(false);
+        prompt_.setVisible(false);
+        activate_.setVisible(false);
+        trial_.setVisible(false);
+        remove_.setVisible(false);
+        close_.setVisible(dismissable_);
+        resized();
+        repaint();
+        return;
+    }
     const auto& status = license_.getStatus();
     juce::String text;
     switch (status.tier)

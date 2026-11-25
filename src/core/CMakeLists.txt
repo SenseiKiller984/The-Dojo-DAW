@@ -23,7 +23,7 @@ add_library(dojo::core ALIAS dojo_core)
 
 target_include_directories(dojo_core PUBLIC ${PROJECT_SOURCE_DIR}/src "${_dojo_generated_dir}")
 target_compile_features(dojo_core PUBLIC cxx_std_20)
-target_link_libraries(dojo_core PUBLIC Threads::Threads dojo::sanitizers)
+target_link_libraries(dojo_core PUBLIC Threads::Threads dojo::sanitizers dojo::hardening)
 dojo_apply_project_warnings(dojo_core)
 set_target_properties(dojo_core PROPERTIES FOLDER "Dojo")
 
