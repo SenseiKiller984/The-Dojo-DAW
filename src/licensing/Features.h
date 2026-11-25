@@ -10,8 +10,8 @@
     What each license allows, and the switch the rest of The Dojo asks.
 
         No License   nothing: The Dojo is locked (the license window), the sound card silent
-        Free Trial   everything but exporting; the output carries an audible watermark and is
-                     muted while recording software runs or a virtual audio device is the output
+        Free Trial   everything but exporting; the sound is muted while recording software runs or
+                     a virtual audio device is the output
         Basic        everything but surround, Dolby Atmos (3D beds, ADM objects, ADM BWF, the
                      external renderer) and the pro devices
         Pro          everything
@@ -30,7 +30,6 @@ enum class Feature : std::uint32_t
     surround = 1u << 2,     ///< multichannel formats, the surround panner, surround monitoring
     immersive = 1u << 3,    ///< Dolby Atmos: 3D beds, ADM objects, ADM BWF, the external renderer, ADM-OSC
     proDevices = 1u << 4,   ///< Studer A800, Harrison 4032, EMI TG12345, The Glue, Rhodes Suitcase 73
-    cleanOutput = 1u << 5,  ///< the sound card's output without the trial's watermark
 };
 
 [[nodiscard]] std::uint32_t featuresOf(Tier tier) noexcept;

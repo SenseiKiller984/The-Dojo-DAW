@@ -238,15 +238,13 @@ TEST_CASE("Licensing: what each license allows", "[licensing]")
     CHECK(none == 0u);
     CHECK(has(demo, Feature::use));
     CHECK_FALSE(has(demo, Feature::exporting));
-    CHECK_FALSE(has(demo, Feature::cleanOutput));
     CHECK(has(demo, Feature::surround));
     CHECK(has(demo, Feature::proDevices));
     CHECK(has(basic, Feature::exporting));
-    CHECK(has(basic, Feature::cleanOutput));
     CHECK_FALSE(has(basic, Feature::surround));
     CHECK_FALSE(has(basic, Feature::immersive));
     CHECK_FALSE(has(basic, Feature::proDevices));
-    for (auto f : {Feature::use, Feature::exporting, Feature::surround, Feature::immersive, Feature::proDevices, Feature::cleanOutput})
+    for (auto f : {Feature::use, Feature::exporting, Feature::surround, Feature::immersive, Feature::proDevices})
         CHECK(has(pro, f));
 
     CHECK(isProDevice("builtin:tape800"));

@@ -52,7 +52,7 @@ void LicenseGuard::apply()
         policy = Policy::clean;
         break;
     case licensing::Tier::demo:
-        policy = recorders_.isEmpty() && virtualDevice_.isEmpty() ? Policy::watermark : Policy::mute;
+        policy = recorders_.isEmpty() && virtualDevice_.isEmpty() ? Policy::clean : Policy::mute;
         break;
     case licensing::Tier::none:
         break;
@@ -73,7 +73,7 @@ juce::String LicenseGuard::describe() const
         if (virtualDevice_.isNotEmpty())
             return "TRIAL: MUTED ON A VIRTUAL AUDIO DEVICE (" + virtualDevice_.toUpperCase() + ")";
         const int days = license_.getTrialDaysLeft();
-        return "TRIAL: " + juce::String(days) + (days == 1 ? " DAY" : " DAYS") + " LEFT, NO EXPORT, WATERMARKED";
+        return "TRIAL: " + juce::String(days) + (days == 1 ? " DAY" : " DAYS") + " LEFT, NO EXPORT";
     }
     case licensing::Tier::none: break;
     }

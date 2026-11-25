@@ -78,60 +78,28 @@ float run(engine::OutputGuard& guard, int numSamples, float level, int blockSize
 
 TEST_CASE("License gating: what reaches the sound card", "[licensing][engine]")
 {
-    constexpr double kRate = 48'000.0;
     engine::OutputGuard guard;
-    guard.prepare(kRate);
     CHECK(guard.getPolicy() == engine::OutputGuard::Policy::mute); // (muted until the license says otherwise)
 
-    std::vector<float> l(256, 0.5f), r(256, 0.5f);
-    float* out[2] = {l.data(), r.data()};
-    guard.process(out, 2, 256);
+    // Muted: every output channel is cleared (the mix, direct outputs, sends, loopbacks alike).
+    std::vector<float> l(256, 0.5f), r(256, 0.5f), c(256, 0.5f);
+    float* out[3] = {l.data(), r.data(), c.data()};
+    guard.process(out, 3, 256);
     CHECK(l[100] == 0.0f);
     CHECK(r[255] == 0.0f);
+    CHECK(c[0] == 0.0f);
 
+    // Clean: the signal is left exactly as it was.
     guard.setPolicy(engine::OutputGuard::Policy::clean);
     CHECK(run(guard, 48'000, 0.5f) == 0.0f);
-
-    SECTION("the trial's watermark: after 15 seconds of sound, then every 30 seconds")
-    {
-        guard.setPolicy(engine::OutputGuard::Policy::watermark);
-        // Silence does not count, and never gets a burst.
-        CHECK(run(guard, static_cast<int>(60 * kRate), 0.0f) == 0.0f);
-        CHECK(guard.getWatermarkCount() == 0u);
-        CHECK(run(guard, static_cast<int>(14 * kRate), 0.2f) == 0.0f);
-        CHECK(guard.getWatermarkCount() == 0u);
-        CHECK(run(guard, static_cast<int>(2 * kRate), 0.2f) > 0.05f); // the burst
-        CHECK(guard.getWatermarkCount() == 1u);
-        CHECK(run(guard, static_cast<int>(27 * kRate), 0.2f) == 0.0f);
-        CHECK(run(guard, static_cast<int>(4 * kRate), 0.2f) > 0.05f);
-        CHECK(guard.getWatermarkCount() == 2u);
-        // Every channel the device plays carries it (direct outputs, sends, loopbacks alike).
-        std::vector<float> a(512, 0.3f), b(512, 0.3f), c(512, 0.3f);
-        float* three[3] = {a.data(), b.data(), c.data()};
-        engine::OutputGuard g3;
-        g3.prepare(kRate);
-        g3.setPolicy(engine::OutputGuard::Policy::watermark);
-        bool touched[3] = {false, false, false};
-        for (int block = 0; block < static_cast<int>(17 * kRate / 512); ++block)
-        {
-            std::fill(a.begin(), a.end(), 0.3f);
-            std::fill(b.begin(), b.end(), 0.3f);
-            std::fill(c.begin(), c.end(), 0.3f);
-            g3.process(three, 3, 512);
-            for (int ch = 0; ch < 3; ++ch)
-                for (int i = 0; i < 512; ++i)
-                    touched[ch] = touched[ch] || std::abs(three[ch][i] - 0.3f) > 0.01f;
-        }
-        CHECK((touched[0] && touched[1] && touched[2]));
-    }
 
     SECTION("the device host starts muted")
     {
         engine::AudioEngine engine(0);
         engine::AudioDeviceHost host(engine);
         CHECK(host.getOutputPolicy() == engine::OutputGuard::Policy::mute);
-        host.setOutputPolicy(engine::OutputGuard::Policy::watermark);
-        CHECK(host.getOutputPolicy() == engine::OutputGuard::Policy::watermark);
+        host.setOutputPolicy(engine::OutputGuard::Policy::clean);
+        CHECK(host.getOutputPolicy() == engine::OutputGuard::Policy::clean);
     }
 }
 

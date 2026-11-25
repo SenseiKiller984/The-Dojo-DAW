@@ -72,7 +72,7 @@ LicenseManager::Status LicenseManager::evaluate()
         status.tier = Tier::demo;
         status.serial = payload->serial;
         status.trialEndsMs = trial.endsMs;
-        status.message = "Free trial: exporting is off and the output carries a watermark.";
+        status.message = "Free trial: exporting is off.";
         return status;
     }
 

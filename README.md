@@ -640,7 +640,7 @@ Paste it into the license window (the **Try The Dojo for free!** button opens th
 | Surround (3.1, 5.1, 7.1, Dolby Digital, DTS; surround and 3D panners; surround monitoring) | yes | no | yes |
 | Dolby Atmos (5.1.4, 7.1.4, 9.1.6; ADM objects; ADM BWF; the external renderer) | yes | no | yes |
 | Pro devices: Studer A800, Harrison 4032, EMI TG12345, The Glue, 1980s Rhodes Suitcase 73 Mk II | yes | no | yes |
-| Sound | audible watermark; muted while recording software runs | clean | clean |
+| Sound | muted while recording software runs | clean | clean |
 
 ![The license window over the dimmed DAW](docs/images/license-lock.png)
 

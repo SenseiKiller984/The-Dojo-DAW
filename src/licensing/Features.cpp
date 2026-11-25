@@ -26,10 +26,10 @@ std::uint32_t featuresOf(Tier tier) noexcept
     case Tier::demo:
         return bit(Feature::use) | bit(Feature::surround) | bit(Feature::immersive) | bit(Feature::proDevices);
     case Tier::basic:
-        return bit(Feature::use) | bit(Feature::exporting) | bit(Feature::cleanOutput);
+        return bit(Feature::use) | bit(Feature::exporting);
     case Tier::pro:
         return bit(Feature::use) | bit(Feature::exporting) | bit(Feature::surround) | bit(Feature::immersive)
-               | bit(Feature::proDevices) | bit(Feature::cleanOutput);
+               | bit(Feature::proDevices);
     case Tier::none:
         break;
     }
@@ -60,7 +60,6 @@ juce::String whyUnavailable(Feature feature, Tier tier)
     case Feature::surround: return "Surround sound needs a Pro license.";
     case Feature::immersive: return "Dolby Atmos (3D formats, ADM objects and ADM BWF) needs a Pro license.";
     case Feature::proDevices: return "This device is one of the pro devices: it needs a Pro license.";
-    case Feature::cleanOutput: return "The free trial's output carries an audible watermark.";
     case Feature::use: break;
     }
     return "The Dojo needs a license key.";

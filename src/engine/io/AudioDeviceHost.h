@@ -59,8 +59,6 @@ public:
     using OutputPolicy = OutputGuard::Policy;
     void setOutputPolicy(OutputPolicy policy) noexcept;
     [[nodiscard]] OutputPolicy getOutputPolicy() const noexcept;
-    /** Watermark bursts played so far (tests and diagnostics). */
-    [[nodiscard]] std::uint64_t getWatermarkCount() const noexcept;
 
     AudioDeviceHost(const AudioDeviceHost&) = delete;
     AudioDeviceHost& operator=(const AudioDeviceHost&) = delete;

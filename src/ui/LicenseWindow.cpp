@@ -115,7 +115,7 @@ void LicensePanel::update()
         break;
     case licensing::Tier::demo:
         text = "Free trial: " + juce::String(license_.getTrialDaysLeft()) + " day" + (license_.getTrialDaysLeft() == 1 ? "" : "s")
-               + " left. Exporting is off, and the sound carries a watermark. Enter a Basic or Pro key to keep everything.";
+               + " left. Exporting is off. Enter a Basic or Pro key to keep everything.";
         break;
     case licensing::Tier::basic:
         text = "Basic license (serial " + juce::String(status.serial)

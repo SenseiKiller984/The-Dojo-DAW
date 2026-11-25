@@ -24,7 +24,6 @@ public:
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override
     {
         jassert(device != nullptr);
-        guard_.prepare(device->getCurrentSampleRate());
         errorReported_.store(false, std::memory_order_relaxed);
         engine_.setDeviceLatency(device->getInputLatencyInSamples(), device->getOutputLatencyInSamples());
         engine_.prepare(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
@@ -204,11 +203,6 @@ void AudioDeviceHost::setOutputPolicy(OutputPolicy policy) noexcept
 AudioDeviceHost::OutputPolicy AudioDeviceHost::getOutputPolicy() const noexcept
 {
     return callback_->getGuard().getPolicy();
-}
-
-std::uint64_t AudioDeviceHost::getWatermarkCount() const noexcept
-{
-    return callback_->getGuard().getWatermarkCount();
 }
 
 AudioDeviceHost::~AudioDeviceHost()

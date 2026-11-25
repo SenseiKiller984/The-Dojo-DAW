@@ -10,8 +10,7 @@
     one, its output is muted.
 
     This raises the bar, it is not a wall: a program can be renamed, and a cable from the
-    headphone socket into another computer records anything. That is why the trial's output also
-    carries an audible watermark (engine::AudioDeviceHost::OutputPolicy).
+    headphone socket into another computer records anything.
 */
 namespace dojo::licensing::capture
 {

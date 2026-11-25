@@ -12,10 +12,10 @@ namespace dojo::app
 
 /**
     Keeps what the sound card plays in line with the license (engine::OutputGuard): silent without a
-    license, clean with Basic or Pro, watermarked in the free trial, and silent in the trial while a
-    recording program runs (OBS, Voicemeeter...) or a virtual audio device is the output. Looks at
-    the running programs every two seconds in the trial, and asks the license again every minute (the
-    trial's end, the clock). Message thread only.
+    license, clean with Basic or Pro, and clean in the free trial but silenced while a recording
+    program runs (OBS, Voicemeeter...) or a virtual audio device is the output. Looks at the running
+    programs every two seconds in the trial, and asks the license again every minute (the trial's
+    end, the clock). Message thread only.
 */
 class LicenseGuard final : private juce::Timer, private juce::ChangeListener
 {
