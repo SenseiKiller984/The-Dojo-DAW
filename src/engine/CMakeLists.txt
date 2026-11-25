@@ -35,6 +35,7 @@ add_library(dojo_engine STATIC
     io/AdmMetadata.h
     io/AudioDeviceHost.cpp
     io/AudioDeviceHost.h
+    io/OutputGuard.h
     io/Bw64Writer.cpp
     io/Bw64Writer.h
     io/LameMp3Format.cpp

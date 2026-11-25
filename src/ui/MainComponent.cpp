@@ -343,6 +343,8 @@ void MainComponent::refreshStatusBar()
     info.pendingImports = project_.getPendingImportCount();
     info.recording = services_.recorder.isRecording() || beatRecording_;
     info.beatMaker = services_.preferences.getBeatMakerMode();
+    if (services_.describeLicense)
+        info.license = services_.describeLicense();
     info.notice = notice_;
     info.scanningPlugins = services_.plugins.isScanning();
     info.midiInputs = controller_.getDeviceHost().getMidiInputNames().size();
@@ -447,11 +449,31 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& c)
                                    compCrossfade10,
                                    compCrossfade20,
                                    compCrossfade50,
-                                   toggleTempoTrack};
+                                   toggleTempoTrack,
+                                   showLicense};
     c.addArray(ids, static_cast<int>(std::size(ids)));
 }
 
+bool MainComponent::isCommandAllowed(juce::CommandID id)
+{
+    using licensing::Feature;
+    namespace gate = licensing::gate;
+    // Locked (no license): only full screen, the license window and quitting.
+    if (!gate::allows(Feature::use))
+        return id == commands::toggleFullScreen || id == commands::showLicense || id == juce::StandardApplicationCommandIDs::quit;
+    if (id == commands::exportAudio)
+        return gate::allows(Feature::exporting);
+    return true;
+}
+
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
+{
+    describeCommand(id, info);
+    if (!isCommandAllowed(id))
+        info.setActive(false);
+}
+
+void MainComponent::describeCommand(juce::CommandID id, juce::ApplicationCommandInfo& info)
 {
     using namespace commands;
     constexpr auto cmd = juce::ModifierKeys::commandModifier;
@@ -645,6 +667,9 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
     case toggleClipRatings:
         info.setInfo("Clip Ratings", "Show the rating (stars) of clips in their title bars", categories::view, 0);
         info.setTicked(editor_.isShowingClipRatings());
+        break;
+    case showLicense:
+        info.setInfo("License...", "Your license: enter or change the license key", categories::options, 0);
         break;
     case toggleTempoTrack:
         info.setInfo("Tempo Track", "Show the tempo track: tempo changes, ramps and time signatures", categories::view, 0);
@@ -901,6 +926,14 @@ bool MainComponent::perform(const InvocationInfo& invocation)
     using namespace commands;
     auto& session = project_.getSession();
 
+    // (Checked here too: a shortcut, a control surface or a menu left open must not get round it.)
+    if (!isCommandAllowed(invocation.commandID))
+    {
+        if (invocation.commandID == exportAudio && licensing::gate::allows(licensing::Feature::use))
+            showMessage("Export Audio", licensing::gate::why(licensing::Feature::exporting));
+        return true;
+    }
+
     switch (invocation.commandID)
     {
     case newSession:
@@ -1039,6 +1072,10 @@ bool MainComponent::perform(const InvocationInfo& invocation)
     case clipRating4:
     case clipRating5:
         actions::setSelectedClipsRating(session, editor_, static_cast<int>(invocation.commandID - clipRatingNone));
+        break;
+    case showLicense:
+        if (services_.showLicense)
+            services_.showLicense();
         break;
     case toggleTempoTrack:
         editor_.setShowingTempoTrack(!editor_.isShowingTempoTrack());

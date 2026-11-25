@@ -37,6 +37,8 @@ add_executable(dojo_tests
     InstrumentTests.cpp
     LatencyDisplayTests.cpp
     LfoTests.cpp
+    LicenseGatingTests.cpp
+    LicensingTests.cpp
     LimiterTests.cpp
     MidiEffectTests.cpp
     PitchEditTests.cpp
@@ -95,7 +97,7 @@ endif()
 target_compile_definitions(dojo_tests PRIVATE
     DOJO_EXPECT_ALLOCATION_TRAP=$<BOOL:${DOJO_ALLOCATION_TRAP_COMPATIBLE}>)
 
-target_link_libraries(dojo_tests PRIVATE dojo::ui dojo::session dojo::plugins dojo::video Catch2::Catch2WithMain)
+target_link_libraries(dojo_tests PRIVATE dojo::ui dojo::session dojo::plugins dojo::video dojo::licensing Catch2::Catch2WithMain)
 
 # Windows: H.264 test movies made (and their sound read back) with Media Foundation, for the muxer.
 if(WIN32)

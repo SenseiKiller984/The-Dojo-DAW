@@ -1,4 +1,5 @@
 #include "ui/components/ArrangerView.h"
+#include "licensing/Features.h"
 
 #include "ui/BrowserDrag.h"
 #include "ui/WaveformPainter.h"
@@ -4056,7 +4057,8 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
         juce::PopupMenu formats;
         const auto current = session::track::getFormat(t);
         for (const auto format : session::getAllTrackFormats())
-            formats.addItem(session::getDisplayName(format), true, current == format,
+            formats.addItem(session::getDisplayName(format) + (session::isFormatLicensed(format) ? "" : "  (Pro)"),
+                            session::isFormatLicensed(format) || current == format, current == format,
                             withTracks(idsOf(selection), [format](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
                                        {
                                            self.session_.beginTransaction("Track Format");
@@ -4083,13 +4085,14 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
         if (canPan3d)
         {
             const bool on = session::track::isPan3d(t);
-            menu.addItem("3D Panner", true, on, withTracks(idsOf(selection), [on](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
+            const bool surroundOk = licensing::gate::allows(licensing::Feature::surround);
+            menu.addItem(surroundOk ? "3D Panner" : "3D Panner  (Pro)", surroundOk || on, on, withTracks(idsOf(selection), [on](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
                                                            {
                                                                self.session_.beginTransaction(on ? "3D Panner Off" : "3D Panner On");
                                                                for (auto tree : trees)
                                                                    session::track::setPan3d(tree, !on, &self.session_.getUndoManager());
                                                            }));
-            menu.addItem("Open 3D Panner...", [safe, trackId]
+            menu.addItem("Open 3D Panner...", surroundOk, false, [safe, trackId]
                          {
                              if (safe == nullptr)
                                  return;
@@ -4107,7 +4110,8 @@ void ArrangerView::showTrackMenu(const juce::ValueTree& t)
             // An ADM object (Dolby Atmos): its own channel(s) with its position in an ADM BWF
             // export and on the external renderer's outputs, instead of panned into the bed.
             const bool object = session::track::isObject(t);
-            menu.addItem("ADM Object (Dolby Atmos)", on, object,
+            const bool atmosOk = licensing::gate::allows(licensing::Feature::immersive);
+            menu.addItem(atmosOk ? "ADM Object (Dolby Atmos)" : "ADM Object (Dolby Atmos)  (Pro)", on && (atmosOk || object), object,
                          withTracks(idsOf(selection), [object](ArrangerView& self, const std::vector<juce::ValueTree>& trees)
                                     {
                                         self.session_.beginTransaction(object ? "ADM Object Off" : "ADM Object On");

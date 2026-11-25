@@ -70,6 +70,12 @@ public:
     void storeStates();
     /** Forgets instances whose DEVICE trees are no longer in the session. */
     void purgeUnused();
+    /** Forgets the devices that could not be created, so the next graph tries them again (e.g. the
+        pro devices after a license upgrade). */
+    void forgetFailed();
+    /** Drops the instances of these device types (their state written into their trees first), so
+        the next graph creates them again, or is refused them (the pro devices after a downgrade). */
+    void forgetTypes(const juce::StringArray& types);
 
     /** Called on the message thread (coalesced) after any device parameter changed. */
     std::function<void()> onParameterChanged;

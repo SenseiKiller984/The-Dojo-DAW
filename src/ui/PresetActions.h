@@ -29,6 +29,9 @@ struct Outcome
     juce::String message;
 };
 
+/** Whether the license allows a preset (one with a pro device needs Pro or the trial). */
+[[nodiscard]] bool isLicensed(const session::presets::Preset& preset);
+
 /** Loads `preset` into `device` as one undo step; explains a preset that has nothing for it. */
 Outcome load(session::Project& project, const session::presets::Preset& preset, const juce::ValueTree& device);
 /** Loads the first of `files` (dropped preset files, in order) that fits `device`. */

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/io/OutputGuard.h"
+
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include <atomic>
@@ -51,6 +53,14 @@ public:
 
     explicit AudioDeviceHost(AudioEngine& engine);
     ~AudioDeviceHost();
+
+    /** What reaches the sound card (set from the license): see OutputGuard. Muted until the
+        application says otherwise. Any thread. */
+    using OutputPolicy = OutputGuard::Policy;
+    void setOutputPolicy(OutputPolicy policy) noexcept;
+    [[nodiscard]] OutputPolicy getOutputPolicy() const noexcept;
+    /** Watermark bursts played so far (tests and diagnostics). */
+    [[nodiscard]] std::uint64_t getWatermarkCount() const noexcept;
 
     AudioDeviceHost(const AudioDeviceHost&) = delete;
     AudioDeviceHost& operator=(const AudioDeviceHost&) = delete;

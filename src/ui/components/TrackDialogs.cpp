@@ -65,7 +65,10 @@ NewTracksPanel::Row::Row()
     // 9 Dolby Digital, 10 DTS.
     const auto formats = session::getAllTrackFormats();
     for (std::size_t i = 0; i < formats.size(); ++i)
-        format.addItem(session::getDisplayName(formats[i]), static_cast<int>(i) + 1);
+    {
+        format.addItem(session::getDisplayName(formats[i]) + (session::isFormatLicensed(formats[i]) ? "" : "  (Pro)"), static_cast<int>(i) + 1);
+        format.setItemEnabled(static_cast<int>(i) + 1, session::isFormatLicensed(formats[i]));
+    }
     format.setSelectedId(2, juce::dontSendNotification);
     for (std::size_t i = 0; i < kNewTrackTypes.size(); ++i)
         type.addItem(actions::getName(kNewTrackTypes[i]), static_cast<int>(i) + 1);

@@ -1,5 +1,7 @@
 #include "session/DeviceManager.h"
 
+#include "licensing/Features.h"
+
 #include <vector>
 
 namespace dojo::session
@@ -50,7 +52,11 @@ std::shared_ptr<engine::ProcessorNode> DeviceManager::getNode(const juce::ValueT
     entry.type = type;
 
     juce::String error;
-    auto processor = creator_ ? creator_(deviceTree, sampleRate, blockSize, error) : nullptr;
+    // (The license: without Pro, the pro devices are not created; their settings stay in the tree.)
+    const bool licensed = !licensing::isProDevice(type) || licensing::gate::allows(licensing::Feature::proDevices);
+    if (!licensed)
+        error = licensing::gate::why(licensing::Feature::proDevices);
+    auto processor = licensed && creator_ ? creator_(deviceTree, sampleRate, blockSize, error) : nullptr;
 
     if (processor == nullptr)
     {
@@ -143,6 +149,41 @@ std::shared_ptr<engine::ProcessorNode> DeviceManager::findNode(std::uint32_t dev
     const std::lock_guard lock(mutex_);
     const auto it = entries_.find(deviceId);
     return it != entries_.end() ? it->second.node : nullptr;
+}
+
+void DeviceManager::forgetFailed()
+{
+    const std::lock_guard lock(mutex_);
+    for (auto it = entries_.begin(); it != entries_.end();)
+        it = it->second.node == nullptr ? entries_.erase(it) : std::next(it);
+}
+
+void DeviceManager::forgetTypes(const juce::StringArray& types)
+{
+    storeStates(); // (nothing of their settings is lost)
+    std::vector<std::shared_ptr<engine::ProcessorNode>> dropped;
+    std::vector<std::uint32_t> droppedIds;
+    {
+        const std::lock_guard lock(mutex_);
+        for (auto it = entries_.begin(); it != entries_.end();)
+        {
+            if (!types.contains(it->second.type))
+            {
+                ++it;
+                continue;
+            }
+            if (it->second.node != nullptr)
+            {
+                it->second.node->getProcessor().removeListener(this);
+                dropped.push_back(it->second.node);
+                droppedIds.push_back(it->first);
+            }
+            it = entries_.erase(it);
+        }
+    }
+    if (onProcessorRemoved)
+        for (const auto id : droppedIds)
+            onProcessorRemoved(id);
 }
 
 juce::String DeviceManager::getError(std::uint32_t deviceId) const

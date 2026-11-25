@@ -1,5 +1,9 @@
 #include "app/DojoApplication.h"
 
+#include "app/LicenseGuard.h"
+#include "licensing/Features.h"
+#include "licensing/LicenseManager.h"
+
 #include "app/MainWindow.h"
 #include "app/SmokeTest.h"
 #include "core/rt/RealtimeGuard.h"
@@ -72,6 +76,9 @@ void DojoApplication::initialise(const juce::String&)
     settings_ = std::make_unique<juce::ApplicationProperties>();
     settings_->setStorageParameters(settingsOptions);
 
+    // The license first: what it allows is asked by everything created afterwards.
+    license_ = licensing::LicenseManager::createForApplication(*settings_->getUserSettings());
+
     // The chosen theme, before any window or component exists.
     preferences_ = std::make_unique<ui::Preferences>(*settings_->getUserSettings());
     ui::theme::applyTheme(ui::theme::findTheme(preferences_->getThemeName()));
@@ -110,6 +117,7 @@ void DojoApplication::initialise(const juce::String&)
                                          juce::String& error) -> std::unique_ptr<juce::AudioProcessor>
         {
             const auto type = session::device::getType(device);
+            // (The license's pro devices are refused before this, by the DeviceManager.)
             if (devices::isBuiltinType(type))
                 return devices::createBuiltinDevice(type);
 
@@ -154,6 +162,7 @@ void DojoApplication::initialise(const juce::String&)
     oscBridge_ = std::make_unique<session::AdmOscBridge>(*project_, *controller_);
     applyExternalRenderer();
     preview_ = std::make_unique<engine::PreviewService>(*engine_, project_->getAssets().getFormatManager());
+    licenseGuard_ = std::make_unique<LicenseGuard>(*license_, *deviceHost_, [this] { licenseChanged(); });
 
     if (options_.testTone)
         controller_->setTestToneEnabled(true);
@@ -163,6 +172,8 @@ void DojoApplication::initialise(const juce::String&)
                                                                    *recorder_, *exporter_, *settings_, *preview_,
                                                                    *preferences_, {}, {}, {}, {}});
     services_->describeExternalRenderer = [this] { return describeExternalRenderer(); };
+    services_->license = license_.get();
+    services_->describeLicense = [this] { return licenseGuard_ != nullptr ? licenseGuard_->describe() : juce::String(); };
     mainWindow_ = std::make_unique<MainWindow>(*services_);
 
     if (options_.sessionFile != juce::File())
@@ -199,6 +210,7 @@ void DojoApplication::shutdown()
     smokeTest_.reset();
     mainWindow_.reset(); // 1. UI goes first: nothing can post commands any more.
     services_.reset();
+    licenseGuard_.reset();
     commandManager_.reset();
     oscBridge_.reset();
     exporter_.reset();
@@ -213,6 +225,7 @@ void DojoApplication::shutdown()
     engine_.reset(); // 3. Now the real-time state (and the last graphs) can be destroyed.
 
     preferences_.reset();
+    license_.reset();
     settings_.reset();
 
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
@@ -270,6 +283,9 @@ void DojoApplication::applySurroundMonitoring()
     case ui::Preferences::SurroundMode::virtualizer: mode = Mode::virtualizer; break;
     case ui::Preferences::SurroundMode::device:      mode = Mode::device; break;
     }
+    // Without surround (Basic): a surround project is heard as a stereo fold-down, whatever the tab says.
+    if (!licensing::gate::allows(licensing::Feature::surround))
+        mode = Mode::foldDown;
     // ALSA orders surround channels its own way; every other driver uses the WAVE order.
     const bool alsa = deviceHost_ != nullptr && deviceHost_->getStatus().deviceType == "ALSA";
     controller_->setSurroundMonitoring(mode, preferences_->getVirtualizerSpeakers(), preferences_->getVirtualizerRoom(), alsa);
@@ -279,7 +295,13 @@ void DojoApplication::applyExternalRenderer()
 {
     if (preferences_ == nullptr || project_ == nullptr || oscBridge_ == nullptr)
         return;
-    const auto r = preferences_->getExternalRenderer();
+    auto r = preferences_->getExternalRenderer();
+    if (!licensing::gate::allows(licensing::Feature::immersive))
+    {
+        // Without Dolby Atmos (Basic): objects stay in the bed and nothing goes to an external renderer.
+        r.objectOutputs = false;
+        r.osc = false;
+    }
     using Rendering = session::GraphBuilder::ObjectRendering;
     if (exporter_ == nullptr || !exporter_->isRunning()) // (an ADM export puts it back itself)
         project_->getCompiler().setObjectRendering(r.objectOutputs ? Rendering::outputs : Rendering::inBed);
@@ -294,6 +316,20 @@ void DojoApplication::applyExternalRenderer()
     if (osc.enabled != current.enabled || osc.host != current.host || osc.port != current.port || osc.rate != current.rate
         || osc.polar != current.polar || osc.cartesian != current.cartesian)
         oscBridge_->setSettings(osc);
+}
+
+void DojoApplication::licenseChanged()
+{
+    applySurroundMonitoring();
+    applyExternalRenderer();
+    if (project_ != nullptr)
+    {
+        // The pro devices: created (or refused) again under the new license.
+        project_->getDevices().forgetFailed();
+        project_->getCompiler().rebuildSoon();
+    }
+    if (mainWindow_ != nullptr)
+        mainWindow_->getMainComponent().repaint();
 }
 
 juce::String DojoApplication::describeExternalRenderer() const

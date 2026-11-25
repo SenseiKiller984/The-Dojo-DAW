@@ -1,5 +1,7 @@
 #include "ui/components/BrowserPanel.h"
 
+#include "licensing/Features.h"
+
 #include "devices/DeviceRegistry.h"
 #include "session/DrumKitDemo.h"
 #include "ui/BrowserDrag.h"
@@ -559,8 +561,9 @@ private:
         {
             if (selected)
                 g.fillAll(colour::accent.withAlpha(0.28f));
+            const bool licensed = presetActions::isLicensed(*r.preset);
             const float cy = static_cast<float>(height) * 0.5f;
-            g.setColour(r.preset->builtIn ? colour::accent : colour::textSecondary);
+            g.setColour(!licensed ? colour::textMuted : r.preset->builtIn ? colour::accent : colour::textSecondary);
             if (r.preset->chain)
             {
                 // Three linked devices.
@@ -573,12 +576,13 @@ private:
                 diamond.addQuadrilateral(15.0f, cy - 4.0f, 19.0f, cy, 15.0f, cy + 4.0f, 11.0f, cy);
                 g.fillPath(diamond);
             }
-            const auto detail = r.preset->chain ? (r.preset->category.isNotEmpty() ? r.preset->category + ", " : juce::String()) +
-                                                      juce::String(static_cast<int>(r.preset->devices.size())) + " devices"
-                                                : r.preset->getDeviceNames().joinIntoString(", ");
+            const auto detail = !licensed ? juce::String("PRO")
+                                : r.preset->chain ? (r.preset->category.isNotEmpty() ? r.preset->category + ", " : juce::String()) +
+                                                        juce::String(static_cast<int>(r.preset->devices.size())) + " devices"
+                                                  : r.preset->getDeviceNames().joinIntoString(", ");
             g.setFont(sans(10.5f));
             const int detailWidth = std::min(width / 2, juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), detail) + 4);
-            g.setColour(colour::textPrimary);
+            g.setColour(licensed ? colour::textPrimary : colour::textMuted);
             g.setFont(sans(12.5f));
             g.drawText(r.preset->name, 26, 0, width - 34 - detailWidth, height, juce::Justification::centredLeft, true);
             g.setColour(colour::textMuted);
@@ -596,14 +600,16 @@ private:
 
         if (selected)
             g.fillAll(colour::accent.withAlpha(0.28f));
-        g.setColour(r.choice->instrument ? colour::gold : r.choice->midiEffect ? juce::Colour(0xff6f8fe8) : colour::play);
+        // (Greyed with a PRO tag where the license does not allow it.)
+        const bool licensed = deviceActions::isLicensed(*r.choice);
+        g.setColour(!licensed ? colour::textMuted : r.choice->instrument ? colour::gold : r.choice->midiEffect ? juce::Colour(0xff6f8fe8) : colour::play);
         g.fillEllipse(12.0f, static_cast<float>(height) * 0.5f - 3.0f, 6.0f, 6.0f);
-        g.setColour(colour::textPrimary);
+        g.setColour(licensed ? colour::textPrimary : colour::textMuted);
         g.setFont(sans(12.5f));
         g.drawText(r.choice->name, 26, 0, width - 30, height, juce::Justification::centredLeft, true);
-        g.setColour(colour::textMuted);
+        g.setColour(licensed ? colour::textMuted : colour::accent);
         g.setFont(sans(10.5f));
-        g.drawText(r.choice->category, 26, 0, width - 32, height, juce::Justification::centredRight, true);
+        g.drawText(licensed ? r.choice->category : juce::String("PRO"), 26, 0, width - 32, height, juce::Justification::centredRight, true);
     }
 
     [[nodiscard]] const session::presets::Preset* presetAt(int row) const
@@ -613,6 +619,8 @@ private:
 
     void activate(int row)
     {
+        if (!isRowLicensed(row))
+            return;
         if (const auto* choice = choiceAt(row); choice != nullptr && browser_.onDeviceActivated)
             browser_.onDeviceActivated(*choice);
         if (const auto* preset = presetAt(row); preset != nullptr && browser_.onPresetActivated)
@@ -639,7 +647,7 @@ private:
 
     juce::var getDragSourceDescription(const juce::SparseSet<int>& rows) override
     {
-        if (rows.isEmpty())
+        if (rows.isEmpty() || !isRowLicensed(rows[0]))
             return {};
         if (const auto* preset = presetAt(rows[0]))
             return presetActions::toDragDescription(*preset);
@@ -647,8 +655,19 @@ private:
         return choice != nullptr ? juce::var(deviceActions::toDragDescription(*choice)) : juce::var();
     }
 
+    [[nodiscard]] bool isRowLicensed(int row) const
+    {
+        if (const auto* preset = presetAt(row))
+            return presetActions::isLicensed(*preset);
+        if (const auto* choice = choiceAt(row))
+            return deviceActions::isLicensed(*choice);
+        return true;
+    }
+
     juce::String getTooltipForRow(int row) override
     {
+        if (!isRowLicensed(row))
+            return licensing::gate::why(licensing::Feature::proDevices);
         if (const auto* preset = presetAt(row))
         {
             const auto description = preset->description.isNotEmpty() ? preset->description + "\n" : juce::String();

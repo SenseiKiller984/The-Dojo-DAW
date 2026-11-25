@@ -159,6 +159,8 @@ juce::PopupMenu MainMenuModel::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addSeparator();
         menu.addCommandItem(cm, toggleTestTone);
         menu.addCommandItem(cm, scanPlugins);
+        menu.addSeparator();
+        menu.addCommandItem(cm, showLicense);
         break;
     default:
         break;

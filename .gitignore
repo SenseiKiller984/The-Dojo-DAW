@@ -22,3 +22,10 @@ core.*
 
 # Python bytecode (tools)
 __pycache__/
+
+# License keys: the private key generator, the private key and the issued keys stay off the repository
+dojo_keygen.py
+private-key.txt
+issued.csv
+.dojo-keygen/
+*.dojo-private

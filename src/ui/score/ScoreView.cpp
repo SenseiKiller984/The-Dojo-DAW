@@ -1,4 +1,5 @@
 #include "ui/score/ScoreView.h"
+#include "licensing/Features.h"
 
 #include "ui/score/MusicXml.h"
 #include "ui/theme/DojoTheme.h"
@@ -386,6 +387,12 @@ ScoreView::ScoreView(session::Session& session)
     {
         if (!clip_.isValid())
             return;
+        if (!licensing::gate::allows(licensing::Feature::exporting))
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "Export MusicXML",
+                                                   licensing::gate::why(licensing::Feature::exporting));
+            return;
+        }
         const auto name = session::clip::getName(clip_);
         chooser_ = std::make_unique<juce::FileChooser>(
             "Export MusicXML",

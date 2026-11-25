@@ -625,6 +625,43 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 
 **Projects**: `.dojo` files with relative audio paths (move the folder freely); device and plug-in state are saved inside. *File > Open Demo Project* builds a short song that uses every kind of track and device.
 
+## License keys
+
+The Dojo needs a license key. Without one it opens behind its license window: the DAW is dimmed behind it and nothing can be clicked or played (the sound card stays silent), only the window's close and maximise buttons. Enter a key there, or later in **Options > License...**.
+
+![The license window over the dimmed DAW: a field for the key, Activate, and Try The Dojo for free!](docs/images/license-lock.png)
+
+| | Free Trial | Basic | Pro |
+|---|---|---|---|
+| How long | 7 days from activation, once per computer | forever | forever |
+| Exporting (audio, stems, ADM BWF, video, clip files, MusicXML) | no | yes | yes |
+| Surround (3.1, 5.1, 7.1, Dolby Digital, DTS; surround and 3D panners; surround monitoring) | yes | no | yes |
+| Dolby Atmos (5.1.4, 7.1.4, 9.1.6; ADM objects; ADM BWF; the external renderer) | yes | no | yes |
+| Pro devices: Studer A800, Harrison 4032, EMI TG12345, The Glue, 1980s Rhodes Suitcase 73 Mk II | yes | no | yes |
+| Sound | audible watermark; muted while recording software runs | clean | clean |
+
+### Free trial
+
+The one free-trial key (7 days, once per computer, no exporting):
+
+```
+DOJO1-2G00009K-HEPSBMAA-G3CWGJCM-FWW0JGSD-7C534SB3-A7912702-BE908NF3-Q3TX7HSM-HKSGC2S9-W0K9XTXD-P6XS1TB1-B1JZ0A79-8A0EY8JG-CX40J444
+```
+
+Paste it into The Dojo's license window (its **Try The Dojo for free!** button leads here). The 7 days run from the moment it is activated. When they are over, The Dojo locks again and this key does not work on that computer again: reinstalling The Dojo, editing its records or setting the clock back does not bring the trial back. A Basic or Pro key unlocks it. During the trial:
+- Every export is off.
+- What the sound card plays carries an audible watermark: a short noise burst after every 30 seconds of sound (the first after 15), on every output channel, so a recording of it (OBS, Voicemeeter, a loopback or virtual cable) has it too.
+- The output is muted while a program that records or reroutes it runs (OBS Studio, Streamlabs, XSplit, Bandicam, Camtasia, ShareX, Fraps, Voicemeeter, Voicemeeter Banana and Potato, Audacity, AudioRelay; on Linux also SimpleScreenRecorder, Kazam, vokoscreen, GPU Screen Recorder, Kooha, pw-record, parecord), or while the output is a virtual audio device (VB-Cable, Voicemeeter's inputs, BlackHole, Soundflower, "Stereo Mix", PulseAudio monitors...). The status bar says why.
+- On Windows the window is left out of screen recordings (it records as black).
+
+### Basic and Pro
+
+A Basic or Pro key works forever. What Basic does not include is greyed out with "(Pro)" or a PRO tag: the surround and Dolby Atmos choices in the track, folder and master format pickers, the 3D panner and ADM object items, the Surround and Renderer tabs of the Preferences, and the pro devices (in the browser, **+ Add Device** and the chains that use one). A project made with Pro still opens: its pro devices stay off (their settings are kept, and come back with a Pro key), a surround master is heard as a stereo fold-down, and exporting asks for a stereo master. Entering a Pro key upgrades on the spot.
+
+### How the keys work
+
+Keys are signed with Ed25519 (RFC 8032; [Monocypher](https://monocypher.org)): The Dojo holds only the public key, so a key cannot be made, or changed from Basic to Pro, without the private key, which never leaves the issuer's computer. A key is 112 characters of Crockford Base32 after `DOJO1-` (4 bytes of tier and serial, the 64-byte signature, a 2-byte check that catches typos); it is pasted, and case, dashes and spaces do not matter. The key is checked again every time The Dojo starts, so editing the settings does not change what it allows. Keys that leak can be revoked in a later release by their serial.
+
 ## Using it
 
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
@@ -733,6 +770,7 @@ Sanitizer presets need Clang's runtimes (`libclang-rt-<ver>-dev` on Debian/Ubunt
 | ARA 2 hosting | JUCE's ARA host support on Celemony's [ARA SDK](https://github.com/Celemony/ARA_SDK) 2.3.0 (Apache 2.0), fetched and pinned automatically |
 | Time-stretch / pitch | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) 1.4.0 (MIT) |
 | MP3 encoding | [LAME](https://lame.sourceforge.io) 3.100 (LGPL), vendored in `third_party/lame` |
+| License keys | [Monocypher](https://monocypher.org) 4.0.2 (CC0 / BSD-2-Clause): Ed25519 and BLAKE2b, vendored in `third_party/monocypher` |
 | Video decoding and muxing | Built-in Motion-JPEG AVI reader and writer; [FFmpeg](https://ffmpeg.org) (LGPL, the system's shared libraries, optional) on Linux; Media Foundation on Windows |
 | Audio back-ends | Windows: ASIO, WASAPI, DirectSound. Linux: ALSA (incl. PulseAudio/PipeWire via ALSA), JACK (incl. PipeWire-JACK) |
 | Tests | Catch2 v3 |
@@ -750,6 +788,8 @@ resources/    embedded fonts, built-in presets (presets/*.dojopreset), drum kits
 tools/        drumkits/make_kits.py: builds the drum kits and sample archives from the original sample sets
 scripts/      setup and build helpers (bash + PowerShell)
 src/core      real-time primitives (lock-free SPSC queue, RT allocation trap), musical time
+src/licensing license keys (Ed25519 via Monocypher), what each license allows, the free trial's ledger,
+              recording-software and virtual-device checks
 src/engine    AudioEngine (audio thread + worker pool), render graph, routing, delay compensation,
               insert loops (devices inside a device, between its send and return), device sends,
               clip playback / time-stretch / disk streaming, capture, file preview, device host,
@@ -776,7 +816,7 @@ src/ui        arranger (with the tempo track), mixer, devices panel + editors, p
               transport, export dialog, menus, look-and-feel
 src/app       application entry point, main window, settings
 tests/        unit and integration tests (incl. a test CLAP plug-in and a test ARA plug-in)
-third_party/  vendored LAME
+third_party/  vendored LAME and Monocypher
 ```
 
 ## Roadmap
@@ -795,8 +835,8 @@ third_party/  vendored LAME
 
 ## Licensing
 
-No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). The ARA SDK is Apache 2.0. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.
+No licence has been chosen for The Dojo yet. Note that JUCE is AGPLv3 or commercial, the bundled ASIO SDK is GPLv3 or a Steinberg licence, and LAME is LGPL (it is linked statically, which has obligations under the LGPL). The ARA SDK is Apache 2.0. Monocypher (license keys) is CC0 or BSD-2-Clause, vendored in `third_party/monocypher`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#11-licensing-note). The embedded Inter and JetBrains Mono fonts are under the SIL Open Font License; see `resources/fonts/`.
 
 The built-in drum kits' samples are recordings of Linn drum machines (LM-1, LM-2, LinnDrum, Linn 9000 and the AdrenaLinn) , Roland instruments (MC-202, MC-303, MC-808, R-8 MKII and R-70) and Akai instruments (XR-10, XE8, MPC3000, MPC2500 and MPC5000), supplied for the project and included as they came (WAV files, only renamed). Whoever distributes The Dojo must make sure they may redistribute these samples.
 
-Product and company names mentioned here (Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes, Linn, LinnDrum, LM-1, Linn 9000, AdrenaLinn, Roger Linn Design, Roland, MC-202, MC-303, MC-808, R-8, R-70, TR-606, TR-707, TR-808, TR-909, CR-78, Akai, MPC, XR-10, XE8 and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.
+Product and company names mentioned here (Dolby Atmos, OBS Studio, Voicemeeter, Celemony Melodyne, Synchro Arts VocAlign, Dorico, Sibelius, Finale, MuseScore, Expert Sleepers, MOTU, RME, Eurorack, Mackie, Studer, EMI, Harrison, Fender Rhodes, Linn, LinnDrum, LM-1, Linn 9000, AdrenaLinn, Roger Linn Design, Roland, MC-202, MC-303, MC-808, R-8, R-70, TR-606, TR-707, TR-808, TR-909, CR-78, Akai, MPC, XR-10, XE8 and others) are trademarks of their respective owners, used only to describe compatibility or the equipment a device is modelled on; The Dojo is not affiliated with or endorsed by them.

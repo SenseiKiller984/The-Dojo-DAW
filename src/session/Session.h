@@ -327,6 +327,16 @@ enum class TrackFormat
 [[nodiscard]] juce::String getDisplayName(TrackFormat format);
 [[nodiscard]] int getNumChannels(TrackFormat format);
 [[nodiscard]] inline bool isMultichannel(TrackFormat format) { return getNumChannels(format) > 2; }
+/** 5.1.4, 7.1.4, 9.1.6: the 3D (Dolby Atmos) beds. */
+[[nodiscard]] inline bool isImmersive(TrackFormat format)
+{
+    return format == TrackFormat::surround514 || format == TrackFormat::surround714 || format == TrackFormat::surround916;
+}
+/** Whether the license allows a format (mono and stereo always; surround needs Pro or the trial,
+    the 3D beds Dolby Atmos: see licensing/Features.h). */
+[[nodiscard]] bool isFormatLicensed(TrackFormat format);
+/** Why a format is not available (empty if it is). */
+[[nodiscard]] juce::String whyFormatUnlicensed(TrackFormat format);
 /** Every format, in menu order (not the enum's). */
 [[nodiscard]] std::vector<TrackFormat> getAllTrackFormats();
 /** The speakers of a format's channels (mono: the centre). */

@@ -102,6 +102,7 @@ enum : juce::CommandID
     compCrossfade20,
     compCrossfade50,
     toggleTempoTrack,
+    showLicense,
 };
 
 /** The comp crossfade lengths offered (milliseconds), from compCrossfadeOff on. */

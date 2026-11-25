@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/LicenseWindow.h"
+
 #include "ui/AppServices.h"
 #include "ui/MainComponent.h"
 #include "ui/MainMenuModel.h"
@@ -71,6 +73,12 @@ private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     /** The control surfaces as the preferences set them up. */
     void applyControlSurfaces();
+    /** Locks the window (the license window over everything) without a license, unlocks it with one. */
+    void updateLicenseLock();
+    /** Options > License...: the lock's panel, or a License window. */
+    void showLicenseWindow();
+    /** Hides the other windows (plug-in editors, the mixer window...) when locking. */
+    void hideOtherWindows();
 
     ui::AppServices& services_;
     session::Project& project_;
@@ -79,6 +87,9 @@ private:
     std::unique_ptr<ui::PreferencesWindow> preferencesWindow_;
     ui::surfaces::DevicePorts surfacePorts_;       // (before the surfaces, which use them)
     std::unique_ptr<ui::surfaces::ControlSurfaces> surfaces_;
+    std::unique_ptr<ui::LicenseLock> lock_;                  ///< the lock screen (no license)
+    licensing::Tier shownTier_ = licensing::Tier::none;      ///< the license the main component was built under
+    juce::Component::SafePointer<juce::DialogWindow> licenseDialog_;
 
     bool maximised_ = false;
     bool fullScreenMode_ = false;

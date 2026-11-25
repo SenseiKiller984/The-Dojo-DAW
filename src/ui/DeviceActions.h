@@ -26,6 +26,9 @@ struct DeviceChoice
     bool midiEffect = false;     ///< plays on the MIDI, before the instrument
 };
 
+/** Whether the license allows a device (the pro devices need Pro or the trial). */
+[[nodiscard]] bool isLicensed(const DeviceChoice& choice);
+
 /** Every native device. */
 std::vector<DeviceChoice> getNativeChoices();
 /** Every installed (scanned) plug-in. */

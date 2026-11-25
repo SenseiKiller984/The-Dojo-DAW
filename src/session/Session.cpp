@@ -1,5 +1,7 @@
 #include "session/Session.h"
 
+#include "licensing/Features.h"
+
 #include "devices/RhodesSuitcase.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -186,6 +188,22 @@ int fileChannelFor(int fileChannels, const engine::ChannelLayout& track, int tra
     return trackChannel < fileChannels ? trackChannel : -1;
 }
 
+bool isFormatLicensed(TrackFormat format)
+{
+    if (!isMultichannel(format))
+        return true;
+    if (isImmersive(format))
+        return licensing::gate::allows(licensing::Feature::immersive) && licensing::gate::allows(licensing::Feature::surround);
+    return licensing::gate::allows(licensing::Feature::surround);
+}
+
+juce::String whyFormatUnlicensed(TrackFormat format)
+{
+    if (isFormatLicensed(format))
+        return {};
+    return licensing::gate::why(isImmersive(format) ? licensing::Feature::immersive : licensing::Feature::surround);
+}
+
 std::vector<TrackFormat> getAllTrackFormats()
 {
     return {TrackFormat::mono,        TrackFormat::stereo,      TrackFormat::lcrLfe,      TrackFormat::surround51,
@@ -349,6 +367,8 @@ void setShowingAutomation(juce::ValueTree t, bool show, juce::UndoManager* um)
 }
 void setFormat(juce::ValueTree t, TrackFormat format, juce::UndoManager* um)
 {
+    if (!isFormatLicensed(format) && format != getFormat(t))
+        return; // (the license: surround and 3D beds need Pro)
     t.setProperty(ids::format, toString(format), um);
 }
 void setPanFrontRear(juce::ValueTree t, double frontRear, juce::UndoManager* um)
@@ -361,10 +381,14 @@ void setPanCentre(juce::ValueTree t, double centre, juce::UndoManager* um)
 }
 void setPan3d(juce::ValueTree t, bool on, juce::UndoManager* um)
 {
+    if (on && !licensing::gate::allows(licensing::Feature::surround))
+        return;
     t.setProperty(ids::pan3d, on, um);
 }
 void setObject(juce::ValueTree t, bool on, juce::UndoManager* um)
 {
+    if (on && !licensing::gate::allows(licensing::Feature::immersive))
+        return;
     t.setProperty(ids::admObject, on, um);
 }
 void setAzimuth(juce::ValueTree t, double degrees, juce::UndoManager* um)
@@ -1329,6 +1353,8 @@ void Session::setMasterFormat(TrackFormat format)
 {
     if (format == TrackFormat::mono)
         format = TrackFormat::stereo;
+    if (!isFormatLicensed(format) && format != getMasterFormat())
+        return; // (the license: surround and 3D beds need Pro)
     state_.setProperty(ids::masterFormat, toString(format), &undo_);
 }
 

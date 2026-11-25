@@ -1,4 +1,5 @@
 #include "ui/components/MixerPanel.h"
+#include "licensing/Features.h"
 
 #include "engine/AudioEngine.h"
 
@@ -458,6 +459,10 @@ void ChannelStrip::updateSurroundMode()
     }
     threeD_.setToggleState(spatial, juce::dontSendNotification);
     threeD_.setColour(juce::TextButton::buttonOnColourId, theme::colour::accent);
+    // (The license: the surround and 3D panners need Pro or the trial.)
+    const bool licensed = licensing::gate::allows(licensing::Feature::surround);
+    for (auto* c : std::initializer_list<juce::Component*>{&threeD_, &surround_, &spatial_})
+        c->setEnabled(licensed);
     if (surround == surroundMode_ && surround_.isVisible() == (surround && !spatial) && spatial_.isVisible() == spatial)
         return;
     surroundMode_ = surround;
@@ -771,7 +776,10 @@ MasterStrip::MasterStrip(session::Session& session, EditorState& editor, std::fu
     // the audio device gets one output per channel, or a stereo fold-down).
     const auto formats = session::getAllTrackFormats();
     for (std::size_t i = 1; i < formats.size(); ++i) // (never mono)
-        format_.addItem(session::getDisplayName(formats[i]), static_cast<int>(i) + 1);
+    {
+        format_.addItem(session::getDisplayName(formats[i]) + (session::isFormatLicensed(formats[i]) ? "" : "  (Pro)"), static_cast<int>(i) + 1);
+        format_.setItemEnabled(static_cast<int>(i) + 1, session::isFormatLicensed(formats[i]));
+    }
     format_.setSelectedId(menuIdOf(session_.getMasterFormat()), juce::dontSendNotification);
     format_.setTooltip("Master format: stereo or surround. With fewer device outputs than channels you hear a stereo fold-down.");
     format_.setWantsKeyboardFocus(false);
@@ -781,6 +789,11 @@ MasterStrip::MasterStrip(session::Session& session, EditorState& editor, std::fu
         const int index = format_.getSelectedId() - 1;
         if (index < 1 || index >= static_cast<int>(all.size()) || all[static_cast<std::size_t>(index)] == session_.getMasterFormat())
             return;
+        if (!session::isFormatLicensed(all[static_cast<std::size_t>(index)]))
+        {
+            format_.setSelectedId(menuIdOf(session_.getMasterFormat()), juce::dontSendNotification);
+            return;
+        }
         session_.beginTransaction("Master Format");
         session_.setMasterFormat(all[static_cast<std::size_t>(index)]);
     };

@@ -1,4 +1,5 @@
 #include "ui/DeviceActions.h"
+#include "licensing/Features.h"
 
 #include "devices/DeviceRegistry.h"
 #include "devices/HardwareInsert.h"
@@ -139,8 +140,15 @@ bool canMoveDevice(const std::vector<juce::ValueTree>& devices, int from, int to
     return std::is_sorted(ranks.begin(), ranks.end());
 }
 
+bool isLicensed(const DeviceChoice& choice)
+{
+    return !licensing::isProDevice(choice.type) || licensing::gate::allows(licensing::Feature::proDevices);
+}
+
 juce::ValueTree addDevice(session::Session& session, EditorState& editor, juce::ValueTree owner, const DeviceChoice& choice)
 {
+    if (!isLicensed(choice))
+        return {}; // (the license: the pro devices need Pro)
     const bool isMaster = owner.hasType(session::ids::master);
 
     if (choice.midiEffect)
@@ -249,7 +257,7 @@ juce::ValueTree connectedBus(const session::Session& session, const juce::ValueT
 
 juce::ValueTree addDeviceToLoop(session::Session& session, juce::ValueTree host, const DeviceChoice& choice)
 {
-    if (!host.isValid() || !host.hasType(session::ids::device) || !fitsInLoop(choice))
+    if (!host.isValid() || !host.hasType(session::ids::device) || !fitsInLoop(choice) || !isLicensed(choice))
         return {};
     session.beginTransaction("Add " + choice.name + " to the Loop");
     auto device = session.addDevice(host, choice.type, choice.name);
@@ -268,7 +276,8 @@ void buildAddDeviceMenu(juce::PopupMenu& menu, plugins::PluginManager& plugins, 
     {
         if (!wanted(choice))
             continue;
-        nativeByCategory[choice.category].addItem(choice.name, [onChosen, choice] { onChosen(choice); });
+        nativeByCategory[choice.category].addItem(choice.name + (isLicensed(choice) ? "" : "  (Pro)"), isLicensed(choice), false,
+                                                  [onChosen, choice] { onChosen(choice); });
     }
 
     menu.addSectionHeader("The Dojo");

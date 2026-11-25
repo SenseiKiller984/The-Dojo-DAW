@@ -2,6 +2,7 @@
 
 #include "engine/EngineController.h"
 #include "engine/Preview.h"
+#include "licensing/LicenseManager.h"
 #include "plugins/PluginManager.h"
 #include "session/Exporter.h"
 #include "session/Project.h"
@@ -32,6 +33,12 @@ struct AppServices
     std::function<bool()> isFullScreen;
     /** The external renderer's state in words (the Renderer tab; set by the application). */
     std::function<juce::String()> describeExternalRenderer;
+    /** The license (set by the application; null in tests that build the UI on their own). */
+    licensing::LicenseManager* license = nullptr;
+    /** The license in a few words for the status bar ("PRO", "TRIAL: 6 DAYS LEFT"...; set by the application). */
+    std::function<juce::String()> describeLicense{};
+    /** Options > License...: the license window (set by the main window). */
+    std::function<void()> showLicense{};
 };
 
 } // namespace dojo::ui

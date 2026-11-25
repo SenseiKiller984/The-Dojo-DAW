@@ -1,6 +1,7 @@
 #include "engine/io/AudioDeviceHost.h"
 
 #include "engine/AudioEngine.h"
+#include "engine/io/OutputGuard.h"
 
 #include <map>
 #include <mutex>
@@ -23,6 +24,7 @@ public:
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override
     {
         jassert(device != nullptr);
+        guard_.prepare(device->getCurrentSampleRate());
         errorReported_.store(false, std::memory_order_relaxed);
         engine_.setDeviceLatency(device->getInputLatencyInSamples(), device->getOutputLatencyInSamples());
         engine_.prepare(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
@@ -37,7 +39,12 @@ public:
                                           const juce::AudioIODeviceCallbackContext& /*context*/) override
     {
         engine_.process(inputChannelData, numInputChannels, outputChannelData, numOutputChannels, numSamples);
+
+        // The license's say over what the sound card plays (after everything the engine wrote).
+        guard_.process(outputChannelData, numOutputChannels, numSamples);
     }
+
+    [[nodiscard]] OutputGuard& getGuard() noexcept { return guard_; }
 
     void audioDeviceStopped() override { engine_.release(); }
 
@@ -55,6 +62,7 @@ public:
 private:
     AudioEngine& engine_;
     std::atomic<bool> errorReported_{false};
+    OutputGuard guard_;
 };
 
 //==================================================================================================
@@ -186,6 +194,21 @@ juce::StringArray AudioDeviceHost::getActiveOutputChannelNames() const
                 names.add(all[i]);
     }
     return names;
+}
+
+void AudioDeviceHost::setOutputPolicy(OutputPolicy policy) noexcept
+{
+    callback_->getGuard().setPolicy(policy);
+}
+
+AudioDeviceHost::OutputPolicy AudioDeviceHost::getOutputPolicy() const noexcept
+{
+    return callback_->getGuard().getPolicy();
+}
+
+std::uint64_t AudioDeviceHost::getWatermarkCount() const noexcept
+{
+    return callback_->getGuard().getWatermarkCount();
 }
 
 AudioDeviceHost::~AudioDeviceHost()

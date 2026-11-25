@@ -1,6 +1,7 @@
 # Layering (each layer may only depend on the ones above it):
 #
 #   core    pure C++20, no JUCE: real-time primitives (lock-free queues, RT guards), shared types
+#   licensing  license keys (Ed25519), tiers and what they allow, the free trial's ledger
 #   engine  audio engine, device host, command/telemetry protocol (JUCE audio modules)
 #   plugins plug-in hosting: VST3 (JUCE) + CLAP (own host), out-of-process scanning (+ scanner exe)
 #   devices native devices: EQ, dynamics, reverb, delay, pitch, Sampler, Drum Rack (juce::AudioProcessor)
@@ -11,6 +12,7 @@
 #   app     JUCEApplication entry point and main window
 
 add_subdirectory(core)
+add_subdirectory(licensing)
 add_subdirectory(engine)
 add_subdirectory(devices)
 add_subdirectory(plugins)

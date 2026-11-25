@@ -125,6 +125,10 @@ public:
     bool perform(const InvocationInfo& info) override;
 
 private:
+    /** Whether the license allows a command now. */
+    static bool isCommandAllowed(juce::CommandID id);
+    /** getCommandInfo() before the license's say. */
+    void describeCommand(juce::CommandID id, juce::ApplicationCommandInfo& info);
     void onDisplayRefresh(double timestampSeconds);
     void refreshStatusBar();
     void changeListenerCallback(juce::ChangeBroadcaster*) override;

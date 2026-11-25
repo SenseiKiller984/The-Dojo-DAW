@@ -1,5 +1,7 @@
 #include "session/Exporter.h"
 
+#include "licensing/Features.h"
+
 #include "engine/AudioEngine.h"
 #include "engine/io/AdmMetadata.h"
 #include "engine/io/Bw64Writer.h"
@@ -570,6 +572,16 @@ juce::String Exporter::start(const ExportSettings& settings)
         return "An export is already running.";
     if (settings.endSeconds <= settings.startSeconds)
         return "The export range is empty.";
+
+    // The license (checked here as well as in the UI).
+    using licensing::Feature;
+    if (!licensing::gate::allows(Feature::exporting))
+        return licensing::gate::why(Feature::exporting);
+    if (settings.format == ExportSettings::Format::admBwf && !licensing::gate::allows(Feature::immersive))
+        return licensing::gate::why(Feature::immersive);
+    if (const auto master = project_.getSession().getMasterFormat(); !isFormatLicensed(master))
+        return "The master is " + getDisplayName(master) + ". " + whyFormatUnlicensed(master)
+               + " Set the master to stereo (the mixer's master format) to export.";
 
     settings_ = settings;
     auto& engine = controller_.getEngine();

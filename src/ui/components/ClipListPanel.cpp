@@ -1,4 +1,5 @@
 #include "ui/components/ClipListPanel.h"
+#include "licensing/Features.h"
 
 #include "ui/EditActions.h"
 #include "ui/components/TrackDialogs.h"
@@ -291,7 +292,7 @@ void ClipListPanel::timeStampSelected()
 void ClipListPanel::exportSelected()
 {
     const auto items = getSelectedItems();
-    if (items.empty())
+    if (items.empty() || !licensing::gate::allows(licensing::Feature::exporting))
         return;
     chooser_ = std::make_unique<juce::FileChooser>("Export Clips as Files to...",
                                                    juce::File::getSpecialLocation(juce::File::userMusicDirectory));
@@ -390,7 +391,9 @@ juce::PopupMenu ClipListPanel::buildMenu()
     menu.addItem("Auto Rename...", !clips.empty(), false, [safe] { if (safe != nullptr) safe->autoRenameSelected(); });
     menu.addItem("Time Stamp...", !clips.empty(), false, [safe] { if (safe != nullptr) safe->timeStampSelected(); });
     menu.addSeparator();
-    menu.addItem("Export Clips as Files...", !clips.empty(), false, [safe] { if (safe != nullptr) safe->exportSelected(); });
+    menu.addItem("Export Clips as Files..." + juce::String(licensing::gate::allows(licensing::Feature::exporting) ? "" : "  (Basic or Pro)"),
+                 !clips.empty() && licensing::gate::allows(licensing::Feature::exporting), false,
+                 [safe] { if (safe != nullptr) safe->exportSelected(); });
     menu.addItem("Remove from Clip List", anyEntry, false, [safe] { if (safe != nullptr) safe->removeSelected(); });
     return menu;
 }

@@ -3,6 +3,7 @@
 #include "engine/AudioEngine.h"
 
 #include "app/WindowManager.h"
+#include "licensing/CaptureGuard.h"
 
 #include <optional>
 
@@ -52,6 +53,8 @@ MainWindow::MainWindow(ui::AppServices& services)
     services.preferences.addChangeListener(this);
     services.showPreferences = [this](ui::Preferences::Tab tab) { showPreferences(tab); };
     services.toggleFullScreen = [this] { setFullScreenMode(!fullScreenMode_); };
+    services.showLicense = [this] { showLicenseWindow(); };
+    licensing::gate::changes().addChangeListener(this);
     services.isFullScreen = [this] { return fullScreenMode_; };
 
     // Control surfaces (Mackie Control, HUI): they work the transport, the commands, the selection
@@ -62,9 +65,18 @@ MainWindow::MainWindow(ui::AppServices& services)
     host.playing = [this] { return services_.controller.getLastTelemetry().playing; };
     host.recording = [this] { return services_.recorder.isRecording(); };
     host.playhead = [this] { return services_.controller.getLastTelemetry().playheadSeconds; };
-    host.play = [this] { services_.controller.play(); };
+    // (Locked without a license, a surface's transport keys do nothing either.)
+    host.play = [this]
+    {
+        if (licensing::gate::allows(licensing::Feature::use))
+            services_.controller.play();
+    };
     host.stop = [this] { services_.controller.stop(); };
-    host.locate = [this](double seconds) { services_.controller.locateSeconds(seconds); };
+    host.locate = [this](double seconds)
+    {
+        if (licensing::gate::allows(licensing::Feature::use))
+            services_.controller.locateSeconds(seconds);
+    };
     host.peak = [this](int slot) { return services_.controller.getEngine().collectSurfacePeak(slot); };
     host.movingVolume = [this](int slot) { return services_.controller.getEngine().getMovingVolume(slot); };
     surfaces_ = std::make_unique<ui::surfaces::ControlSurfaces>(project_, std::move(host), &surfacePorts_);
@@ -87,10 +99,19 @@ MainWindow::MainWindow(ui::AppServices& services)
 
     setVisible(true);
     mainComponent_->grabKeyboardFocus();
+    shownTier_ = licensing::gate::tier();
+    updateLicenseLock();
 }
 
 MainWindow::~MainWindow()
 {
+    licensing::gate::changes().removeChangeListener(this);
+    if (lock_ != nullptr)
+        lock_->exitModalState(0);
+    lock_.reset();
+    if (licenseDialog_ != nullptr)
+        delete licenseDialog_.getComponent();
+    services_.showLicense = nullptr;
     surfaces_.reset();
     services_.showPreferences = nullptr;
     services_.toggleFullScreen = nullptr;
@@ -261,6 +282,8 @@ void MainWindow::resized()
 {
     juce::DocumentWindow::resized();
     checkUserGeometry();
+    if (lock_ != nullptr)
+        lock_->setBounds(getLocalBounds().withTrimmedTop(getTitleBarArea().getBottom()));
     // The square shows "restore" while maximised (or full screen).
     if (auto* button = getMaximiseButton())
         button->setToggleState(maximised_ || fullScreenMode_, juce::dontSendNotification);
@@ -333,10 +356,32 @@ void MainWindow::rebuildMainComponent()
     commandManager.setFirstCommandTarget(mainComponent_);
     menuModel_.menuItemsChanged();
     mainComponent_->grabKeyboardFocus();
+    if (lock_ != nullptr)
+        lock_->toFront(true); // (the new content went in front of it)
 }
 
 void MainWindow::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
+    if (source == &licensing::gate::changes())
+    {
+        // Another license: the main component is built again (as for a new theme), so every menu,
+        // picker and list shows what the license allows now.
+        if (licensing::gate::tier() != shownTier_)
+        {
+            shownTier_ = licensing::gate::tier();
+            // The pro devices: created again under the new license (or refused, with the reason
+            // shown on their card; their settings stay in the project).
+            auto& devices = project_.getDevices();
+            if (licensing::gate::allows(licensing::Feature::proDevices))
+                devices.forgetFailed();
+            else
+                devices.forgetTypes(licensing::getProDeviceTypes());
+            project_.getCompiler().rebuildNow();
+            rebuildMainComponent();
+        }
+        updateLicenseLock();
+        return;
+    }
     if (source == services_.commands.getKeyMappings())
     {
         if (const auto mappings = services_.commands.getKeyMappings()->createXml(true))
@@ -357,6 +402,87 @@ void MainWindow::applyControlSurfaces()
     auto setups = ui::surfaces::setupsFromString(services_.preferences.getControlSurfaces());
     if (setups != surfaces_->getSetups())
         surfaces_->setSetups(std::move(setups));
+}
+
+void MainWindow::updateLicenseLock()
+{
+    if (services_.license == nullptr)
+        return;
+    const bool locked = !licensing::gate::allows(licensing::Feature::use);
+    if (locked && lock_ == nullptr)
+    {
+        // Everything stops; the other windows go; the lock comes over the whole window.
+        if (licenseDialog_ != nullptr)
+            licenseDialog_->exitModalState(0);
+        if (services_.recorder.isRecording())
+            services_.recorder.stop();
+        services_.controller.stop();
+        services_.preview.stop();
+        hideOtherWindows();
+        lock_ = std::make_unique<ui::LicenseLock>(*services_.license, *this);
+        juce::Component::addAndMakeVisible(lock_.get()); // (over the content and the menu bar, under the title bar)
+        lock_->setBounds(getLocalBounds().withTrimmedTop(getTitleBarArea().getBottom()));
+        lock_->enterModalState(true, nullptr, false);
+    }
+    else if (!locked && lock_ != nullptr)
+    {
+        lock_->exitModalState(0);
+        lock_.reset();
+        if (mainComponent_ != nullptr)
+            mainComponent_->grabKeyboardFocus();
+    }
+    if (lock_ != nullptr)
+        lock_->toFront(true);
+
+    // The free trial's window is left out of screen recordings (Windows).
+    if (auto* peer = getPeer())
+        licensing::capture::setWindowExcludedFromCapture(peer->getNativeHandle(), licensing::gate::tier() == licensing::Tier::demo);
+
+    services_.commands.commandStatusChanged();
+    menuModel_.menuItemsChanged();
+}
+
+void MainWindow::showLicenseWindow()
+{
+    if (services_.license == nullptr)
+        return;
+    if (lock_ != nullptr)
+    {
+        lock_->toFront(true);
+        return;
+    }
+    if (licenseDialog_ != nullptr)
+    {
+        licenseDialog_->toFront(true);
+        return;
+    }
+    auto panel = std::make_unique<ui::LicensePanel>(*services_.license, true);
+    auto* raw = panel.get();
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(panel.release());
+    options.dialogTitle = "License";
+    options.dialogBackgroundColour = ui::theme::colour::panel;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = false;
+    options.resizable = false;
+    options.componentToCentreAround = this;
+    licenseDialog_ = options.launchAsync();
+    raw->onClose = [safe = licenseDialog_]
+    {
+        if (safe != nullptr)
+            safe->exitModalState(0);
+    };
+}
+
+void MainWindow::hideOtherWindows()
+{
+    if (preferencesWindow_ != nullptr)
+        preferencesWindow_->setVisible(false);
+    auto& desktop = juce::Desktop::getInstance();
+    for (int i = desktop.getNumComponents(); --i >= 0;)
+        if (auto* window = dynamic_cast<juce::TopLevelWindow*>(desktop.getComponent(i)))
+            if (window != this && window->isVisible() && dynamic_cast<juce::AlertWindow*>(window) == nullptr)
+                window->setVisible(false); // (plug-in editors, the mixer window, the video window...)
 }
 
 void MainWindow::closeButtonPressed()

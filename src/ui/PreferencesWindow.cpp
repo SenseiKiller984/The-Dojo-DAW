@@ -1,5 +1,7 @@
 #include "ui/PreferencesWindow.h"
 
+#include "licensing/Features.h"
+
 #include "ui/surfaces/ControlSurfaces.h"
 #include "ui/theme/DojoTheme.h"
 #include "ui/theme/Themes.h"
@@ -30,6 +32,54 @@ void styleToggle(juce::ToggleButton& toggle)
     toggle.setColour(juce::ToggleButton::tickDisabledColourId, theme::colour::textMuted);
     toggle.setWantsKeyboardFocus(false);
 }
+
+//==================================================================================================
+/** A tab only some licenses allow (Surround, Renderer): greyed out and closed to input, with a banner
+    saying why, while the license does not allow it. Follows the license as it changes. */
+class LicensedPage final : public juce::Component, private juce::ChangeListener
+{
+public:
+    LicensedPage(juce::Component* page, licensing::Feature feature)
+        : page_(page)
+        , feature_(feature)
+    {
+        addAndMakeVisible(*page_);
+        banner_.setJustificationType(juce::Justification::centred);
+        banner_.setFont(theme::sans(13.0f));
+        banner_.setColour(juce::Label::textColourId, theme::colour::textPrimary);
+        banner_.setColour(juce::Label::backgroundColourId, theme::colour::accent.withAlpha(0.35f));
+        addChildComponent(banner_);
+        licensing::gate::changes().addChangeListener(this);
+        update();
+    }
+
+    ~LicensedPage() override { licensing::gate::changes().removeChangeListener(this); }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        if (banner_.isVisible())
+            banner_.setBounds(area.removeFromTop(34));
+        page_->setBounds(area);
+    }
+
+private:
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { update(); }
+
+    void update()
+    {
+        const bool allowed = licensing::gate::allows(feature_) && licensing::gate::allows(licensing::Feature::surround);
+        page_->setEnabled(allowed);
+        page_->setAlpha(allowed ? 1.0f : 0.45f);
+        banner_.setText(licensing::gate::why(feature_), juce::dontSendNotification);
+        banner_.setVisible(!allowed);
+        resized();
+    }
+
+    std::unique_ptr<juce::Component> page_;
+    licensing::Feature feature_;
+    juce::Label banner_;
+};
 
 //==================================================================================================
 /** Playback and MIDI input options. */
@@ -1020,10 +1070,12 @@ public:
         tabs_.addTab("General", colour::panelHeader, new GeneralPage(preferences), true);
         tabs_.addTab("Themes", colour::panelHeader, new ThemesPage(preferences), true);
         tabs_.addTab("Audio", colour::panelHeader, new AudioPage(devices), true);
-        tabs_.addTab("Surround", colour::panelHeader, new SurroundPage(preferences, devices, std::move(surroundRendering)), true);
+        tabs_.addTab("Surround", colour::panelHeader,
+                     new LicensedPage(new SurroundPage(preferences, devices, std::move(surroundRendering)), licensing::Feature::surround), true);
         tabs_.addTab("Keyboard", colour::panelHeader, new KeyboardPage(commands, std::move(showTips)), true);
         tabs_.addTab("Control Surfaces", colour::panelHeader, new ControlSurfacesPage(preferences, std::move(surfaceStatus)), true);
-        tabs_.addTab("Renderer", colour::panelHeader, new RendererPage(preferences, std::move(rendererStatus)), true);
+        tabs_.addTab("Renderer", colour::panelHeader,
+                     new LicensedPage(new RendererPage(preferences, std::move(rendererStatus)), licensing::Feature::immersive), true);
         addAndMakeVisible(tabs_);
         setSize(kWidth, kHeight);
     }

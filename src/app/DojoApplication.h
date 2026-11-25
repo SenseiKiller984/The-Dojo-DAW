@@ -34,11 +34,17 @@ class DojoLookAndFeel;
 struct AppServices;
 } // namespace dojo::ui
 
+namespace dojo::licensing
+{
+class LicenseManager;
+}
+
 namespace dojo::app
 {
 
 class MainWindow;
 class SmokeTest;
+class LicenseGuard;
 
 /**
     Application object. initialise() runs on the main thread, which JUCE turns into the
@@ -48,6 +54,7 @@ class SmokeTest;
 
         DojoLookAndFeel    fonts + theme, installed as the default look-and-feel
         settings           per-user preferences file (audio device choice)
+        LicenseManager     the license key (Ed25519) and the free trial's ledger: what is allowed
         AudioEngine        real-time state; outlives everything that can call into it
         AudioDeviceHost    driver + callback adapter -> AudioEngine::process (audio thread entry)
         EngineController   the UI's message-thread façade over engine + device host
@@ -82,6 +89,8 @@ private:
     void applyExternalRenderer();
     [[nodiscard]] juce::String describeExternalRenderer() const;
     void logStartupInformation(const juce::String& deviceError);
+    /** The license changed (or the trial's mute): engine options, the pro devices, the status bar. */
+    void licenseChanged();
 
     CommandLineOptions options_;
 
@@ -89,6 +98,7 @@ private:
     std::unique_ptr<ui::DojoLookAndFeel> lookAndFeel_;
     std::unique_ptr<juce::ApplicationProperties> settings_;
     std::unique_ptr<ui::Preferences> preferences_;
+    std::unique_ptr<licensing::LicenseManager> license_;
     std::unique_ptr<engine::AudioEngine> engine_;
     std::unique_ptr<engine::AudioDeviceHost> deviceHost_;
     std::unique_ptr<engine::EngineController> controller_;
@@ -98,6 +108,7 @@ private:
     std::unique_ptr<session::Exporter> exporter_;
     std::unique_ptr<session::AdmOscBridge> oscBridge_;
     std::unique_ptr<engine::PreviewService> preview_;
+    std::unique_ptr<LicenseGuard> licenseGuard_;
     std::unique_ptr<juce::ApplicationCommandManager> commandManager_;
     std::unique_ptr<ui::AppServices> services_;
     std::unique_ptr<MainWindow> mainWindow_;

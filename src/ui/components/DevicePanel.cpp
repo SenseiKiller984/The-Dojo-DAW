@@ -1063,7 +1063,8 @@ void DevicePanel::addChainItems(juce::PopupMenu& menu)
         if (!preset.chain)
             continue;
         const auto category = preset.category.isNotEmpty() ? preset.category : juce::String(preset.builtIn ? "Other" : "My Chains");
-        byCategory[category].addItem(preset.name, [safe, preset]
+        byCategory[category].addItem(preset.name + (presetActions::isLicensed(preset) ? "" : "  (Pro)"), presetActions::isLicensed(preset),
+                                     false, [safe, preset]
                                      {
                                          if (safe != nullptr)
                                              safe->dropPreset(preset);

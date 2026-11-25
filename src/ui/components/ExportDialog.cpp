@@ -1,4 +1,5 @@
 #include "ui/components/ExportDialog.h"
+#include "licensing/Features.h"
 
 #include "engine/io/LameMp3Format.h"
 #include "ui/DeviceActions.h"
@@ -52,6 +53,7 @@ ExportDialog::ExportDialog(session::Project& project, session::Exporter& exporte
     if (videoClip_.isValid())
         videoSupport_ = video::muxSupport(session::clip::getFile(videoClip_));
     format_.setItemEnabled(kVideoFormat, videoSupport_.canMux());
+    format_.setItemEnabled(4, licensing::gate::allows(licensing::Feature::immersive)); // (ADM BWF: Dolby Atmos)
     format_.setTooltip(!videoClip_.isValid() ? "Video needs a video clip (File > Import Video...)"
                        : !videoSupport_.canMux() ? "Nothing here can write " + session::clip::getFile(videoClip_).getFileName() + " with a new sound"
                                                  : juce::String());
@@ -135,6 +137,12 @@ ExportDialog::~ExportDialog()
 
 void ExportDialog::show(session::Project& project, session::Exporter& exporter, juce::Component* centreAround)
 {
+    if (!licensing::gate::allows(licensing::Feature::exporting))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon, "Export Audio",
+                                               licensing::gate::why(licensing::Feature::exporting));
+        return;
+    }
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(new ExportDialog(project, exporter));
     options.dialogTitle = "Export Audio";

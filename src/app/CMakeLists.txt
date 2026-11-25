@@ -9,6 +9,8 @@ target_sources(TheDojo PRIVATE
     CommandLineOptions.h
     DojoApplication.cpp
     DojoApplication.h
+    LicenseGuard.cpp
+    LicenseGuard.h
     Main.cpp
     MainWindow.cpp
     MainWindow.h

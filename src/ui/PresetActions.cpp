@@ -1,4 +1,5 @@
 #include "ui/PresetActions.h"
+#include "licensing/Features.h"
 
 #include "ui/DeviceActions.h"
 
@@ -272,9 +273,25 @@ Outcome useOnSelection(session::Project& project, plugins::PluginManager& plugin
     return useOn(project, plugins, editor, selectedOwner(project.getSession(), editor), preset);
 }
 
+bool isLicensed(const presets::Preset& preset)
+{
+    if (licensing::gate::allows(licensing::Feature::proDevices))
+        return true;
+    const std::function<bool(const std::vector<presets::DeviceSettings>&)> anyPro = [&](const std::vector<presets::DeviceSettings>& entries)
+    {
+        for (const auto& entry : entries)
+            if (licensing::isProDevice(entry.key) || anyPro(entry.loop))
+                return true;
+        return false;
+    };
+    return !anyPro(preset.devices);
+}
+
 Outcome useOn(session::Project& project, plugins::PluginManager& plugins, EditorState& editor, const juce::ValueTree& owner,
               const presets::Preset& preset)
 {
+    if (!isLicensed(preset))
+        return {false, quoted(preset.name) + " uses one of the pro devices. " + licensing::gate::why(licensing::Feature::proDevices)};
     if (owner.isValid() && !preset.chain)
         for (const auto& device : session::Session::getDevices(owner))
             if (preset.fits(presets::keyOf(device)))

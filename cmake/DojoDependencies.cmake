@@ -140,3 +140,7 @@ target_include_directories(dojo_stretch SYSTEM INTERFACE
 # --------------------------------------------------------------------------------------------------
 # LAME (LGPL) MP3 encoder, vendored under third_party/lame.
 add_subdirectory("${PROJECT_SOURCE_DIR}/third_party/lame" "${CMAKE_BINARY_DIR}/third_party/lame")
+
+# --------------------------------------------------------------------------------------------------
+# Monocypher (CC0 / BSD-2): Ed25519 license-key signatures, vendored under third_party/monocypher.
+add_subdirectory("${PROJECT_SOURCE_DIR}/third_party/monocypher" "${CMAKE_BINARY_DIR}/third_party/monocypher")
