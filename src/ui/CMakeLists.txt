@@ -1,5 +1,7 @@
 add_library(dojo_ui STATIC
     AppServices.h
+    BeatMaker.cpp
+    BeatMaker.h
     BrowserDrag.h
     WaveformPainter.h
     ClipList.cpp

@@ -163,6 +163,17 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - Channel 1 (the zone's master channel) and chords played on one channel always record as ordinary controllers. Polyphonic aftertouch is always its note's pressure.
 - Recorded clips are placed with **latency compensation** (input + output + plug-in latency).
 
+**Beat Maker Mode** (*Preferences > General > Beat Maker*, off by default): the computer keyboard plays the Drum Rack like a beat maker's pads.
+- **A to P are the 16 pads**: A plays the first pad (MIDI note 36, labelled C1 on the pads, C2 in some DAWs), B the one next to it, and so on to P (MIDI 51). A key plays at velocity 100, **Shift** + key at 127 (an accent); holding a key holds the note, and does not retrigger it.
+- The pads play the **selected track** (or the track of the selected MIDI clip): its Drum Rack, through its MIDI effects, with the transport stopped or running and the track armed or not.
+- **Recording**: select a MIDI clip and press **Record** (R or the record button). The transport starts from the playhead and every key you play goes into that clip where you heard it (delay compensation and the sound card's output latency taken off), as long as you held it, at its velocity. A looped clip takes the notes into its loop, so you can layer a pattern pass after pass with the transport looping. Keys outside the clip are heard, not recorded (the status bar says so). **Space**, Stop or Record ends it; the notes of one recording are **one undo step** ("Record Beats").
+  - With a MIDI clip selected, Record records the keys only: armed tracks are not recorded in that pass (a take on the clip's track would replace the clip). Deselect the clip to record armed tracks as usual. An edit-locked clip is refused.
+- The status bar shows **BEAT MAKER (A-P)** while it is on, and **RECORDING** while it records.
+- While it is on, A to P are pads, not shortcuts: **L** no longer toggles the loop (use the Transport menu or the loop button), and your own plain-letter shortcuts on A to P give way. R (Record), Space and every Ctrl, Alt or Cmd shortcut keep working. A text field with the focus (the browser's search, a rename) keeps its letters, and the score editor keeps N and S for its tools while it has the focus.
+- Notes are recorded as played, not quantised (Quantise in the piano roll or the clip's Quantize to Grid afterwards). There is no count-in.
+
+  ![Beat Maker Mode recording into the selected MIDI clip: a kick, closed hat and snare pattern played on A, G and C, on the LinnDrum Kit's step rows; the status bar says it is recording into "LinnDrum Kit", RECORDING, BEAT MAKER (A-P)](docs/images/beat-maker.png)
+
 **Take lanes and comping** (playlists)
 - Audio, instrument and MIDI tracks can keep **takes** in **take lanes** under them. The track's own clips are the **comp**: what plays. The takes in the lanes do not play.
 - **T** in a track header shows or hides its take lanes (it appears once the track has some, with how many). *Track > Take Lanes > Show Take Lanes* (Shift+T) does it for the selected tracks.
@@ -514,7 +525,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
   - Built on Celemony's ARA SDK 2.3.0 (Apache 2.0, fetched at configure time); `-DDOJO_WITH_ARA=OFF` builds without it. The plug-ins themselves are sold by their makers and are not part of The Dojo.
 
 **Preferences** (*Options > Preferences*, Ctrl+,)
-- **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on). **MIDI Input**: *MPE controllers* and their *per-note pitch bend range* (see Recording).
+- **General**: *Return the view to the start with the playhead* (Stop twice, the return button or Home also scrolls back to bar 1); *Stop at the end of the arrangement* (playback stops at the end of the last clip, and the next Play starts again from bar 1, the view too with the first option; a loop still loops, recording carries on). **MIDI Input**: *MPE controllers* and their *per-note pitch bend range* (see Recording). **Beat Maker**: *Beat Maker Mode* (keys A to P play and record the Drum Rack; see *Beat Maker Mode*).
 - **Themes**: Standard Black and White; Japanese (Dojo Night, Washi, Aizome); Cherry Blossom (Sakura Night, Sakura Day); Manga (Manga Ink, Manga Noir, Shonen Pop); Sour, inspired by an album cover's pastel pop-punk look (Sour Lavender: lavender, sticker pink, smiley yellow and lime; Sour Midnight: the same after dark, with a baby-blue playhead). Applied instantly, remembered.
 - **Audio** (also *Options > Audio Settings*) and **Keyboard**: every shortcut, editable and remembered (also *Options > Keyboard Shortcuts*, F1).
 - **Surround**: surround monitoring: Standard, Classic Fold-Down, the Advanced Surround Virtualizer (headphones or speakers, room) or the Device 3D Virtualizer (see *Surround monitoring* above).
@@ -617,7 +628,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 ## Using it
 
 1. Drag audio files onto the arranger, or add an instrument track (**+ Add Track**, or Ctrl+Shift+T) and double-click its lane to create a MIDI clip.
-2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop.
+2. Press **Space** to play, **R** to record onto armed tracks, **L** to loop. With **Beat Maker Mode** on (Preferences > General), keys **A** to **P** play the Drum Rack's pads, and Record with a MIDI clip selected records them into it.
 3. The bottom panel has four tabs: **Mixer** (F3), **Devices** of the selected track (F4), the **Editor** (F5) for the clip you double-clicked and the **Clip List** (F6). In the mixer, double-click the volume or pan value under a fader (or the master's GAIN) to type it: `-6`, `-inf`, `C`, `L20`, `R35`.
 4. The browser lists devices, plug-ins and presets at the top (with search, by name, kind or what it is for: "comp" also finds The Glue, "sibilance" the De-Esser; drag one onto a track, a device or the Devices panel, or double-click it) and your own folders below: add a folder with **+** (or drop one from the file manager), search them, and click a sample to **preview** it (arrow keys walk through files; the headphones button turns preview off). Select a **drum kit** to hear its demo beat. Drag samples onto the arranger, a Drum Rack pad, an Impulse slot or the Sampler. Scan for plug-ins with **Scan** / **...**.
 5. Export with **Ctrl+R**; save with **Ctrl+S**.
@@ -626,6 +637,7 @@ A cross-platform digital audio workstation for **Windows and Linux**, with ident
 |---|---|
 | Space / Home | Play-stop (while recording: end the recording) / return to start |
 | R / L | Record / loop on-off |
+| A … P (Shift: accent) | Beat Maker Mode: the Drum Rack's 16 pads (while recording, into the selected MIDI clip) |
 | Shift+L, Shift+T | Loop Record on-off, show the selected tracks' take lanes |
 | Ctrl+T, Ctrl+Shift+T, Ctrl+B, Ctrl+Shift+F | Add audio track, instrument track, bus, folder |
 | Ctrl+Shift+N, Alt+Shift+D | New tracks, duplicate tracks |

@@ -64,17 +64,28 @@ public:
         addAndMakeVisible(mpeRangeLabel_);
         addAndMakeVisible(mpeRange_);
 
-        for (auto* toggle : {&returnView_, &stopAtEnd_, &mpeInput_})
+        beatMaker_.setButtonText("Beat Maker Mode");
+        beatMakerText_.setText("Keys A to P play the selected track's Drum Rack like a beat maker's 16 pads: A the first pad "
+                               "(MIDI note 36: C1 on the pads, C2 in some DAWs), B the one next to it, and so on to P. "
+                               "Hold Shift for an accent "
+                               "(velocity 127). With a MIDI clip selected, press Record and play: the notes are recorded "
+                               "into that clip (no armed track needed; armed tracks wait for a Record without a clip "
+                               "selected). While this is on, A to P are pads, not shortcuts (L no longer toggles the "
+                               "loop: use the Transport menu).",
+                               juce::dontSendNotification);
+
+        for (auto* toggle : {&returnView_, &stopAtEnd_, &mpeInput_, &beatMaker_})
         {
             styleToggle(*toggle);
             addAndMakeVisible(*toggle);
         }
-        for (auto* label : {&returnViewText_, &stopAtEndText_, &mpeInputText_})
+        for (auto* label : {&returnViewText_, &stopAtEndText_, &mpeInputText_, &beatMakerText_})
             addAndMakeVisible(styleDescription(*label));
 
         returnView_.onClick = [this] { preferences_.setReturnViewToStart(returnView_.getToggleState()); };
         stopAtEnd_.onClick = [this] { preferences_.setStopAtEnd(stopAtEnd_.getToggleState()); };
         mpeInput_.onClick = [this] { preferences_.setMpeInput(mpeInput_.getToggleState()); };
+        beatMaker_.onClick = [this] { preferences_.setBeatMakerMode(beatMaker_.getToggleState()); };
         mpeRange_.onChange = [this]
         {
             if (mpeRange_.getSelectedId() > 0)
@@ -94,6 +105,8 @@ public:
         g.drawText("PLAYBACK", getLocalBounds().reduced(24, 0).removeFromTop(48), juce::Justification::bottomLeft, false);
         g.drawText("MIDI INPUT", getLocalBounds().reduced(24, 0).withY(midiHeadingTop_).withHeight(30), juce::Justification::bottomLeft,
                    false);
+        g.drawText("BEAT MAKER", getLocalBounds().reduced(24, 0).withY(beatHeadingTop_).withHeight(30), juce::Justification::bottomLeft,
+                   false);
     }
 
     void resized() override
@@ -112,6 +125,11 @@ public:
         auto row = area.removeFromTop(28).withTrimmedLeft(30);
         mpeRangeLabel_.setBounds(row.removeFromLeft(190));
         mpeRange_.setBounds(row.removeFromLeft(260));
+        area.removeFromTop(14);
+        beatHeadingTop_ = area.getY();
+        area.removeFromTop(40);
+        beatMaker_.setBounds(area.removeFromTop(28));
+        beatMakerText_.setBounds(area.removeFromTop(76).withTrimmedLeft(30));
     }
 
 private:
@@ -122,16 +140,18 @@ private:
         returnView_.setToggleState(preferences_.getReturnViewToStart(), juce::dontSendNotification);
         stopAtEnd_.setToggleState(preferences_.getStopAtEnd(), juce::dontSendNotification);
         mpeInput_.setToggleState(preferences_.getMpeInput(), juce::dontSendNotification);
+        beatMaker_.setToggleState(preferences_.getBeatMakerMode(), juce::dontSendNotification);
         mpeRange_.setSelectedId(juce::roundToInt(preferences_.getMpeBendRange()), juce::dontSendNotification);
         mpeRange_.setEnabled(preferences_.getMpeInput());
         mpeRangeLabel_.setEnabled(preferences_.getMpeInput());
     }
 
     Preferences& preferences_;
-    juce::ToggleButton returnView_, stopAtEnd_, mpeInput_;
-    juce::Label returnViewText_, stopAtEndText_, mpeInputText_, mpeRangeLabel_;
+    juce::ToggleButton returnView_, stopAtEnd_, mpeInput_, beatMaker_;
+    juce::Label returnViewText_, stopAtEndText_, mpeInputText_, mpeRangeLabel_, beatMakerText_;
     juce::ComboBox mpeRange_;
     int midiHeadingTop_ = 0;
+    int beatHeadingTop_ = 0;
 };
 
 //==================================================================================================

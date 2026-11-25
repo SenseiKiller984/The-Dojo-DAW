@@ -14,6 +14,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include <algorithm>
 #include <iterator>
 
 namespace dojo::ui
@@ -144,19 +145,14 @@ MainComponent::MainComponent(AppServices& services)
     browser_.onPresetActivated = [this](const session::presets::Preset& preset)
     { usePreset(preset, presetActions::selectedOwner(project_.getSession(), editor_)); };
     mixer_.onShowDevices = [this] { showBottomTab(BottomTab::devices); };
-    services_.recorder.onStateChanged = [this]
-    {
-        transport_.setRecording(services_.recorder.isRecording());
-        commandManager_.commandStatusChanged();
-    };
+    services_.recorder.onStateChanged = [this] { recordingChanged(); };
+    createBeatMaker();
 
     transport_.onReturnToStart = [this] { goToStart(); };
     transport_.onTogglePlayback = [this] { togglePlayback(); };
     transport_.onStop = [this]
     {
-        if (services_.recorder.isRecording())
-            services_.recorder.stop(); // (the take is kept)
-        else
+        if (!stopRecording()) // (the take is kept)
             controller_.stop();
     };
     transport_.onAudioSettingsRequested = [this]
@@ -189,9 +185,7 @@ MainComponent::MainComponent(AppServices& services)
     {
         if (play)
             controller_.play();
-        else if (services_.recorder.isRecording())
-            services_.recorder.stop(); // (keeping the take, as Stop does)
-        else
+        else if (!stopRecording()) // (keeping the take, as Stop does)
             controller_.stop();
     };
     mixer_.setShortcuts(services_.commands.getKeyMappings());
@@ -216,6 +210,8 @@ MainComponent::~MainComponent()
     videoWindow_.reset();
     arranger_.setVideoFrames(nullptr);
     services_.recorder.onStateChanged = nullptr;
+    removeKeyListener(beatMaker_.get());
+    beatMaker_.reset();
     project_.getSession().getUndoManager().removeChangeListener(this);
     project_.onImportProblem = nullptr;
     project_.getAra().onRequestLocate = nullptr;
@@ -228,11 +224,8 @@ MainComponent::~MainComponent()
 void MainComponent::togglePlayback()
 {
     // Stopping while recording ends the recording (keeping the take), as Record does.
-    if (services_.recorder.isRecording())
-    {
-        services_.recorder.stop();
+    if (stopRecording())
         return;
-    }
     const auto& telemetry = controller_.getLastTelemetry();
     if (!telemetry.playing && telemetry.stoppedAtEnd && services_.preferences.getReturnViewToStart())
         arranger_.scrollToTime(0.0);
@@ -304,6 +297,22 @@ void MainComponent::onDisplayRefresh(double timestampSeconds)
     telemetry.playheadSeconds = heardPosition_.update(engineTelemetry.playheadSeconds, engineTelemetry.playing, delaySeconds,
                                                       session.isLoopEnabled(), session.getLoopStart(), session.getLoopEnd());
     telemetry.playheadSamples = static_cast<SampleCount>(std::llround(telemetry.playheadSeconds * sampleRate));
+    heardSeconds_ = telemetry.playheadSeconds;
+    heardStampMs_ = juce::Time::getMillisecondCounterHiRes();
+    heardPlaying_ = telemetry.playing;
+    if (beatRecording_)
+    {
+        // The transport stopped (Stop at End, a control surface, ...): so does the recording.
+        if (telemetry.playing)
+            beatRecordingPlayed_ = true;
+        else if (beatRecordingPlayed_ || heardStampMs_ - beatRecordingSinceMs_ > 2000.0)
+            endBeatRecording();
+    }
+    if (notice_.isNotEmpty() && heardStampMs_ > noticeUntilMs_)
+    {
+        notice_.clear();
+        refreshStatusBar();
+    }
 
     transport_.update(telemetry, sampleRate);
     arranger_.setPlayhead(telemetry.playheadSeconds, telemetry.playing);
@@ -332,7 +341,9 @@ void MainComponent::refreshStatusBar()
     info.clippedSamples = controller_.getLastTelemetry().clippedSamples;
     info.parkedCommands = controller_.getParkedCommandCount();
     info.pendingImports = project_.getPendingImportCount();
-    info.recording = services_.recorder.isRecording();
+    info.recording = services_.recorder.isRecording() || beatRecording_;
+    info.beatMaker = services_.preferences.getBeatMakerMode();
+    info.notice = notice_;
     info.scanningPlugins = services_.plugins.isScanning();
     info.midiInputs = controller_.getDeviceHost().getMidiInputNames().size();
     info.latencySamples = project_.getCompiler().getTotalLatency();
@@ -811,9 +822,10 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress(juce::KeyPress::F1Key, 0);
         break;
     case record:
-        info.setInfo(services_.recorder.isRecording() ? "Stop Recording" : "Record", "Record onto the armed tracks",
+        info.setInfo(services_.recorder.isRecording() || beatRecording_ ? "Stop Recording" : "Record",
+                     "Record onto the armed tracks (in Beat Maker Mode with a MIDI clip selected: the keys, into that clip)",
                      categories::transport, 0);
-        info.setTicked(services_.recorder.isRecording());
+        info.setTicked(services_.recorder.isRecording() || beatRecording_);
         info.addDefaultKeypress('r', 0);
         break;
     case toggleLoop:
@@ -1446,19 +1458,148 @@ void MainComponent::showBottomTab(BottomTab tab)
 void MainComponent::toggleRecording()
 {
     auto& recorder = services_.recorder;
-    if (recorder.isRecording())
-    {
-        recorder.stop();
+    if (stopRecording())
         return;
-    }
     if (recorder.isBusy())
         return;
 
+    // Beat Maker Mode with a MIDI clip selected: the keys record into the clip (and the recorder
+    // stays out of it: a take on the clip's armed track would replace the clip).
+    const bool beatMaker = services_.preferences.getBeatMakerMode();
+    if (beatMaker && getSelectedMidiClip().isValid())
+    {
+        startBeatRecording();
+        return;
+    }
+
     const auto message = recorder.start();
     if (!recorder.isRecording())
-        showMessage("Cannot record", message);
+        showMessage("Cannot record", beatMaker && !getSelectedMidiClip().isValid()
+                                         ? message + "\n\nBeat Maker Mode records into a MIDI clip: select one, then press Record."
+                                         : message);
     else if (message.isNotEmpty())
         showMessage("Recording", message);
+}
+
+bool MainComponent::stopRecording()
+{
+    if (beatRecording_)
+    {
+        endBeatRecording();
+        controller_.stop();
+        return true;
+    }
+    if (services_.recorder.isRecording())
+    {
+        services_.recorder.stop();
+        return true;
+    }
+    return false;
+}
+
+void MainComponent::recordingChanged()
+{
+    transport_.setRecording(services_.recorder.isRecording() || beatRecording_);
+    commandManager_.commandStatusChanged();
+    refreshStatusBar();
+}
+
+//==================================================================================================
+// Beat Maker Mode
+
+juce::ValueTree MainComponent::getSelectedMidiClip() const
+{
+    const auto& session = project_.getSession();
+    const auto& selected = editor_.getSelectedClips();
+    if (selected.count(editor_.getEditedClip()) > 0)
+        if (const auto clip = session.findClip(editor_.getEditedClip()); clip.hasType(session::ids::midiClip))
+            return clip;
+    for (const auto id : selected)
+        if (const auto clip = session.findClip(id); clip.hasType(session::ids::midiClip))
+            return clip;
+    return {};
+}
+
+void MainComponent::startBeatRecording()
+{
+    const auto clip = getSelectedMidiClip();
+    if (!session::clip::canEdit(clip))
+    {
+        showMessage("Cannot record", "The selected MIDI clip is edit-locked: unlock it (Clip > Edit Unlock) to record into it.");
+        return;
+    }
+    if (!controller_.getEngine().isPrepared())
+    {
+        showMessage("Cannot record", "No audio device is running. Choose one in Options > Audio Settings.");
+        return;
+    }
+    beatMaker_->startPass();
+    beatRecording_ = true;
+    beatRecordingPlayed_ = false;
+    beatRecordingSinceMs_ = juce::Time::getMillisecondCounterHiRes();
+    if (!controller_.getLastTelemetry().playing)
+        controller_.play();
+    showNotice("Beat Maker: recording into \"" + session::clip::getName(clip) + "\"");
+    recordingChanged();
+}
+
+void MainComponent::endBeatRecording()
+{
+    if (!beatRecording_)
+        return;
+    beatMaker_->releaseAll(); // (held keys end their notes here)
+    beatRecording_ = false;
+    recordingChanged();
+}
+
+void MainComponent::showNotice(const juce::String& text)
+{
+    notice_ = text;
+    noticeUntilMs_ = juce::Time::getMillisecondCounterHiRes() + 4000.0;
+    refreshStatusBar();
+}
+
+void MainComponent::createBeatMaker()
+{
+    BeatMaker::Host host;
+    host.isEnabled = [this] { return services_.preferences.getBeatMakerMode(); };
+    host.getTargetTrack = [this]() -> std::uint32_t
+    {
+        if (const auto clip = getSelectedMidiClip(); clip.isValid())
+            return session::track::getId(session::Session::getTrackOf(clip));
+        return editor_.getSelectedTrack();
+    };
+    host.getRecordingClip = [this]() -> juce::ValueTree
+    {
+        if (!beatRecording_)
+            return {};
+        const auto clip = getSelectedMidiClip();
+        if (clip.isValid() && !session::clip::canEdit(clip))
+        {
+            showNotice("Beat Maker: the selected clip is edit-locked, so nothing is recorded");
+            return {};
+        }
+        return clip;
+    };
+    host.getPlayheadSeconds = [this]() -> std::optional<double>
+    {
+        if (!heardPlaying_)
+            return std::nullopt;
+        // The last frame's heard position, moved on by the time since (at most a few frames' worth).
+        const auto& session = project_.getSession();
+        const double since = juce::jlimit(0.0, 0.1, (juce::Time::getMillisecondCounterHiRes() - heardStampMs_) / 1000.0);
+        double seconds = heardSeconds_ + since * session.getSpeed();
+        const bool loops = !services_.recorder.isRecording(); // (the recorder suspends the loop)
+        if (loops && session.isLoopEnabled() && session.getLoopEnd() > session.getLoopStart() && heardSeconds_ < session.getLoopEnd()
+            && seconds >= session.getLoopEnd())
+            seconds -= session.getLoopEnd() - session.getLoopStart();
+        return seconds;
+    };
+    host.sendMidi = [this](std::uint32_t trackId, const juce::MidiMessage& message)
+    { (void)controller_.getEngine().getLiveMidiQueue().push(message, trackId); };
+    host.onMessage = [this](const juce::String& text) { showNotice(text); };
+    beatMaker_ = std::make_unique<BeatMaker>(project_.getSession(), std::move(host));
+    addKeyListener(beatMaker_.get());
 }
 
 void MainComponent::addDevice(const deviceActions::DeviceChoice& choice, juce::ValueTree target)

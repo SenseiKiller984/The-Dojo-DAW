@@ -13,6 +13,7 @@ add_executable(dojo_tests
     TestListener.cpp
     TestSupport.h
     AudioEngineTests.cpp
+    BeatMakerTests.cpp
     BrowserTests.cpp
     DrumKitTests.cpp
     ClickTests.cpp

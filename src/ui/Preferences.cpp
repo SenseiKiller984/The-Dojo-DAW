@@ -17,6 +17,7 @@ constexpr const char* kSurroundModeKey = "prefSurroundMode";
 constexpr const char* kVirtualizerSpeakersKey = "prefVirtualizerSpeakers";
 constexpr const char* kVirtualizerRoomKey = "prefVirtualizerRoom";
 constexpr const char* kMpeInputKey = "prefMpeInput";
+constexpr const char* kBeatMakerKey = "prefBeatMakerMode";
 constexpr const char* kMpeBendRangeKey = "prefMpeBendRange";
 constexpr const char* kRendererOutputsKey = "prefRendererOutputs";
 constexpr const char* kRendererOscKey = "prefRendererOsc";
@@ -54,6 +55,19 @@ void Preferences::setStopAtEnd(bool enabled)
     if (enabled == getStopAtEnd())
         return;
     settings_.setValue(kStopAtEndKey, enabled);
+    changed();
+}
+
+bool Preferences::getBeatMakerMode() const
+{
+    return settings_.getBoolValue(kBeatMakerKey, false);
+}
+
+void Preferences::setBeatMakerMode(bool enabled)
+{
+    if (enabled == getBeatMakerMode())
+        return;
+    settings_.setValue(kBeatMakerKey, enabled);
     changed();
 }
 

@@ -56,8 +56,12 @@ juce::String StatusBar::describeEngine() const
 {
     juce::String text;
 
+    if (info_.notice.isNotEmpty())
+        text << info_.notice << kSeparator;
     if (info_.recording)
         text << "RECORDING" << kSeparator;
+    if (info_.beatMaker)
+        text << "BEAT MAKER (A-P)" << kSeparator;
     if (info_.scanningPlugins)
         text << "Scanning plug-ins" << kSeparator;
     if (info_.latencySamples > 0)

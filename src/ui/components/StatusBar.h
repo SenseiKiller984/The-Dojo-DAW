@@ -26,6 +26,8 @@ public:
         bool scanningPlugins = false;
         int midiInputs = 0;
         int latencySamples = 0; ///< plug-in delay compensation at the master
+        bool beatMaker = false; ///< Beat Maker Mode is on
+        juce::String notice;    ///< a passing message (e.g. why Beat Maker recorded nothing)
     };
 
     StatusBar();

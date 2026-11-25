@@ -3,6 +3,7 @@
 #include "engine/EngineController.h"
 #include "session/Project.h"
 #include "ui/AppServices.h"
+#include "ui/BeatMaker.h"
 #include "ui/components/ArrangerView.h"
 #include "ui/components/BrowserPanel.h"
 #include "ui/components/ClipEditor.h"
@@ -92,6 +93,13 @@ public:
     /** Call once the component has its size. */
     void setViewState(const ViewState& state);
 
+    /** Beat Maker Mode's keys (ui/BeatMaker.h). */
+    [[nodiscard]] BeatMaker& getBeatMaker() noexcept { return *beatMaker_; }
+    /** One frame of the display loop now (the VBlank drives it; also for tests, which have no display). */
+    void refreshDisplay(double timestampSeconds) { onDisplayRefresh(timestampSeconds); }
+    /** Beat Maker is recording into the selected MIDI clip (Record in Beat Maker Mode with one selected). */
+    [[nodiscard]] bool isBeatRecording() const noexcept { return beatRecording_; }
+
     /** Number of UI frames processed so far (used by the start-up smoke test). */
     [[nodiscard]] std::uint64_t getFrameCount() const noexcept { return frameCount_; }
 
@@ -141,6 +149,19 @@ private:
 
     // Recording, devices
     void toggleRecording();
+    /** Ends a recording (the recorder's, or Beat Maker's) and stops the transport; false if none was running. */
+    bool stopRecording();
+    /** The transport, menus and status bar show whether anything records. */
+    void recordingChanged();
+
+    // Beat Maker Mode (ui/BeatMaker.h)
+    /** The selected MIDI clip (the one open in the editor when it is among those selected); invalid if none. */
+    [[nodiscard]] juce::ValueTree getSelectedMidiClip() const;
+    /** Records the keys into the selected MIDI clip (instead of the recorder): plays and takes what they play. */
+    void startBeatRecording();
+    void endBeatRecording();
+    void createBeatMaker();
+    void showNotice(const juce::String& text);
     void addDevice(const deviceActions::DeviceChoice& choice, juce::ValueTree target);
     /** Uses a preset on a track's chain (or the master's): loads it into a device it fits, or adds one. */
     void usePreset(const session::presets::Preset& preset, const juce::ValueTree& target);
@@ -179,6 +200,16 @@ private:
     ClipListPanel clipList_;
     StatusBar statusBar_;
     HeardPosition heardPosition_;  ///< the playhead shows what is heard (see HeardPosition)
+    // The heard playhead of the last frame, and when it was taken (for Beat Maker's timing between frames).
+    double heardSeconds_ = 0.0;
+    double heardStampMs_ = 0.0;
+    bool heardPlaying_ = false;
+    std::unique_ptr<BeatMaker> beatMaker_;
+    bool beatRecording_ = false;      ///< Beat Maker recording into the selected MIDI clip
+    bool beatRecordingPlayed_ = false; ///< the transport has run since it started
+    double beatRecordingSinceMs_ = 0.0;
+    juce::String notice_;              ///< a message in the status bar until `noticeUntilMs_`
+    double noticeUntilMs_ = 0.0;
     int outputLatencySamples_ = 0; ///< the audio device's output latency (refreshed with the status bar)
     /** Shows every control's tooltip (after the mouse rests on it for a moment). */
     juce::TooltipWindow tooltips_{this, 700};

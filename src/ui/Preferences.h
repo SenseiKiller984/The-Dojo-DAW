@@ -47,6 +47,12 @@ public:
     [[nodiscard]] bool getStopAtEnd() const;
     void setStopAtEnd(bool enabled);
 
+    /** Beat Maker Mode: the computer keyboard's keys A to P play the selected track's Drum Rack
+        (its 16 pads), and record into the selected MIDI clip while recording (ui/BeatMaker.h). Off
+        by default. */
+    [[nodiscard]] bool getBeatMakerMode() const;
+    void setBeatMakerMode(bool enabled);
+
     /** MPE controllers: notes played one per MIDI channel 2..16 (an MPE controller's lower zone)
         record their own pitch bend, pressure and slide as the notes' expression curves. On by
         default. Off: those channels' messages record as the clip's controllers. */
